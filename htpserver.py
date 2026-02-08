@@ -1,6 +1,5 @@
 """
 HTP Server - serves .htp files on port 8080
-Run: python htpserver.py
 """
 
 import http.server
@@ -84,4 +83,5 @@ if __name__ == '__main__':
         try:
             httpd.serve_forever()
         except KeyboardInterrupt:
+
             print("\nServer stopped.")
