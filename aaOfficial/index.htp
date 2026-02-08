@@ -1,0 +1,24 @@
+@page { 
+    title: "Lume Site"; 
+    background: #0a0a1a; 
+}
+@row {
+    margin: 20;
+    gap: 15;
+    @column {
+        padding: 20;
+        background: #1a1a3e;
+        border-radius: 10;
+        @text { content: "Hello from Lume!"; size: 24; color: #e94560; bold: true; }
+        @br { size: 10; }
+        @text(id="status") { content: "System: Ready"; size: 16; color: #88ff88; }
+        @br { size: 15; }
+        @button(id="btn") { content: "Click Me"; width: 120; height: 35; background: #0abde3; color: #ffffff; }
+    }
+}
+@script {
+    on_click("btn", function()
+        set_text("status", "Status: Lume is alive!")
+        refresh()
+    end)
+}
