@@ -36,7 +36,8 @@ example code:
 ```
 
 this is how htp/showcase.htp file looks like:
-<img width="1918" height="1038" alt="изображение" src="https://github.com/user-attachments/assets/0ffbb2be-b436-40cd-81c2-49773208c8c3" />
+<img width="1918" height="1038" alt="изображение" src="https://github.com/user-attachments/assets/16c5725f-ed98-435c-971c-9bb16c2b1aef" />
+
 
 
 ---
