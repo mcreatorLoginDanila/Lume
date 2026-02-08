@@ -1,0 +1,52 @@
+@page {
+    title: "Lume - New Tab";
+    background: #0f0f23;
+}
+
+@block(id="header") {
+    align: center;
+    padding: 40;
+    background: #1a1a3e;
+    border-radius: 12;
+    margin: 20;
+
+    @text { content: "Lume"; size: 42; color: #e94560; bold: true; }
+    @br { size: 10; }
+    @text { content: "Browser of the new generation"; size: 20; color: #8888aa; italic: true; }
+    @br { size: 20; }
+    @text { content: "Enter htp:// address or open a .htp file"; size: 16; color: #666688; }
+}
+
+@block(id="quicklinks") {
+    padding: 20;
+    margin: 20;
+    background: #16213e;
+    border-radius: 8;
+
+    @text { content: "Quick links:"; size: 18; color: #ffffff; bold: true; }
+    @br { size: 10; }
+    @link { content: "Test server - localhost:8080"; url: "htp://localhost:8080/index.htp"; color: #0abde3; size: 16; }
+    @link { content: "About browser"; url: "about:info"; color: #0abde3; size: 16; }
+}
+
+@divider { color: #333355; thickness: 1; margin: 15; }
+
+@block(id="info") {
+    padding: 20;
+    margin: 20;
+    background: #1a1a2e;
+    border-radius: 8;
+
+    @text { content: "HTP Elements:"; size: 18; color: #e94560; bold: true; }
+    @br { size: 8; }
+    @list {
+        @item { content: "@text - text with font, color, size"; size: 14; color: #aaaacc; }
+        @item { content: "@block - container with background, alignment, padding"; size: 14; color: #aaaacc; }
+        @item { content: "@link - hyperlinks to other .htp pages"; size: 14; color: #aaaacc; }
+        @item { content: "@button - buttons with actions"; size: 14; color: #aaaacc; }
+        @item { content: "@input - input fields"; size: 14; color: #aaaacc; }
+        @item { content: "@image - images"; size: 14; color: #aaaacc; }
+        @item { content: "@divider - separators"; size: 14; color: #aaaacc; }
+        @item { content: "@list / @item - lists"; size: 14; color: #aaaacc; }
+    }
+}

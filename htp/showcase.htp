@@ -1,0 +1,164 @@
+@page {
+    title: "HTP Demo - Scripts, Canvas, Layout";
+    background: #0a0a1a;
+}
+
+@block(id="nav") {
+    padding: 15;
+    background: #12122a;
+    @text { content: "HTP Demo Site v2.0"; size: 22; color: #e94560; bold: true; }
+}
+
+// === ROW/COLUMN LAYOUT ===
+@row {
+    margin: 10;
+    gap: 15;
+
+    @column {
+        padding: 15;
+        background: #1a1a3e;
+        border-radius: 8;
+
+        @text { content: "Left Column"; size: 18; color: #ffffff; bold: true; }
+        @br { size: 8; }
+        @text { content: "Row/Column layout allows complex page structures."; size: 14; color: #aaaacc; }
+        @br { size: 10; }
+        @text(id="status") { content: "Status: idle"; size: 14; color: #88ff88; }
+    }
+
+    @column {
+        padding: 15;
+        background: #16213e;
+        border-radius: 8;
+
+        @text { content: "Right Column"; size: 18; color: #ffffff; bold: true; }
+        @br { size: 8; }
+        @text(id="counter") { content: "Counter: 0"; size: 16; color: #ffaa00; }
+        @br { size: 10; }
+        @button(id="btn_inc") { content: "+1"; width: 80; height: 30; background: #0abde3; color: #ffffff; size: 14; }
+        @button(id="btn_reset") { content: "Reset"; width: 80; height: 30; background: #e94560; color: #ffffff; size: 14; }
+    }
+}
+
+@divider { color: #333355; thickness: 1; margin: 10; }
+
+// === INPUT TEST ===
+@block {
+    padding: 20;
+    margin: 10;
+    background: #1a1a3e;
+    border-radius: 8;
+
+    @text { content: "Input Test:"; size: 18; color: #ffffff; bold: true; }
+    @br { size: 8; }
+    @text { content: "Type something and click Greet:"; size: 14; color: #aaaacc; }
+    @br { size: 5; }
+    @input(id="name_input") { placeholder: "Your name..."; width: 300; height: 28; }
+    @br { size: 5; }
+    @button(id="btn_greet") { content: "Greet"; width: 100; height: 30; background: #27ae60; color: #ffffff; size: 14; }
+    @br { size: 5; }
+    @text(id="greeting") { content: ""; size: 16; color: #ffcc00; }
+}
+
+@divider { color: #333355; thickness: 1; margin: 10; }
+
+// === CANVAS ===
+@block {
+    padding: 20;
+    margin: 10;
+    background: #1a1a3e;
+    border-radius: 8;
+
+    @text { content: "Canvas Drawing:"; size: 18; color: #ffffff; bold: true; }
+    @br { size: 8; }
+    @canvas(id="mycanvas") { width: 500; height: 200; border-color: #444466; }
+    @br { size: 8; }
+    @button(id="btn_draw") { content: "Draw!"; width: 100; height: 30; background: #8e44ad; color: #ffffff; size: 14; }
+    @button(id="btn_clear") { content: "Clear"; width: 100; height: 30; background: #555555; color: #ffffff; size: 14; }
+}
+
+@divider { color: #333355; thickness: 1; margin: 10; }
+
+// === MOUSE TRACKING ===
+@block {
+    padding: 15;
+    margin: 10;
+    background: #16213e;
+    border-radius: 8;
+
+    @text(id="mousepos") { content: "Mouse: (-, -)"; size: 14; color: #aaaacc; }
+    @button(id="btn_track") { content: "Track Mouse (5s)"; width: 180; height: 30; background: #e67e22; color: #ffffff; size: 14; }
+}
+
+// === SCRIPT ===
+@script {
+    counter = 0
+
+    on_click("btn_inc", function()
+        counter = counter + 1
+        set_text("counter", "Counter: " .. tostring(counter))
+        set_text("status", "Status: incremented to " .. tostring(counter))
+    end)
+
+    on_click("btn_reset", function()
+        counter = 0
+        set_text("counter", "Counter: 0")
+        set_text("status", "Status: reset")
+    end)
+
+    on_click("btn_greet", function()
+        local name = get_input("name_input")
+        if name == "" then
+            set_text("greeting", "Please enter your name!")
+        else
+            set_text("greeting", "Hello, " .. name .. "! Welcome to HTP!")
+        end
+        set_text("status", "Status: greeted user")
+    end)
+
+    on_click("btn_draw", function()
+        canvas_clear("mycanvas", "#0a0a2e")
+        canvas_rect("mycanvas", 10, 10, 100, 50, "#e94560")
+        canvas_rect("mycanvas", 120, 20, 80, 80, "#0abde3")
+        canvas_circle("mycanvas", 300, 60, 40, "#27ae60")
+        canvas_line("mycanvas", 0, 100, 500, 100, "#ffcc00", 2)
+        canvas_line("mycanvas", 250, 0, 250, 200, "#ffcc00", 1)
+        canvas_text("mycanvas", 350, 150, "HTP Canvas!", 20, "#ffffff")
+        canvas_text("mycanvas", 15, 25, "Rectangle", 12, "#ffffff")
+        canvas_circle("mycanvas", 450, 40, 20, "#ff6600")
+        canvas_circle("mycanvas", 450, 40, 10, "#ffcc00")
+        set_text("status", "Status: canvas drawn")
+        refresh()
+    end)
+
+    on_click("btn_clear", function()
+        canvas_clear("mycanvas", "#000000")
+        set_text("status", "Status: canvas cleared")
+        refresh()
+    end)
+
+    on_click("btn_track", function()
+        set_text("status", "Status: tracking mouse for 5 seconds...")
+        local tid = set_timer(50, function()
+            local mx, my = get_mouse_pos()
+            set_text("mousepos", "Mouse: (" .. tostring(mx) .. ", " .. tostring(my) .. ")")
+            refresh()
+        end)
+        -- Stop after 5 seconds
+        set_timer(5000, function()
+            kill_timer(tid)
+            set_text("status", "Status: mouse tracking stopped")
+            set_text("mousepos", "Mouse: tracking ended")
+            refresh()
+        end)
+    end)
+}
+
+@block(id="footer") {
+    align: center;
+    padding: 15;
+    background: #0a0a15;
+    margin: 10;
+    @text { content: "Powered by Lume"; size: 12; color: #555577; }
+    @link { content: "About browser"; url: "about:info"; color: #0abde3; size: 12; }
+}
