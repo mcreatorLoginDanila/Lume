@@ -29,11 +29,16 @@ example code:
 }
 @script {
     on_click("btn", function()
-        set_text("status", "Status: Lume is alive! :}")
+        set_text("status", "Status: Lume is alive!")
         refresh()
     end)
 }
 ```
+
+this is how example code will look like:
+<img width="1920" height="1038" alt="изображение" src="https://github.com/user-attachments/assets/b100bda8-99c8-47a1-8803-95dc221ce163" />
+
+---
 
 this is how htp/showcase.htp file looks like:
 <img width="1918" height="1038" alt="изображение" src="https://github.com/user-attachments/assets/16c5725f-ed98-435c-971c-9bb16c2b1aef" />
