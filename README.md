@@ -1,9 +1,42 @@
 A light web?-browser on C++ without using chromium\electron
-Uses C++ 17 x lua 5.4.7
 
+### Why Lume?
+* **Insanely Small:** exe+obj size is ~2 MB.
+* **Zero Bloat:** Uses only **3.3 MB**(in peak) of RAM (compare that to 500MB+ for a single Chrome tab).
+* **Blazing Fast:** CPU usage is near **0%**(On Phenom II X6 1055T) in idle and ~0.3%(maybe) under load.
+* **Programmable:** Built-in **Lua 5.4.7** engine for logic, animations, and interactivity.
+* **Custom Graphics:** Built-in `@canvas` API for high-performance 2D drawing.
 
+example code:
+```htp
+@page { 
+    title: "Lume Site"; 
+    background: #0a0a1a; 
+}
+@row {
+    margin: 20;
+    gap: 15;
+    @column {
+        padding: 20;
+        background: #1a1a3e;
+        border-radius: 10;
+        @text { content: "Hello from Lume!"; size: 24; color: #e94560; bold: true; }
+        @br { size: 10; }
+        @text(id="status") { content: "System: Ready"; size: 16; color: #88ff88; }
+        @br { size: 15; }
+        @button(id="btn") { content: "Click Me"; width: 120; height: 35; background: #0abde3; color: #ffffff; }
+    }
+}
+@script {
+    on_click("btn", function()
+        set_text("status", "Status: Lume is alive! :}")
+        refresh()
+    end)
+}
+```
 
-
+this is how htp/showcase file looks like:
+<img width="1918" height="1038" alt="изображение" src="https://github.com/user-attachments/assets/0ffbb2be-b436-40cd-81c2-49773208c8c3" />
 
 
 ---
