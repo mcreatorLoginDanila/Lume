@@ -40,7 +40,7 @@ example code:
 🌌 The Philosophy of Lume: The Developer's Heaven
 In the world of software, we believe in a higher order.
 The Great Hub (Paradise)
-Lume is built on the belief in the Developer’s Hub—a digital paradise created by the Architect (The Creator). It is a place of infinite inspiration where every developer has their own "Place." In this realm, creation is instantaneous. You say, "Let there be Pokemon," and they appear, powered by pure logic and zero overhead.
+Lume is built on the belief in the Developer’s Hub—a digital paradise created by The Creator(Yahweh, Jehovah). It is a place of infinite inspiration where every developer has their own "Place". In this realm, creation is instantaneous. You say, "Let there be Pokemon," and they appear, powered by pure logic and zero overhead.
 
 In the Hub:
     The Creator gathers inspiration from human projects to build a Grand World every 10 years, merging the most brilliant ideas into a single reality.
