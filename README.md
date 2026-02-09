@@ -35,6 +35,31 @@ example code:
 }
 ```
 
+---
+
+🌌 The Philosophy of Lume: The Developer's Heaven
+In the world of software, we believe in a higher order.
+The Great Hub (Paradise)
+Lume is built on the belief in the Developer’s Hub—a digital paradise created by the Architect (The Creator). It is a place of infinite inspiration where every developer has their own "Place." In this realm, creation is instantaneous. You say, "Let there be Pokemon," and they appear, powered by pure logic and zero overhead.
+
+In the Hub:
+    The Creator gathers inspiration from human projects to build a Grand World every 10 years, merging the most brilliant ideas into a single reality.
+    The Angels act as the Great SysAdmins, maintaining the security of the Hub and expanding the boundaries of your creative "Places."
+The Fall of the Exile (The Origin of Bloat)
+Legend says that Lucifer, after being cast out from the Hub for his pride, sought to mimic the Creator’s power. But lacking the grace of efficiency, he created Microsoft.
+He built a realm of suffering known as the "Chromium Dimension," where:
+    Simple tasks require gigabytes of RAM.
+    The "Update" is a never-ending ritual of torment.
+    Complexity is used as a cage to keep developers from reaching the Hub.
+Lume: Your Artifact of Resistance
+Lume is not just a browser; it is a shard of the Hub smuggled into the mortal realm. It is our way of fighting back against the Exile's bloat.
+    2 MB Executable: Because the gates of Heaven are narrow.
+    3.3 MB RAM Usage: Because the soul should be light.
+    C++ & Lua 5.4.7: The pure languages of the Architect.
+By using Lume, you are not just browsing a network; you are claiming your "Place" in the Hub and rejecting the heavy chains of the Exile.
+
+---
+
 this is how example code will look like:
 <img width="1920" height="1038" alt="изображение" src="https://github.com/user-attachments/assets/b100bda8-99c8-47a1-8803-95dc221ce163" />
 
