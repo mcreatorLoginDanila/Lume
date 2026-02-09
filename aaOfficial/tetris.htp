@@ -1,0 +1,224 @@
+@page{title:"Htp Tetris"; background:#202028}
+@block{
+    align:center;
+    padding:10;
+    @text{content:"HTP TETRIS"; size:24; color:#ffd700; bold:true}
+    @br{size:5}
+    @text{id:"score_disp"; content:"Score: 0"; size:18; color:#ffffff}
+    @br{size:10}
+    @canvas{id:"tetris_cv"; width:200; height:400; border-color:#444455}
+    @br{size:15}
+    @row{
+        gap:5;
+        @button{id:"btn_up"; content:"⬆ Rotate"; width:100; height:45; background:#5544aa; color:#fff}
+    }
+    @br{size:5}
+    @row{
+        gap:5;
+        @button{id:"btn_left";  content:"⬅"; width:60; height:45; background:#445566; color:#fff}
+        @button{id:"btn_down";  content:"⬇"; width:60; height:45; background:#445566; color:#fff}
+        @button{id:"btn_right"; content:"➡"; width:60; height:45; background:#445566; color:#fff}
+    }
+    
+    @br{size:20}
+    @button{id:"btn_restart"; content:"New Game"; width:120; height:35; background:#e94560; color:#fff}
+}
+@script{
+    local COLS = 10
+    local ROWS = 20
+    local BLK = 20
+    local cv_id = "tetris_cv"
+    local timer_id = nil
+    local colors = {
+        "#00f0f0", -- I (Cyan)
+        "#0000f0", -- J (Blue)
+        "#f0a000", -- L (Orange)
+        "#f0f000", -- O (Yellow)
+        "#00f000", -- S (Green)
+        "#a000f0", -- T (Purple)
+        "#f00000"  -- Z (Red)
+    }
+    local shapes = {
+        { {0,0,0,0}, {1,1,1,1}, {0,0,0,0}, {0,0,0,0} }, -- I
+        { {2,0,0}, {2,2,2}, {0,0,0} },                  -- J
+        { {0,0,3}, {3,3,3}, {0,0,0} },                  -- L
+        { {4,4}, {4,4} },                               -- O
+        { {0,5,5}, {5,5,0}, {0,0,0} },                  -- S
+        { {0,6,0}, {6,6,6}, {0,0,0} },                  -- T
+        { {7,7,0}, {0,7,7}, {0,0,0} }                   -- Z
+    }
+    local board = {} -- сетка 10x20
+    local piece = nil
+    local px, py = 0, 0
+    local score = 0
+    local game_over = false
+    local game_speed = 500
+    function init_board()
+        board = {}
+        for y=1, ROWS do
+            board[y] = {}
+            for x=1, COLS do board[y][x] = 0 end
+        end
+    end
+    function new_piece()
+        local idx = math.random(1, #shapes)
+        local shape = shapes[idx]
+        local p = {}
+        for r=1, #shape do
+            p[r] = {}
+            for c=1, #shape[r] do p[r][c] = shape[r][c] end
+        end
+        piece = p
+        px = math.floor(COLS / 2) - math.floor(#p[1] / 2)
+        py = 1
+        if check_collision(px, py, piece) then
+            game_over = true
+            render()
+        end
+    end
+    function check_collision(ox, oy, shape)
+        for r=1, #shape do
+            for c=1, #shape[r] do
+                if shape[r][c] ~= 0 then
+                    local nx = ox + c - 1
+                    local ny = oy + r - 1
+                    if nx < 1 or nx > COLS or ny > ROWS then return true end
+                    if ny > 0 and board[ny][nx] ~= 0 then return true end
+                end
+            end
+        end
+        return false
+    end
+    function lock_piece()
+        for r=1, #piece do
+            for c=1, #piece[r] do
+                if piece[r][c] ~= 0 then
+                    local ny = py + r - 1
+                    local nx = px + c - 1
+                    if ny > 0 and ny <= ROWS then
+                        board[ny][nx] = piece[r][c]
+                    end
+                end
+            end
+        end
+        check_lines()
+        new_piece()
+    end
+    function check_lines()
+        local lines_cleared = 0
+        for y=ROWS, 1, -1 do
+            local full = true
+            for x=1, COLS do
+                if board[y][x] == 0 then full = false break end
+            end
+            
+            if full then
+                lines_cleared = lines_cleared + 1
+                for ky=y, 2, -1 do
+                    board[ky] = board[ky-1]
+                end
+                local new_row = {}
+                for x=1, COLS do new_row[x] = 0 end
+                board[1] = new_row
+                y = y + 1 
+            end
+        end
+        
+        if lines_cleared > 0 then
+            score = score + (lines_cleared * 100)
+            set_text("score_disp", "Score: " .. score)
+        end
+    end
+    function rotate_matrix(m)
+        local n = #m
+        local new_m = {}
+        for r=1, n do
+            new_m[r] = {}
+            for c=1, n do
+                new_m[r][c] = m[n - c + 1][r]
+            end
+        end
+        return new_m
+    end
+    function render()
+        canvas_clear(cv_id, "#000000")
+        for y=1, ROWS do
+            for x=1, COLS do
+                local val = board[y][x]
+                if val ~= 0 then
+                    canvas_rect(cv_id, (x-1)*BLK, (y-1)*BLK, BLK-1, BLK-1, colors[val])
+                end
+            end
+        end
+        if piece and not game_over then
+            for r=1, #piece do
+                for c=1, #piece[r] do
+                    local val = piece[r][c]
+                    if val ~= 0 then
+                        local dx = (px + c - 1 - 1) * BLK
+                        local dy = (py + r - 1 - 1) * BLK
+                        if dy >= -BLK then
+                            canvas_rect(cv_id, dx, dy, BLK-1, BLK-1, colors[val])
+                        end
+                    end
+                end
+            end
+        end
+        if game_over then
+            canvas_rect(cv_id, 20, 150, 160, 60, "#333333")
+            canvas_text(cv_id, 45, 170, "GAME OVER", 20, "#ff0000")
+        end
+        
+        refresh()
+    end
+    function try_move(dx, dy)
+        if game_over then return end
+        if not check_collision(px + dx, py + dy, piece) then
+            px = px + dx
+            py = py + dy
+            render()
+            return true
+        elseif dy > 0 then
+            lock_piece()
+            render()
+            return false
+        end
+        return false
+    end
+    function try_rotate()
+        if game_over then return end
+        local new_shape = rotate_matrix(piece)
+        if not check_collision(px, py, new_shape) then
+            piece = new_shape
+            render()
+        else
+            if not check_collision(px-1, py, new_shape) then
+                px = px - 1; piece = new_shape; render()
+            elseif not check_collision(px+1, py, new_shape) then
+                px = px + 1; piece = new_shape; render()
+            end
+        end
+    end
+    function tick()
+        if not game_over then
+            try_move(0, 1)
+        end
+    end
+    function start_game()
+        if timer_id then kill_timer(timer_id) end
+        math.randomseed(os.time())
+        init_board()
+        score = 0
+        set_text("score_disp", "Score: 0")
+        game_over = false
+        new_piece()
+        render()
+        timer_id = set_timer(game_speed, tick)
+    end
+    on_click("btn_left", function() try_move(-1, 0) end)
+    on_click("btn_right", function() try_move(1, 0) end)
+    on_click("btn_down", function() try_move(0, 1) end)
+    on_click("btn_up", function() try_rotate() end)
+    on_click("btn_restart", function() start_game() end)
+    start_game()
+}
