@@ -58,7 +58,6 @@ void setStatus(const std::string& t) {
     if (g_statusBar) SetWindowTextA(g_statusBar, t.c_str());
 }
 
-// parser
 namespace HTP {
 
 struct Color {
@@ -110,7 +109,6 @@ struct Doc {
     Color bg={26,26,46};
 };
 
-// recursive parser that works on the source string
 class Parser {
     std::string src;
     int pos=0;
@@ -151,7 +149,7 @@ class Parser {
             } else r+=src[pos];
             pos++;
         }
-        if(pos<len) pos++; // skip "
+        if(pos<len) pos++;
         return r;
     }
 
@@ -159,7 +157,6 @@ class Parser {
         skipWS();
         std::string val;
         if(pos<len&&src[pos]=='"') return readString();
-        // read until ; or }
         while(pos<len&&src[pos]!=';'&&src[pos]!='}') {
             val+=src[pos]; pos++;
         }
@@ -168,7 +165,6 @@ class Parser {
         return val;
     }
 
-    // (for @script thing)
     std::string readRawBlock() {
         int depth=1;
         int start=pos;
@@ -186,14 +182,14 @@ class Parser {
             pos++;
         }
         std::string code = src.substr(start, pos-start);
-        if(pos<len&&src[pos]=='}') pos++; // skip closing }
+        if(pos<len&&src[pos]=='}') pos++;
         return code;
     }
 
     void parseInlineAttrs(std::shared_ptr<Elem>& e) {
         skipWS();
         if(pos>=len||src[pos]!='(') return;
-        pos++; // skip (
+        pos++;
         while(pos<len&&src[pos]!=')') {
             skipWS();
             std::string key = readIdent();
@@ -206,7 +202,7 @@ class Parser {
             skipWS();
             if(pos<len&&src[pos]==',') pos++;
         }
-        if(pos<len) pos++; // skip )
+        if(pos<len) pos++;
     }
 
     EType tagToType(const std::string& t) {
@@ -242,7 +238,6 @@ class Parser {
         if(pos>=len||src[pos]!='{') return e;
         pos++;
 
-        // extract raw Lua code
         if(e->type == EType::SCRIPT) {
             e->scriptCode = readRawBlock();
             return e;
@@ -260,7 +255,7 @@ class Parser {
                 std::string key = readIdent();
                 skipWS();
                 if(pos<len&&src[pos]==':') {
-                    pos++; // skip :
+                    pos++;
                     std::string val = readValue();
                     e->props.d[key] = val;
                     skipWS();
@@ -357,7 +352,6 @@ Resp fetch(const URL& url) {
 Resp fetchUrl(const std::string& u){return fetch(URL::parse(u));}
 }
 
-// CANVAS
 namespace Canvas {
 struct Buf {
     int w=0,h=0; HDC dc=0; HBITMAP bmp=0,old=0;
@@ -379,9 +373,9 @@ std::shared_ptr<Buf> get(const std::string& id,HDC ref,int w,int h){
     if(i!=g_bufs.end()&&i->second->w==w&&i->second->h==h) return i->second;
     auto b=std::make_shared<Buf>();b->create(ref,w,h);g_bufs[id]=b;return b;
 }
-} // namespace Canvas
+}
 
-// SCRIPTS
+
 namespace Script {
 
 struct InputState {
@@ -392,10 +386,11 @@ struct InputState {
 };
 
 std::map<std::string,InputState> g_inputs;
-std::map<std::string,std::string> g_texts; // id->displayed text
+std::map<std::string,std::string> g_texts;
 std::map<std::string,std::function<void()>> g_clicks;
 std::map<int,int> g_timerRefs;
 int g_timerN=9000;
+int g_keyDownRef = LUA_NOREF;
 lua_State* g_L=nullptr;
 HWND g_hwnd=nullptr;
 std::string g_focusId;
@@ -530,6 +525,14 @@ static int l_kill_timer(lua_State*L){
     KillTimer(g_hwnd,id);g_timerRefs.erase(id);return 0;
 }
 
+static int l_on_key_down(lua_State*L){
+    luaL_checktype(L,1,LUA_TFUNCTION);
+    if(g_keyDownRef!=LUA_NOREF) luaL_unref(L,LUA_REGISTRYINDEX,g_keyDownRef);
+    lua_pushvalue(L,1);
+    g_keyDownRef=luaL_ref(L,LUA_REGISTRYINDEX);
+    return 0;
+}
+
 void init(){
     if(g_L) lua_close(g_L);
     g_L=luaL_newstate();luaL_openlibs(g_L);
@@ -550,6 +553,7 @@ void init(){
     lua_register(g_L,"canvas_text",l_cv_text);
     lua_register(g_L,"set_timer",l_set_timer);
     lua_register(g_L,"kill_timer",l_kill_timer);
+    lua_register(g_L,"on_key_down",l_on_key_down);
 }
 
 void exec(const std::string& code){
@@ -571,12 +575,12 @@ void reset(){
     for(auto&kv:g_timerRefs) KillTimer(g_hwnd,kv.first);
     g_timerRefs.clear();g_timerN=9000;
     g_clicks.clear();g_texts.clear();g_inputs.clear();g_focusId.clear();
+    g_keyDownRef=LUA_NOREF;
     Canvas::g_bufs.clear();
     if(g_L){lua_close(g_L);g_L=nullptr;}
 }
 }
 
-// RENDER
 namespace Render {
 
 struct Hit {
@@ -822,7 +826,6 @@ public:
 };
 }
 
-// PAGES
 namespace Pages {
 std::string readF(const std::string&p){std::ifstream f(p);if(!f)return"";std::stringstream s;s<<f.rdbuf();return s.str();}
 std::string home(){
@@ -878,7 +881,6 @@ std::string error(const std::string&e,const std::string&u){
 }
 }
 
-// BROWSER
 HTP::Doc g_doc;
 Render::Engine g_ren;
 std::string g_curUrl;
@@ -1041,27 +1043,39 @@ LRESULT CALLBACK WndProc(HWND hw,UINT msg,WPARAM wp,LPARAM lp){
             else if(c>=32){inp.text.insert(inp.cursor,1,c);inp.cursor++;}
             invalidateContent();return 0;
         }break;}
-    case WM_KEYDOWN:{
-        if(!Script::g_focusId.empty()&&GetFocus()==hw){
-            auto&inp=Script::g_inputs[Script::g_focusId];
-            if(wp==VK_LEFT){if(inp.cursor>0)inp.cursor--;invalidateContent();return 0;}
-            if(wp==VK_RIGHT){if(inp.cursor<(int)inp.text.length())inp.cursor++;invalidateContent();return 0;}
-            if(wp==VK_HOME){inp.cursor=0;invalidateContent();return 0;}
-            if(wp==VK_END){inp.cursor=(int)inp.text.length();invalidateContent();return 0;}
-            if(wp==VK_DELETE){if(inp.cursor<(int)inp.text.length()){inp.text.erase(inp.cursor,1);invalidateContent();}return 0;}
-            if(wp=='V'&&(GetKeyState(VK_CONTROL)&0x8000)){
-                if(OpenClipboard(hw)){HANDLE h=GetClipboardData(CF_TEXT);if(h){
-                    const char*cl=(const char*)GlobalLock(h);if(cl){
-                        std::string p=cl;p.erase(std::remove(p.begin(),p.end(),'\r'),p.end());
-                        p.erase(std::remove(p.begin(),p.end(),'\n'),p.end());
-                        inp.text.insert(inp.cursor,p);inp.cursor+=(int)p.length();
-                        GlobalUnlock(h);}
-                }CloseClipboard();}invalidateContent();return 0;
+        case WM_KEYDOWN:{
+            if(Script::g_keyDownRef!=LUA_NOREF && Script::g_L && GetFocus()==hw){
+                if(Script::g_focusId.empty()){
+                    lua_rawgeti(Script::g_L,LUA_REGISTRYINDEX,Script::g_keyDownRef);
+                    lua_pushinteger(Script::g_L,(int)wp);
+                    if(lua_pcall(Script::g_L,1,0,0)!=0){
+                        const char*e=lua_tostring(Script::g_L,-1);
+                        OutputDebugStringA(e?e:"lua err");OutputDebugStringA("\n");
+                        lua_pop(Script::g_L,1);
+                    }
+                    invalidateContent();
+                }
             }
-        }
-        if(wp==VK_F5)navigateTo(g_curUrl);
-        else if(wp==VK_BACK&&Script::g_focusId.empty()&&GetFocus()!=g_addressBar)goBack();
-        return 0;}
+            if(!Script::g_focusId.empty()&&GetFocus()==hw){
+                auto&inp=Script::g_inputs[Script::g_focusId];
+                if(wp==VK_LEFT){if(inp.cursor>0)inp.cursor--;invalidateContent();return 0;}
+                if(wp==VK_RIGHT){if(inp.cursor<(int)inp.text.length())inp.cursor++;invalidateContent();return 0;}
+                if(wp==VK_HOME){inp.cursor=0;invalidateContent();return 0;}
+                if(wp==VK_END){inp.cursor=(int)inp.text.length();invalidateContent();return 0;}
+                if(wp==VK_DELETE){if(inp.cursor<(int)inp.text.length()){inp.text.erase(inp.cursor,1);invalidateContent();}return 0;}
+                if(wp=='V'&&(GetKeyState(VK_CONTROL)&0x8000)){
+                    if(OpenClipboard(hw)){HANDLE h=GetClipboardData(CF_TEXT);if(h){
+                        const char*cl=(const char*)GlobalLock(h);if(cl){
+                            std::string p=cl;p.erase(std::remove(p.begin(),p.end(),'\r'),p.end());
+                            p.erase(std::remove(p.begin(),p.end(),'\n'),p.end());
+                            inp.text.insert(inp.cursor,p);inp.cursor+=(int)p.length();
+                            GlobalUnlock(h);}
+                    }CloseClipboard();}invalidateContent();return 0;
+                }
+            }
+            if(wp==VK_F5)navigateTo(g_curUrl);
+            else if(wp==VK_BACK&&Script::g_focusId.empty()&&GetFocus()!=g_addressBar)goBack();
+            return 0;}
     case WM_SETCURSOR:{
         if(LOWORD(lp)==HTCLIENT){
             POINT pt;GetCursorPos(&pt);ScreenToClient(hw,&pt);pt.y-=TOOLBAR_H;
