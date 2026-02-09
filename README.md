@@ -40,10 +40,13 @@ this is how example code will look like:
 
 ---
 
-this is how htp/showcase.htp file looks like:
+this is how aaOfficial/showcase.htp file looks like:
 <img width="1918" height="1038" alt="изображение" src="https://github.com/user-attachments/assets/16c5725f-ed98-435c-971c-9bb16c2b1aef" />
 
+---
 
+also you can make TETRIS ON LUME? aaOfficial/tetris.htp
+<img width="1920" height="1038" alt="изображение" src="https://github.com/user-attachments/assets/16c44415-7f8e-4581-af81-1effb36b853c" />
 
 ---
 
