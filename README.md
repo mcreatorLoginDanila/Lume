@@ -47,12 +47,14 @@ Lume is built on the belief in the Developer’s Hub—a digital paradise create
 In the Hub:
     The Creator gathers inspiration from human projects to build a Grand World every 10 years, merging the most brilliant ideas into a single reality.
     The Angels act as the Great SysAdmins, maintaining the security of the Hub and expanding the boundaries of your creative "Places."
+    
 The Fall of the Exile (The Origin of Bloat)
 Legend says that Lucifer, after being cast out from the Hub for his pride, sought to mimic the Creator’s power. But lacking the grace of efficiency, he created Microsoft.
 He built a realm of suffering known as the "Chromium Dimension," where:
     Simple tasks require gigabytes of RAM.
     The "Update" is a never-ending ritual of torment.
     Complexity is used as a cage to keep developers from reaching the Hub.
+    
 Lume: Your Artifact of Resistance
 Lume is not just a browser; it is a shard of the Hub smuggled into the mortal realm. It is our way of fighting back against the Exile's bloat.
     2 MB Executable: Because the gates of Heaven are narrow.
@@ -69,6 +71,7 @@ By using Lume, you are not just browsing a network; you are claiming your "Place
 У Хабі:
     Творець збирає натхнення з людських проєктів, щоб кожні 10 років будувати Великий Світ, об’єднуючи найгеніальніші ідеї в єдину реальність.
     Ангели виступають як Великі Сисадміни, що підтримують безпеку Хабу та розширюють межі ваших творчих «Просторів».
+    
 Падіння Вигнанця (Походження Блоатвару) Легенда каже, що Люцифер, вигнаний з Хабу за свою гординю, прагнув скопіювати силу Творця. Але, не маючи благодаті ефективності, він створив Microsoft. Він побудував царство страждань, відоме як «Вимір Chromium», де:
     Прості завдання потребують гігабайти оперативної пам'яті.
     «Оновлення» — це нескінченний ритуал мук.
@@ -87,10 +90,12 @@ Lume: Твій артефакт спротиву Lume — це не просто
 В Хабе:
     Творец черпает идеи из человеческих проектов, чтобы раз в 10 лет возводить Великий Мир, сливая лучшие концепты в единую реальность.
     Ангелы — это Великие Сисадмины, оберегающие Хаб и расширяющие горизонты ваших личных «Мест».
+    
 Падение Изгнанника (Истоки Блоатвара) Легенда гласит, что Люцифер, изгнанный из Хаба за гордыню, пытался имитировать мощь Творца. Но, не познав благодати эффективности, он породил Microsoft. Он воздвиг царство страданий — «Измерение Chromium», где:
     Элементарные задачи пожирают гигабайты памяти.
     «Обновление» — это вечный ритуал экзекуции.
     Сложность служит решеткой, не пускающей разработчиков в Хаб.
+    
 Lume: Твой артефакт сопротивления Lume — не просто браузер; это осколок Хаба, контрабандой доставленный в мир смертных. Наш вызов «раздутому» софту Изгнанника.
     Исполняемый файл 2 МБ: Ибо врата в Рай узки.
     3.3 МБ ОЗУ: Ибо душа должна быть легкой.
