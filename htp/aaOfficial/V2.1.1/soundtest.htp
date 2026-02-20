@@ -1,0 +1,119 @@
+@page { title: "8-Bit Sound Test"; background: #0f0f23; }
+
+@block { align: center; padding: 30; background: #1a1a3e; margin: 20; border-radius: 10;
+    @text { content: "8-Bit Sound Plugin"; size: 32; color: #e94560; bold: true; }
+    @br { size: 5; }
+    @text { content: "Retro sounds generated in real-time"; size: 14; color: #8888aa; }
+}
+
+@block { padding: 20; margin: 20; background: #16213e; border-radius: 8;
+    @text { content: "Sound Effects:"; size: 18; color: #ffffff; bold: true; }
+    @br { size: 10; }
+    @row { gap: 8;
+        @button { id: "sfx_coin"; content: "Coin"; width: 100; height: 35; background: #f1c40f; color: #000; }
+        @button { id: "sfx_jump"; content: "Jump"; width: 100; height: 35; background: #2ecc71; }
+        @button { id: "sfx_hit"; content: "Hit"; width: 100; height: 35; background: #e74c3c; }
+        @button { id: "sfx_laser"; content: "Laser"; width: 100; height: 35; background: #3498db; }
+    }
+    @br { size: 8; }
+    @row { gap: 8;
+        @button { id: "sfx_powerup"; content: "Power Up"; width: 100; height: 35; background: #9b59b6; }
+        @button { id: "sfx_explosion"; content: "Explode"; width: 100; height: 35; background: #e67e22; }
+        @button { id: "sfx_1up"; content: "1-UP"; width: 100; height: 35; background: #1abc9c; }
+        @button { id: "sfx_gameover"; content: "Game Over"; width: 100; height: 35; background: #c0392b; }
+    }
+    @br { size: 8; }
+    @row { gap: 8;
+        @button { id: "sfx_select"; content: "Select"; width: 100; height: 35; background: #0abde3; }
+        @button { id: "sfx_error"; content: "Error"; width: 100; height: 35; background: #ee5a24; }
+        @button { id: "sfx_up"; content: "Beep Up"; width: 100; height: 35; background: #6c5ce7; }
+        @button { id: "sfx_down"; content: "Beep Down"; width: 100; height: 35; background: #6c5ce7; }
+    }
+}
+
+@block { padding: 20; margin: 20; background: #16213e; border-radius: 8;
+    @text { content: "Wave Types:"; size: 18; color: #ffffff; bold: true; }
+    @br { size: 10; }
+    @row { gap: 8;
+        @button { id: "w_square"; content: "Square"; width: 100; height: 35; background: #e94560; }
+        @button { id: "w_sine"; content: "Sine"; width: 100; height: 35; background: #0abde3; }
+        @button { id: "w_saw"; content: "Sawtooth"; width: 100; height: 35; background: #48c774; }
+        @button { id: "w_tri"; content: "Triangle"; width: 100; height: 35; background: #ff9f43; color: #000; }
+        @button { id: "w_noise"; content: "Noise"; width: 100; height: 35; background: #778ca3; }
+    }
+}
+
+@block { padding: 20; margin: 20; background: #16213e; border-radius: 8;
+    @text { content: "Piano (Octave 4):"; size: 18; color: #ffffff; bold: true; }
+    @br { size: 10; }
+    @row { gap: 4;
+        @button { id: "n_c"; content: "C"; width: 50; height: 50; background: #ffffff; color: #000; }
+        @button { id: "n_cs"; content: "C#"; width: 50; height: 50; background: #333333; }
+        @button { id: "n_d"; content: "D"; width: 50; height: 50; background: #ffffff; color: #000; }
+        @button { id: "n_ds"; content: "D#"; width: 50; height: 50; background: #333333; }
+        @button { id: "n_e"; content: "E"; width: 50; height: 50; background: #ffffff; color: #000; }
+        @button { id: "n_f"; content: "F"; width: 50; height: 50; background: #ffffff; color: #000; }
+        @button { id: "n_fs"; content: "F#"; width: 50; height: 50; background: #333333; }
+        @button { id: "n_g"; content: "G"; width: 50; height: 50; background: #ffffff; color: #000; }
+        @button { id: "n_gs"; content: "G#"; width: 50; height: 50; background: #333333; }
+        @button { id: "n_a"; content: "A"; width: 50; height: 50; background: #ffffff; color: #000; }
+        @button { id: "n_as"; content: "A#"; width: 50; height: 50; background: #333333; }
+        @button { id: "n_b"; content: "B"; width: 50; height: 50; background: #ffffff; color: #000; }
+    }
+}
+
+@block { padding: 20; margin: 20; background: #16213e; border-radius: 8;
+    @text { content: "Melodies:"; size: 18; color: #ffffff; bold: true; }
+    @br { size: 10; }
+    @row { gap: 8;
+        @button { id: "mel_scale"; content: "Scale"; width: 120; height: 35; background: #a55eea; }
+        @button { id: "mel_twinkle"; content: "Twinkle"; width: 120; height: 35; background: #a55eea; }
+        @button { id: "mel_mario"; content: "Mario-ish"; width: 120; height: 35; background: #a55eea; }
+        @button { id: "mel_stop"; content: "Stop"; width: 80; height: 35; background: #636e72; }
+    }
+}
+
+@script {
+    on_click("sfx_coin", function() playSfx("coin") end)
+    on_click("sfx_jump", function() playSfx("jump") end)
+    on_click("sfx_hit", function() playSfx("hit") end)
+    on_click("sfx_laser", function() playSfx("laser") end)
+    on_click("sfx_powerup", function() playSfx("powerup") end)
+    on_click("sfx_explosion", function() playSfx("explosion") end)
+    on_click("sfx_1up", function() playSfx("1up") end)
+    on_click("sfx_gameover", function() playSfx("gameover") end)
+    on_click("sfx_select", function() playSfx("select") end)
+    on_click("sfx_error", function() playSfx("error") end)
+    on_click("sfx_up", function() playSfx("beep_up") end)
+    on_click("sfx_down", function() playSfx("beep_down") end)
+
+    on_click("w_square", function() playTone(440, 500, 80, "square") end)
+    on_click("w_sine", function() playTone(440, 500, 80, "sine") end)
+    on_click("w_saw", function() playTone(440, 500, 80, "saw") end)
+    on_click("w_tri", function() playTone(440, 500, 80, "triangle") end)
+    on_click("w_noise", function() playTone(440, 500, 80, "noise") end)
+
+    on_click("n_c", function() playNote("C", 4, 300) end)
+    on_click("n_cs", function() playNote("C#", 4, 300) end)
+    on_click("n_d", function() playNote("D", 4, 300) end)
+    on_click("n_ds", function() playNote("D#", 4, 300) end)
+    on_click("n_e", function() playNote("E", 4, 300) end)
+    on_click("n_f", function() playNote("F", 4, 300) end)
+    on_click("n_fs", function() playNote("F#", 4, 300) end)
+    on_click("n_g", function() playNote("G", 4, 300) end)
+    on_click("n_gs", function() playNote("G#", 4, 300) end)
+    on_click("n_a", function() playNote("A", 4, 300) end)
+    on_click("n_as", function() playNote("A#", 4, 300) end)
+    on_click("n_b", function() playNote("B", 4, 300) end)
+
+    on_click("mel_scale", function()
+        playMelody("C4/8 D4/8 E4/8 F4/8 G4/8 A4/8 B4/8 C5/4", 180)
+    end)
+    on_click("mel_twinkle", function()
+        playMelody("C4/4 C4/4 G4/4 G4/4 A4/4 A4/4 G4/2 F4/4 F4/4 E4/4 E4/4 D4/4 D4/4 C4/2", 120)
+    end)
+    on_click("mel_mario", function()
+        playMelody("E5/8 E5/8 - E5/8 - C5/8 E5/4 G5/4 - G4/4", 200)
+    end)
+    on_click("mel_stop", function() stopSound() end)
+}
