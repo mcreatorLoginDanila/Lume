@@ -1,0 +1,65 @@
+@page{title:"particles"; background:#1a1a2e}
+@block{
+    align:center; padding:10;
+    @text{content:"PARTICLE PHYSICS"; size:20; color:#e94560; bold:true}
+    @br{size:5}
+    @canvas{id:"cv"; width:600; height:400; border-color:#16213e}
+    @br{size:10}
+    @row{
+        gap:10;
+        @button{id:"btn_add"; content:"Add 50 Balls"; width:120; height:30; background:#0f3460; color:#fff}
+        @button{id:"btn_clr"; content:"Clear"; width:80; height:30; background:#e94560; color:#fff}
+    }
+    @text{id:"count"; content:"Count: 0"; size:14; color:#8888aa}
+}
+@script{
+    local balls = {}
+    local W, H = 600, 400
+    local G = 0.5 -- Гравитация
+    local timer = nil
+    function random_color()
+        local r = math.random(100, 255)
+        local g = math.random(100, 255)
+        local b = math.random(100, 255)
+        return string.format("#%02x%02x%02x", r, g, b)
+    end
+    function add_balls()
+        for i=1, 50 do
+            table.insert(balls, {
+                x = W/2,
+                y = H/2,
+                vx = math.random(-8, 8),
+                vy = math.random(-15, -5),
+                r = math.random(3, 8),
+                col = random_color()
+            })
+        end
+        set_text("count", "Count: " .. #balls)
+    end
+    function update()
+        canvas_clear("cv", "#000000")
+        for i, b in ipairs(balls) do
+            b.vy = b.vy + G
+            b.x = b.x + b.vx
+            b.y = b.y + b.vy
+            if b.x - b.r < 0 then 
+                b.x = b.r 
+                b.vx = -b.vx * 0.8 
+            elseif b.x + b.r > W then 
+                b.x = W - b.r 
+                b.vx = -b.vx * 0.8 
+            end
+            if b.y + b.r > H then 
+                b.y = H - b.r
+                b.vy = -b.vy * 0.7
+                b.vx = b.vx * 0.95
+            end
+            canvas_circle("cv", math.floor(b.x), math.floor(b.y), b.r, b.col)
+        end
+        refresh()
+    end
+    on_click("btn_add", add_balls)
+    on_click("btn_clr", function() balls = {}; set_text("count", "Count: 0") end)
+    math.randomseed(os.time())
+    set_timer(16, update) -- ~60 FPS
+}

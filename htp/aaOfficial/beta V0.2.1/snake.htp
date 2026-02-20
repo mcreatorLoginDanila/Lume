@@ -1,0 +1,91 @@
+@page{title:"Lume Snake"; background:#0f0f1a}
+@block{
+    align:center; padding:20;
+    @text{content:"SNAKE"; size:24; color:#00ff00; bold:true}
+    @text{id:"score"; content:"Score: 0"; size:16; color:#aaaaaa}
+    @br{size:10}
+    @canvas{id:"game"; width:400; height:400; border-color:#333333}
+    @br{size:10}
+    @text{content:"Controls: ARROWS to move, ENTER to restart"; size:14; color:#666666}
+}
+@script{
+    local W, H = 20, 20
+    local CELL = 20
+    local snake = {}
+    local dir = {x=1, y=0}
+    local next_dir = {x=1, y=0}
+    local food = {x=15, y=10}
+    local score = 0
+    local timer = nil
+    local game_over = false
+    function init()
+        snake = { {x=10, y=10}, {x=9, y=10}, {x=8, y=10} }
+        dir = {x=1, y=0}
+        next_dir = {x=1, y=0}
+        score = 0
+        game_over = false
+        place_food()
+        set_text("score", "Score: 0")
+        if timer then kill_timer(timer) end
+        timer = set_timer(100, tick) -- Скорость игры
+    end
+    function place_food()
+        local valid = false
+        while not valid do
+            food.x = math.random(0, W-1)
+            food.y = math.random(0, H-1)
+            valid = true
+            for _, s in ipairs(snake) do
+                if s.x == food.x and s.y == food.y then valid = false break end
+            end
+        end
+    end
+    function tick()
+        if game_over then return end
+        dir = next_dir
+        local head = snake[1]
+        local new_head = {x = head.x + dir.x, y = head.y + dir.y}
+        if new_head.x < 0 or new_head.x >= W or new_head.y < 0 or new_head.y >= H then
+            game_over = true
+            draw()
+            return
+        end
+        for _, s in ipairs(snake) do
+            if s.x == new_head.x and s.y == new_head.y then
+                game_over = true
+                draw()
+                return
+            end
+        end
+        table.insert(snake, 1, new_head)
+        if new_head.x == food.x and new_head.y == food.y then
+            score = score + 1
+            set_text("score", "Score: " .. score)
+            place_food()
+        else
+            table.remove(snake)
+        end
+        draw()
+    end
+    function draw()
+        canvas_clear("game", "#000000")
+        canvas_rect("game", food.x*CELL, food.y*CELL, CELL-1, CELL-1, "#ff0000")
+        for i, s in ipairs(snake) do
+            local color = (i == 1) and "#00ff00" or "#00aa00"
+            canvas_rect("game", s.x*CELL, s.y*CELL, CELL-1, CELL-1, color)
+        end
+        if game_over then
+            canvas_text("game", 120, 180, "GAME OVER", 24, "#ffffff")
+            canvas_text("game", 110, 210, "Press Enter", 16, "#aaaaaa")
+        end
+        refresh()
+    end
+    on_key_down(function(k)
+        if k == 13 and game_over then init() return end -- Enter
+        if k == 37 and dir.x == 0 then next_dir = {x=-1, y=0} end -- Left
+        if k == 39 and dir.x == 0 then next_dir = {x=1, y=0} end  -- Right
+        if k == 38 and dir.y == 0 then next_dir = {x=0, y=-1} end -- Up
+        if k == 40 and dir.y == 0 then next_dir = {x=0, y=1} end  -- Down
+    end)
+    init()
+}

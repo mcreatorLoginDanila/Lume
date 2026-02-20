@@ -1,0 +1,45 @@
+@page{title:"Big Clock"; background:#222222;}
+@block{
+    align:center; padding:20;
+    @text{content:"ANALOG CLOCK"; size:24; color:#aaaaaa;}
+    @br{size:20;}
+    @canvas{id:"clock"; width:400; height:400; border-color:#000000;}
+    @br{size:20;}
+    @text{id:"digital"; content:"--:--:--"; size:32; color:#00ff00;}
+}
+@script{
+    local CX, CY = 200, 200
+    local R = 190
+    canvas_clear("clock", "#222222")
+    refresh()
+    function draw_hand(deg, len, col, thick)
+        local rad = math.rad(deg - 90)
+        local x = CX + len * math.cos(rad)
+        local y = CY + len * math.sin(rad)
+        canvas_line("clock", CX, CY, math.floor(x), math.floor(y), col, thick)
+    end
+    function tick()
+        local t = os.date("*t")
+        canvas_clear("clock", "#222222")
+        canvas_circle("clock", CX, CY, R, "#333333")
+        for i=0, 11 do
+            local rad = math.rad(i * 30 - 90)
+            local x1 = CX + (R-20) * math.cos(rad)
+            local y1 = CY + (R-20) * math.sin(rad)
+            local x2 = CX + R * math.cos(rad)
+            local y2 = CY + R * math.sin(rad)
+            canvas_line("clock", math.floor(x1), math.floor(y1), math.floor(x2), math.floor(y2), "#ffffff", 3)
+        end
+        local h_deg = (t.hour % 12 + t.min/60) * 30
+        draw_hand(h_deg, 100, "#ffffff", 6)
+        local m_deg = (t.min + t.sec/60) * 6
+        draw_hand(m_deg, 150, "#aaaaaa", 4)
+        local s_deg = t.sec * 6
+        draw_hand(s_deg, 160, "#ff0000", 2)
+        canvas_circle("clock", CX, CY, 8, "#ff0000")
+        set_text("digital", string.format("%02d:%02d:%02d", t.hour, t.min, t.sec))
+        refresh()
+    end
+    set_timer(1000, tick)
+    tick() -- ВЫЗОВ СРАЗУ
+}

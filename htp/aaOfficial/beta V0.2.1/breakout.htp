@@ -1,0 +1,113 @@
+@page{title:"Mega Breakout"; background:#111111;}
+@block{
+    align:center; padding:10;
+    @text{content:"MEGA BREAKOUT"; size:24; color:#ffcc00; bold:true;}
+    @text{id:"info"; content:"Lives: 3  Blocks: 40"; size:18; color:#ffffff;}
+    @br{size:10;}
+    @canvas{id:"game"; width:600; height:600; border-color:#333333;}
+    @br{size:10;}
+    @button{id:"btn_start"; content:"START GAME"; width:200; height:45; background:#444444; color:#ffffff;}
+}
+@script{
+    local W, H = 600, 600
+    local paddle = {x=250, y=550, w=100, h=15}
+    local ball = {x=300, y=530, r=6, vx=4, vy=-4}
+    local bricks = {}
+    local lives = 3
+    local active_bricks = 0
+    local state = "menu" -- menu, play, win, loose
+    local timer = nil
+    function init()
+        bricks = {}
+        active_bricks = 0
+        local cols = {"#f00", "#f80", "#ff0", "#0f0", "#00f"}
+        for r=0, 4 do
+            for c=0, 7 do
+                table.insert(bricks, {
+                    x=c*70 + 20, y=r*30 + 50, w=60, h=20,
+                    active=true, col=cols[r+1]
+                })
+                active_bricks = active_bricks + 1
+            end
+        end
+        lives = 3
+        reset_ball()
+        state = "play"
+        update_ui()
+        if timer then kill_timer(timer) end
+        timer = set_timer(16, tick)
+    end
+    
+    function reset_ball()
+        ball.x, ball.y = W/2, H-100
+        ball.vx = math.random(-4, 4)
+        ball.vy = -5
+        if math.abs(ball.vx) < 2 then ball.vx = 3 end
+    end
+    function update_ui()
+        set_text("info", "Lives: "..lives.."  Blocks: "..active_bricks)
+    end
+    function rect_hit(bx, by, r, rx, ry, rw, rh)
+        return bx+r > rx and bx-r < rx+rw and by+r > ry and by-r < ry+rh
+    end
+    function tick()
+        draw()
+        if state ~= "play" then return end
+        local mx, my = get_mouse_pos()
+        local offset_x = (1024 - W) / 2 -- Примерно, если окно широкое
+        paddle.x = mx - 212 - paddle.w/2 -- 212 примерный отступ
+        if paddle.x < 0 then paddle.x = 0 end
+        if paddle.x > W-paddle.w then paddle.x = W-paddle.w end
+        
+        ball.x = ball.x + ball.vx
+        ball.y = ball.y + ball.vy
+        
+        if ball.x < 0 or ball.x > W then ball.vx = -ball.vx end
+        if ball.y < 0 then ball.vy = -ball.vy end
+        
+        if ball.y > H then
+            lives = lives - 1
+            if lives <= 0 then state = "loose" else reset_ball() end
+            update_ui()
+        end
+        
+        if rect_hit(ball.x, ball.y, ball.r, paddle.x, paddle.y, paddle.w, paddle.h) then
+            ball.vy = -math.abs(ball.vy)
+            ball.vx = (ball.x - (paddle.x + paddle.w/2)) * 0.2
+        end
+        
+        for _, b in ipairs(bricks) do
+            if b.active and rect_hit(ball.x, ball.y, ball.r, b.x, b.y, b.w, b.h) then
+                b.active = false
+                ball.vy = -ball.vy
+                active_bricks = active_bricks - 1
+                update_ui()
+                if active_bricks == 0 then state = "win" end
+                break
+            end
+        end
+    end
+    
+    function draw()
+        canvas_clear("game", "#000000")
+        
+        if state == "menu" then
+            canvas_text("game", 220, 280, "PRESS START", 24, "#ffffff")
+        elseif state == "play" then
+            canvas_rect("game", paddle.x, paddle.y, paddle.w, paddle.h, "#00aaff")
+            canvas_circle("game", math.floor(ball.x), math.floor(ball.y), ball.r, "#ffffff")
+            for _, b in ipairs(bricks) do
+                if b.active then canvas_rect("game", b.x, b.y, b.w, b.h, b.col) end
+            end
+        elseif state == "win" then
+            canvas_text("game", 180, 250, "YOU WIN!", 48, "#00ff00")
+            canvas_text("game", 200, 310, "Score: "..lives*1000, 24, "#fff")
+        elseif state == "loose" then
+            canvas_text("game", 180, 250, "GAME OVER", 48, "#ff0000")
+        end
+        refresh()
+    end
+    
+    on_click("btn_start", init)
+    draw()
+}
