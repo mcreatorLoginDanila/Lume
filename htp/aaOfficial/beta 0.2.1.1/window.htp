@@ -1,0 +1,80 @@
+@page { title: "Window Plugin Test"; background: #0f0f23; }
+@block { align: center; padding: 30; background: #1a1a3e; margin: 20; border-radius: 10;
+    @text { content: "Window Control"; size: 32; color: #e94560; bold: true; }
+    @br { size: 10; }
+    @text { id: "info"; content: "Click buttons to control window"; size: 14; color: #8888aa; }
+}
+@block { padding: 20; margin: 20; background: #16213e; border-radius: 8;
+    @text { content: "Snap to half:"; size: 18; color: #ffffff; bold: true; }
+    @br { size: 10; }
+    @row { gap: 10;
+        @button { id: "btn_left"; content: "Left Half"; width: 140; height: 38; background: #0abde3; }
+        @button { id: "btn_right"; content: "Right Half"; width: 140; height: 38; background: #0abde3; }
+        @button { id: "btn_top"; content: "Top Half"; width: 140; height: 38; background: #0abde3; }
+        @button { id: "btn_bottom"; content: "Bottom Half"; width: 140; height: 38; background: #0abde3; }
+    }
+}
+@block { padding: 20; margin: 20; background: #16213e; border-radius: 8;
+    @text { content: "Snap to quarter:"; size: 18; color: #ffffff; bold: true; }
+    @br { size: 10; }
+    @row { gap: 10;
+        @button { id: "btn_tl"; content: "Top-Left"; width: 140; height: 38; background: #48c774; }
+        @button { id: "btn_tr"; content: "Top-Right"; width: 140; height: 38; background: #48c774; }
+        @button { id: "btn_bl"; content: "Bot-Left"; width: 140; height: 38; background: #48c774; }
+        @button { id: "btn_br"; content: "Bot-Right"; width: 140; height: 38; background: #48c774; }
+    }
+}
+@block { padding: 20; margin: 20; background: #16213e; border-radius: 8;
+    @text { content: "Other:"; size: 18; color: #ffffff; bold: true; }
+    @br { size: 10; }
+    @row { gap: 10;
+        @button { id: "btn_max"; content: "Maximize"; width: 120; height: 38; background: #ff9f43; color: #000000; }
+        @button { id: "btn_restore"; content: "Restore"; width: 120; height: 38; background: #ff9f43; color: #000000; }
+        @button { id: "btn_center"; content: "Center"; width: 120; height: 38; background: #ff9f43; color: #000000; }
+        @button { id: "btn_full"; content: "Fullscreen"; width: 120; height: 38; background: #e94560; }
+    }
+    @br { size: 10; }
+    @row { gap: 10;
+        @button { id: "btn_small"; content: "800x600"; width: 120; height: 38; background: #a55eea; }
+        @button { id: "btn_medium"; content: "1024x768"; width: 120; height: 38; background: #a55eea; }
+        @button { id: "btn_large"; content: "1280x900"; width: 120; height: 38; background: #a55eea; }
+        @button { id: "btn_info"; content: "Get Info"; width: 120; height: 38; background: #778ca3; }
+    }
+}
+@script {
+    on_click("btn_left", function() windowLeft() end)
+    on_click("btn_right", function() windowRight() end)
+    on_click("btn_top", function() windowTop() end)
+    on_click("btn_bottom", function() windowBottom() end)
+
+    on_click("btn_tl", function() windowTopLeft() end)
+    on_click("btn_tr", function() windowTopRight() end)
+    on_click("btn_bl", function() windowBottomLeft() end)
+    on_click("btn_br", function() windowBottomRight() end)
+
+    on_click("btn_max", function() windowMaximize() end)
+    on_click("btn_restore", function() windowRestore() end)
+    on_click("btn_center", function() windowCenter() end)
+    on_click("btn_full", function() windowFullscreen() end)
+
+    on_click("btn_small", function()
+        windowResize(800, 600)
+        windowCenter()
+    end)
+    on_click("btn_medium", function()
+        windowResize(1024, 768)
+        windowCenter()
+    end)
+    on_click("btn_large", function()
+        windowResize(1280, 900)
+        windowCenter()
+    end)
+    on_click("btn_info", function()
+        local w, h = windowGetSize()
+        local x, y = windowGetPos()
+        local mw, mh = windowGetMonitorSize()
+        set_text("info", "Window: " .. w .. "x" .. h ..
+            " at (" .. x .. "," .. y .. ")" ..
+            "  Monitor: " .. mw .. "x" .. mh)
+    end)
+}
