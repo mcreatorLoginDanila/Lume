@@ -1,13 +1,11 @@
 #define _WIN32_WINNT 0x0601
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
-
 #include <windows.h>
 #include <commctrl.h>
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <shellapi.h>
-
 #include <string>
 #include <vector>
 #include <map>
@@ -18,34 +16,29 @@
 #include <memory>
 #include <cmath>
 #include <regex>
-
 extern "C" {
 #include "lib/lua.h"
 #include "lib/lauxlib.h"
 #include "lib/lualib.h"
 }
-
+#include "lume_plugin.h"
 #pragma comment(lib, "ws2_32.lib")
 #pragma comment(lib, "gdi32.lib")
 #pragma comment(lib, "user32.lib")
 #pragma comment(lib, "comctl32.lib")
 #pragma comment(lib, "shell32.lib")
-
 void navigateTo(const std::string& url);
 void invalidateContent();
-
 HWND g_mainWnd = nullptr;
 HWND g_addressBar = nullptr;
 HWND g_statusBar = nullptr;
 const int TOOLBAR_H = 40;
 const int STATUS_H = 24;
-
 #define ID_ADDR  1001
 #define ID_GO    1002
 #define ID_BACK  1003
 #define ID_FWD   1004
 #define ID_REF   1005
-
 void invalidateContent() {
     if (!g_mainWnd) return;
     RECT cr;
@@ -53,13 +46,121 @@ void invalidateContent() {
     RECT contentRect = { 0, TOOLBAR_H, cr.right, cr.bottom - STATUS_H };
     InvalidateRect(g_mainWnd, &contentRect, FALSE);
 }
-
 void setStatus(const std::string& t) {
     if (g_statusBar) SetWindowTextA(g_statusBar, t.c_str());
 }
+namespace Plugins {
+struct LoadedPlugin {
+    std::string name;
+    std::string path;
+    HMODULE hModule = nullptr;
+    lume_plugin_init_fn initFn = nullptr;
+};
+static std::vector<LoadedPlugin> g_plugins;
+static LumeHostAPI g_hostAPI = {};
+static HWND hostGetMainHwnd() {
+    return g_mainWnd;
+}
+static void hostInvalidateContent() {
+    invalidateContent();
+}
+static void hostSetStatus(const char* text) {
+    setStatus(text ? text : "");
+}
+static void hostNavigateTo(const char* url) {
+    if (url) navigateTo(url);
+}
+void initHostAPI() {
+    g_hostAPI.get_main_hwnd     = hostGetMainHwnd;
+    g_hostAPI.invalidate_content = hostInvalidateContent;
+    g_hostAPI.set_status        = hostSetStatus;
+    g_hostAPI.navigate_to       = hostNavigateTo;
+    g_hostAPI.api_version       = 1;
+}
+void discoverPlugins() {
+    char exePath[MAX_PATH] = {};
+    GetModuleFileNameA(nullptr, exePath, MAX_PATH);
+    std::string dir = exePath;
+    auto lastSlash = dir.find_last_of("\\/");
+    if (lastSlash != std::string::npos)
+        dir = dir.substr(0, lastSlash + 1);
+    else
+        dir = ".\\";
+    std::string pluginDir = dir + "plugins\\";
+    CreateDirectoryA(pluginDir.c_str(), nullptr);
+    std::string searchPattern = pluginDir + "*.dll";
+    WIN32_FIND_DATAA fd = {};
+    HANDLE hFind = FindFirstFileA(searchPattern.c_str(), &fd);
+    if (hFind == INVALID_HANDLE_VALUE) {
+        OutputDebugStringA("[Plugins] No plugins found in plugins/\n");
+        return;
+    }
+    do {
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+            continue;
+        std::string fullPath = pluginDir + fd.cFileName;
+        LoadedPlugin plugin;
+        plugin.name = fd.cFileName;
+        plugin.path = fullPath;
+        plugin.hModule = LoadLibraryA(fullPath.c_str());
+        if (!plugin.hModule) {
+            DWORD err = GetLastError();
+            std::string msg = "[Plugins] Failed to load " +
+                plugin.name + " (error " + std::to_string(err) + ")\n";
+            OutputDebugStringA(msg.c_str());
+            continue;
+        }
+        plugin.initFn = (lume_plugin_init_fn)GetProcAddress(
+            plugin.hModule, "lume_plugin_init");
+        if (!plugin.initFn) {
+            std::string msg = "[Plugins] " + plugin.name +
+                " has no lume_plugin_init export, skipping\n";
+            OutputDebugStringA(msg.c_str());
+            FreeLibrary(plugin.hModule);
+            continue;
+        }
+        g_plugins.push_back(plugin);
+        std::string msg = "[Plugins] Discovered: " + plugin.name + "\n";
+        OutputDebugStringA(msg.c_str());
+    } while (FindNextFileA(hFind, &fd));
+    FindClose(hFind);
+    std::string summary = "[Plugins] Total plugins found: " +
+        std::to_string(g_plugins.size()) + "\n";
+    OutputDebugStringA(summary.c_str());
+}
+void initAllPlugins(lua_State* L) {
+    for (auto& plugin : g_plugins) {
+        if (!plugin.initFn) continue;
+        int result = plugin.initFn(L, &g_hostAPI);
+        if (result != 0) {
+            std::string msg = "[Plugins] " + plugin.name +
+                " init failed (code " + std::to_string(result) + ")\n";
+            OutputDebugStringA(msg.c_str());
+        } else {
+            std::string msg = "[Plugins] " + plugin.name +
+                " initialized OK\n";
+            OutputDebugStringA(msg.c_str());
+        }
+    }
+}
+void unloadAll() {
+    for (auto& plugin : g_plugins) {
+        if (plugin.hModule) {
+            typedef void (*shutdown_fn)();
+            auto shutdownFn = (shutdown_fn)GetProcAddress(
+                plugin.hModule, "lume_plugin_shutdown");
+            if (shutdownFn) shutdownFn();
+
+            FreeLibrary(plugin.hModule);
+            plugin.hModule = nullptr;
+        }
+    }
+    g_plugins.clear();
+}
+
+}
 
 namespace HTP {
-
 struct Color {
     int r=255,g=255,b=255,a=255;
     static Color fromHex(const std::string& hex) {
@@ -73,12 +174,9 @@ struct Color {
     }
     COLORREF cr() const { return RGB(r,g,b); }
 };
-
 enum class EType {
-    PAGE,BLOCK,TEXT,IMAGE,LINK,BUTTON,INPUT_FIELD,
-    DIVIDER,LIST,ITEM,BR,SCRIPT,CANVAS,ROW,COLUMN,UNKNOWN
+    PAGE,BLOCK,TEXT,IMAGE,LINK,BUTTON,INPUT_FIELD,DIVIDER,LIST,ITEM,BR,SCRIPT,CANVAS,ROW,COLUMN,UNKNOWN
 };
-
 struct Props {
     std::map<std::string,std::string> d;
     std::string get(const std::string& k,const std::string& def="") const {
@@ -94,7 +192,6 @@ struct Props {
         auto i=d.find(k); if(i!=d.end()) return Color::fromHex(i->second); return def;
     }
 };
-
 struct Elem {
     EType type=EType::UNKNOWN;
     std::string tag;
@@ -102,18 +199,15 @@ struct Elem {
     std::string scriptCode;
     std::vector<std::shared_ptr<Elem>> children;
 };
-
 struct Doc {
     std::shared_ptr<Elem> root;
     std::string title;
     Color bg={26,26,46};
 };
-
 class Parser {
     std::string src;
     int pos=0;
     int len=0;
-
     void skipWS() {
         while(pos<len) {
             char c=src[pos];
@@ -126,17 +220,15 @@ class Parser {
             break;
         }
     }
-
     std::string readIdent() {
         std::string r;
         while(pos<len&&(std::isalnum((unsigned char)src[pos])||src[pos]=='_'||src[pos]=='-'))
             { r+=src[pos]; pos++; }
         return r;
     }
-
     std::string readString() {
         if(pos>=len||src[pos]!='"') return "";
-        pos++; // skip "
+        pos++;
         std::string r;
         while(pos<len&&src[pos]!='"') {
             if(src[pos]=='\\'&&pos+1<len) {
@@ -152,7 +244,6 @@ class Parser {
         if(pos<len) pos++;
         return r;
     }
-
     std::string readValue() {
         skipWS();
         std::string val;
@@ -164,7 +255,6 @@ class Parser {
             val.pop_back();
         return val;
     }
-
     std::string readRawBlock() {
         int depth=1;
         int start=pos;
@@ -185,7 +275,6 @@ class Parser {
         if(pos<len&&src[pos]=='}') pos++;
         return code;
     }
-
     void parseInlineAttrs(std::shared_ptr<Elem>& e) {
         skipWS();
         if(pos>=len||src[pos]!='(') return;
@@ -204,7 +293,6 @@ class Parser {
         }
         if(pos<len) pos++;
     }
-
     EType tagToType(const std::string& t) {
         if(t=="page") return EType::PAGE;
         if(t=="block") return EType::BLOCK;
@@ -223,7 +311,6 @@ class Parser {
         if(t=="column") return EType::COLUMN;
         return EType::UNKNOWN;
     }
-
     std::shared_ptr<Elem> parseElement() {
         skipWS();
         if(pos>=len||src[pos]!='@') return nullptr;
@@ -231,23 +318,18 @@ class Parser {
         auto e = std::make_shared<Elem>();
         e->tag = readIdent();
         e->type = tagToType(e->tag);
-
         parseInlineAttrs(e);
         skipWS();
-
         if(pos>=len||src[pos]!='{') return e;
         pos++;
-
         if(e->type == EType::SCRIPT) {
             e->scriptCode = readRawBlock();
             return e;
         }
-
         while(pos<len) {
             skipWS();
             if(pos>=len) break;
             if(src[pos]=='}') { pos++; break; }
-
             if(src[pos]=='@') {
                 auto child = parseElement();
                 if(child) e->children.push_back(child);
@@ -267,18 +349,15 @@ class Parser {
         }
         return e;
     }
-
 public:
     Doc parse(const std::string& source) {
         Doc doc;
         src = source;
         pos = 0;
         len = (int)src.length();
-
         auto root = std::make_shared<Elem>();
         root->type = EType::PAGE;
         root->tag = "root";
-
         while(pos<len) {
             skipWS();
             if(pos>=len) break;
@@ -299,9 +378,7 @@ public:
         return doc;
     }
 };
-
 }
-
 namespace Net {
 struct URL {
     std::string proto,host,path; int port=8080;
@@ -351,7 +428,6 @@ Resp fetch(const URL& url) {
 }
 Resp fetchUrl(const std::string& u){return fetch(URL::parse(u));}
 }
-
 namespace Canvas {
 struct Buf {
     int w=0,h=0; HDC dc=0; HBITMAP bmp=0,old=0;
@@ -374,17 +450,13 @@ std::shared_ptr<Buf> get(const std::string& id,HDC ref,int w,int h){
     auto b=std::make_shared<Buf>();b->create(ref,w,h);g_bufs[id]=b;return b;
 }
 }
-
-
 namespace Script {
-
 struct InputState {
     std::string text,placeholder;
     int x=0,y=0,w=250,h=28;
     bool focused=false;
     int cursor=0;
 };
-
 std::map<std::string,InputState> g_inputs;
 std::map<std::string,std::string> g_texts;
 std::map<std::string,std::function<void()>> g_clicks;
@@ -394,7 +466,6 @@ int g_keyDownRef = LUA_NOREF;
 lua_State* g_L=nullptr;
 HWND g_hwnd=nullptr;
 std::string g_focusId;
-
 static int l_set_text(lua_State*L){
     const char*id=luaL_checkstring(L,1);const char*t=luaL_checkstring(L,2);
     g_texts[id]=t;
@@ -445,7 +516,6 @@ static int l_set_input(lua_State*L){
     g_inputs[luaL_checkstring(L,1)].text=luaL_checkstring(L,2);
     invalidateContent();return 0;
 }
-
 static int l_cv_clear(lua_State*L){
     auto i=Canvas::g_bufs.find(luaL_checkstring(L,1));
     if(i!=Canvas::g_bufs.end()&&i->second->dc){
@@ -505,7 +575,6 @@ static int l_cv_text(lua_State*L){
         SelectObject(i->second->dc,of);DeleteObject(f);
     }return 0;
 }
-
 static int l_set_timer(lua_State*L){
     int ms=(int)luaL_checkinteger(L,1);
     luaL_checktype(L,2,LUA_TFUNCTION);
@@ -524,7 +593,6 @@ static int l_kill_timer(lua_State*L){
     int id=(int)luaL_checkinteger(L,1);
     KillTimer(g_hwnd,id);g_timerRefs.erase(id);return 0;
 }
-
 static int l_on_key_down(lua_State*L){
     luaL_checktype(L,1,LUA_TFUNCTION);
     if(g_keyDownRef!=LUA_NOREF) luaL_unref(L,LUA_REGISTRYINDEX,g_keyDownRef);
@@ -532,7 +600,6 @@ static int l_on_key_down(lua_State*L){
     g_keyDownRef=luaL_ref(L,LUA_REGISTRYINDEX);
     return 0;
 }
-
 void init(){
     if(g_L) lua_close(g_L);
     g_L=luaL_newstate();luaL_openlibs(g_L);
@@ -554,8 +621,8 @@ void init(){
     lua_register(g_L,"set_timer",l_set_timer);
     lua_register(g_L,"kill_timer",l_kill_timer);
     lua_register(g_L,"on_key_down",l_on_key_down);
+    Plugins::initAllPlugins(g_L);
 }
-
 void exec(const std::string& code){
     if(!g_L) init();
     if(luaL_dostring(g_L,code.c_str())!=0){
@@ -566,11 +633,9 @@ void exec(const std::string& code){
         lua_pop(g_L,1);
     }
 }
-
 void fireClick(const std::string& id){
     auto i=g_clicks.find(id);if(i!=g_clicks.end()) i->second();
 }
-
 void reset(){
     for(auto&kv:g_timerRefs) KillTimer(g_hwnd,kv.first);
     g_timerRefs.clear();g_timerN=9000;
@@ -580,23 +645,17 @@ void reset(){
     if(g_L){lua_close(g_L);g_L=nullptr;}
 }
 }
-
 namespace Render {
-
 struct Hit {
     RECT r; std::string url,action,elemId;
     bool isInput=false,isBtn=false;
 };
-
 class Engine {
     int scrollY=0,contentH=0,curY=0;
     std::vector<Hit>*pH=nullptr;
     HDC refDC=nullptr;
-
     HFONT mkFont(int sz,bool b=false,bool i=false,const char*f="Segoe UI"){
-        return CreateFontA(-sz,0,0,0,b?FW_BOLD:FW_NORMAL,i,0,0,
-            DEFAULT_CHARSET,OUT_DEFAULT_PRECIS,CLIP_DEFAULT_PRECIS,
-            CLEARTYPE_QUALITY,DEFAULT_PITCH|FF_DONTCARE,f);
+        return CreateFontA(-sz,0,0,0,b?FW_BOLD:FW_NORMAL,i,0,0,DEFAULT_CHARSET,OUT_DEFAULT_PRECIS,CLIP_DEFAULT_PRECIS,CLEARTYPE_QUALITY,DEFAULT_PITCH|FF_DONTCARE,f);
     }
     void fillRR(HDC dc,int x,int y,int w,int h,HTP::Color c,int rad=5){
         HBRUSH b=CreateSolidBrush(c.cr());HPEN p=CreatePen(PS_SOLID,1,c.cr());
@@ -635,7 +694,6 @@ class Engine {
             default: return mw;
         }
     }
-
     void draw(HDC dc,std::shared_ptr<HTP::Elem> e,int x,int y,int mw){
         if(!e) return;
         switch(e->type){
@@ -807,7 +865,6 @@ class Engine {
         }
         if(curY>contentH+scrollY) contentH=curY-scrollY;
     }
-
 public:
     int totalH()const{return contentH;}
     void setScroll(int y){scrollY=(std::max)(0,y);}
@@ -825,7 +882,6 @@ public:
     }
 };
 }
-
 namespace Pages {
 std::string readF(const std::string&p){std::ifstream f(p);if(!f)return"";std::stringstream s;s<<f.rdbuf();return s.str();}
 std::string home(){
@@ -835,7 +891,7 @@ std::string home(){
     s+="@block{align:center;padding:40;background:#1a1a3e;border-radius:12;margin:20;\n";
     s+="  @text{content:\"Lume\";size:42;color:#e94560;bold:true;}\n";
     s+="  @br{size:10;}\n";
-    s+="  @text{content:\"Lua + Canvas + Input + Layout\";size:18;color:#8888aa;italic:true;}\n";
+    s+="  @text{content:\"Lua + Canvas + Input + Layout + Plugins\";size:18;color:#8888aa;italic:true;}\n";
     s+="  @br{size:20;}\n";
     s+="  @text{content:\"Enter htp:// or open .htp file\";size:16;color:#666688;}\n";
     s+="}\n";
@@ -843,6 +899,7 @@ std::string home(){
     s+="  @text{content:\"Quick links:\";size:18;color:#ffffff;bold:true;}\n";
     s+="  @br{size:10;}\n";
     s+="  @link{content:\"Server localhost:8080\";url:\"htp://localhost:8080/index.htp\";color:#0abde3;size:16;}\n";
+    s+="  @link{content:\"Plugin Demo\";url:\"about:plugindemo\";color:#0abde3;size:16;}\n";
     s+="  @link{content:\"About\";url:\"about:info\";color:#0abde3;size:16;}\n";
     s+="}\n";
     return s;
@@ -860,9 +917,89 @@ std::string about(){
     s+="    @item{content:\"Canvas drawing API\";size:15;color:#ccccee;}\n";
     s+="    @item{content:\"Live text input\";size:15;color:#ccccee;}\n";
     s+="    @item{content:\"Row/Column layout\";size:15;color:#ccccee;}\n";
+    s+="    @item{content:\"DLL Plugin system\";size:15;color:#ccccee;}\n";
     s+="  }\n";
     s+="  @br{size:15;}\n";
     s+="  @link{content:\"Home\";url:\"about:home\";color:#0abde3;size:16;}\n";
+    s+="}\n";
+    return s;
+}
+std::string pluginDemo(){
+    std::string s;
+    s+="@page{title:\"Plugin Demo\";background:#0f0f23;}\n";
+    s+="@block{align:center;padding:30;background:#1a1a3e;margin:20;border-radius:10;\n";
+    s+="  @text{content:\"Plugin Demo: msgBox\";size:32;color:#e94560;bold:true;}\n";
+    s+="  @br{size:10;}\n";
+    s+="  @text{content:\"Test the msgBox plugin functions\";size:16;color:#8888aa;}\n";
+    s+="}\n";
+    s+="@block{padding:20;margin:20;background:#16213e;border-radius:8;\n";
+    s+="  @text{content:\"Yes/No Dialog:\";size:18;color:#ffffff;bold:true;}\n";
+    s+="  @br{size:8;}\n";
+    s+="  @button{id:\"btn_yesno\";content:\"Delete all files?\";width:200;height:40;background:#e94560;}\n";
+    s+="  @br{size:5;}\n";
+    s+="  @text{id:\"result_yesno\";content:\"Click the button above\";size:15;color:#aaaacc;}\n";
+    s+="}\n";
+    s+="@block{padding:20;margin:20;background:#16213e;border-radius:8;\n";
+    s+="  @text{content:\"Simple Alert:\";size:18;color:#ffffff;bold:true;}\n";
+    s+="  @br{size:8;}\n";
+    s+="  @button{id:\"btn_alert\";content:\"Show Alert\";width:200;height:40;background:#0abde3;}\n";
+    s+="}\n";
+    s+="@block{padding:20;margin:20;background:#16213e;border-radius:8;\n";
+    s+="  @text{content:\"Input Dialog:\";size:18;color:#ffffff;bold:true;}\n";
+    s+="  @br{size:8;}\n";
+    s+="  @button{id:\"btn_input\";content:\"Ask Name\";width:200;height:40;background:#48c774;}\n";
+    s+="  @br{size:5;}\n";
+    s+="  @text{id:\"result_input\";content:\"Click to enter your name\";size:15;color:#aaaacc;}\n";
+    s+="}\n";
+    s+="@block{padding:20;margin:20;background:#16213e;border-radius:8;\n";
+    s+="  @text{content:\"Yes/No/Cancel:\";size:18;color:#ffffff;bold:true;}\n";
+    s+="  @br{size:8;}\n";
+    s+="  @button{id:\"btn_ync\";content:\"Save changes?\";width:200;height:40;background:#ff9f43;color:#000000;}\n";
+    s+="  @br{size:5;}\n";
+    s+="  @text{id:\"result_ync\";content:\"Click to test\";size:15;color:#aaaacc;}\n";
+    s+="}\n";
+    s+="@br{size:10;}\n";
+    s+="@block{padding:10;margin:20;background:#16213e;border-radius:8;\n";
+    s+="  @link{content:\"Back to Home\";url:\"about:home\";color:#0abde3;size:16;}\n";
+    s+="}\n";
+    s+="@script{\n";
+    s+="  on_click(\"btn_yesno\", function()\n";
+    s+="    local result = msgBox(\"Warning!\", \"Delete all files?\", {\n";
+    s+="      yes = function()\n";
+    s+="        set_text(\"result_yesno\", \"User is brave! Deleting...\")\n";
+    s+="      end,\n";
+    s+="      no = function()\n";
+    s+="        set_text(\"result_yesno\", \"User is cautious. Files are safe.\")\n";
+    s+="      end\n";
+    s+="    })\n";
+    s+="  end)\n";
+    s+="\n";
+    s+="  on_click(\"btn_alert\", function()\n";
+    s+="    msgBox(\"Hello!\", \"This is a simple alert from the msgBox plugin.\")\n";
+    s+="  end)\n";
+    s+="\n";
+    s+="  on_click(\"btn_input\", function()\n";
+    s+="    local name = inputBox(\"Name\", \"Enter your name:\", \"Lume User\")\n";
+    s+="    if name then\n";
+    s+="      set_text(\"result_input\", \"Hello, \" .. name .. \"!\")\n";
+    s+="    else\n";
+    s+="      set_text(\"result_input\", \"Input cancelled.\")\n";
+    s+="    end\n";
+    s+="  end)\n";
+    s+="\n";
+    s+="  on_click(\"btn_ync\", function()\n";
+    s+="    local result = msgBoxYesNoCancel(\"Save\", \"Save changes before closing?\", {\n";
+    s+="      yes = function()\n";
+    s+="        set_text(\"result_ync\", \"Saving changes...\")\n";
+    s+="      end,\n";
+    s+="      no = function()\n";
+    s+="        set_text(\"result_ync\", \"Discarding changes.\")\n";
+    s+="      end,\n";
+    s+="      cancel = function()\n";
+    s+="        set_text(\"result_ync\", \"Operation cancelled.\")\n";
+    s+="      end\n";
+    s+="    })\n";
+    s+="  end)\n";
     s+="}\n";
     return s;
 }
@@ -880,18 +1017,15 @@ std::string error(const std::string&e,const std::string&u){
     return s;
 }
 }
-
 HTP::Doc g_doc;
 Render::Engine g_ren;
 std::string g_curUrl;
 std::vector<std::string> g_hist;
 int g_histPos=-1;
-
 void loadContent(const std::string&content,const std::string&url){
     Script::reset();
     HTP::Parser p; g_doc=p.parse(content);
     g_curUrl=url; g_ren.setScroll(0);
-
     std::function<void(std::shared_ptr<HTP::Elem>)> run;
     run=[&](std::shared_ptr<HTP::Elem>e){
         if(!e)return;
@@ -901,12 +1035,10 @@ void loadContent(const std::string&content,const std::string&url){
         for(auto&c:e->children) run(c);
     };
     run(g_doc.root);
-
     SetWindowTextA(g_mainWnd,(g_doc.title+" - Lume").c_str());
     SetWindowTextA(g_addressBar,url.c_str());
     invalidateContent();
 }
-
 void loadFile(const std::string&fp){
     std::string path=fp;
     if(path.length()>7&&path.substr(0,7)=="file://") path=path.substr(7);
@@ -916,7 +1048,6 @@ void loadFile(const std::string&fp){
     loadContent(ss.str(),"file://"+path);
     setStatus("Loaded: "+path);
 }
-
 void navigateTo(const std::string&url){
     std::string u=url;
     if(u=="about:home"||u=="about:blank"||u.empty()){
@@ -926,6 +1057,10 @@ void navigateTo(const std::string&url){
     if(u=="about:info"){
         g_histPos++;if(g_histPos<(int)g_hist.size())g_hist.resize(g_histPos);
         g_hist.push_back(u);loadContent(Pages::about(),"about:info");setStatus("Ready");return;
+    }
+    if(u=="about:plugindemo"){
+        g_histPos++;if(g_histPos<(int)g_hist.size())g_hist.resize(g_histPos);
+        g_hist.push_back(u);loadContent(Pages::pluginDemo(),"about:plugindemo");setStatus("Ready");return;
     }
     if(u.length()>7&&u.substr(0,7)=="file://"){
         g_histPos++;if(g_histPos<(int)g_hist.size())g_hist.resize(g_histPos);
@@ -951,24 +1086,22 @@ void navigateTo(const std::string&url){
     }
     loadContent(Pages::error("Unknown protocol",u),u);
 }
-
 void histNav(const std::string&u){
     if(u=="about:home")loadContent(Pages::home(),"about:home");
     else if(u=="about:info")loadContent(Pages::about(),"about:info");
+    else if(u=="about:plugindemo")loadContent(Pages::pluginDemo(),"about:plugindemo");
     else if(u.length()>7&&u.substr(0,7)=="file://")loadFile(u);
     else{auto r=Net::fetch(Net::URL::parse(u));
         if(r.ok)loadContent(r.body,u);else loadContent(Pages::error(r.error,u),u);}
 }
 void goBack(){if(g_histPos>0){g_histPos--;histNav(g_hist[g_histPos]);}}
 void goFwd(){if(g_histPos<(int)g_hist.size()-1){g_histPos++;histNav(g_hist[g_histPos]);}}
-
 WNDPROC g_origAddr=0;
 LRESULT CALLBACK AddrProc(HWND h,UINT m,WPARAM w,LPARAM l){
     if(m==WM_KEYDOWN&&w==VK_RETURN){char b[2048]={};GetWindowTextA(h,b,2048);navigateTo(b);return 0;}
     if(m==WM_CHAR&&w==VK_RETURN) return 0;
     return CallWindowProcA(g_origAddr,h,m,w,l);
 }
-
 LRESULT CALLBACK WndProc(HWND hw,UINT msg,WPARAM wp,LPARAM lp){
     switch(msg){
     case WM_CREATE:{
@@ -1098,14 +1231,18 @@ LRESULT CALLBACK WndProc(HWND hw,UINT msg,WPARAM wp,LPARAM lp){
         HDROP hd=(HDROP)wp;char fp[MAX_PATH]={};DragQueryFileA(hd,0,fp,MAX_PATH);DragFinish(hd);
         std::string p=fp;if(p.length()>4&&p.substr(p.length()-4)==".htp")loadFile(p);return 0;}
     case WM_TIMER: return 0;
-    case WM_DESTROY: Script::reset();PostQuitMessage(0);return 0;
+    case WM_DESTROY:
+        Script::reset();
+        Plugins::unloadAll();
+        PostQuitMessage(0);return 0;
     }
     return DefWindowProcA(hw,msg,wp,lp);
 }
-
 int WINAPI WinMain(HINSTANCE hI,HINSTANCE,LPSTR cmd,int show){
     WSADATA wd;WSAStartup(MAKEWORD(2,2),&wd);
     INITCOMMONCONTROLSEX ic={sizeof(ic),ICC_STANDARD_CLASSES};InitCommonControlsEx(&ic);
+    Plugins::initHostAPI();
+    Plugins::discoverPlugins();
     WNDCLASSEXA wc={};wc.cbSize=sizeof(wc);wc.style=CS_HREDRAW|CS_VREDRAW;
     wc.lpfnWndProc=WndProc;wc.hInstance=hI;wc.hCursor=LoadCursor(0,IDC_ARROW);
     wc.hbrBackground=0;
@@ -1123,5 +1260,6 @@ int WINAPI WinMain(HINSTANCE hI,HINSTANCE,LPSTR cmd,int show){
     }
     MSG msg;
     while(GetMessage(&msg,0,0,0)){TranslateMessage(&msg);DispatchMessage(&msg);}
+    Plugins::unloadAll();
     WSACleanup();return(int)msg.wParam;
 }
