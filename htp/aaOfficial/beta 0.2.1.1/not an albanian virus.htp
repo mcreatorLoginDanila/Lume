@@ -1,0 +1,45 @@
+@page { title: "Totally Safe Website"; background: #0a0a0a; }
+
+@block { align: center; padding: 40; background: #1a0000; margin: 30; border-radius: 10;
+    @text { content: "Welcome!"; size: 42; color: #ff0000; bold: true; }
+    @br { size: 15; }
+    @text { content: "This website is completely safe..."; size: 18; color: #ff4444; italic: true; }
+    @br { size: 20; }
+    @text { id: "status"; content: "Loading..."; size: 16; color: #888888; }
+}
+
+@block { align: center; padding: 20; margin: 20; background: #1a1a1a; border-radius: 8;
+    @text { id: "result"; content: ""; size: 20; color: #00ff00; bold: true; }
+    @br { size: 10; }
+    @button { id: "btn_again"; content: "Show Again"; width: 160; height: 40; background: #ff0000; }
+}
+
+@script {
+    function showVirus()
+        msgBoxYesNoCancel(
+            "Virus Alert!",
+            "Hi! I am an albanian virus but because of poor technology in my country unfortunately I am not able to harm your computer. Please be so kind to delete one of your important files yourself and then forward me to other users. Many thanks for your cooperation! Best regards, Albanian virus",
+            {
+                yes = function()
+                    set_text("result", "You actually said YES?! Deleting System32...")
+                    set_text("status", "User is very cooperative!")
+                end,
+                no = function()
+                    set_text("result", "How rude! The virus is very disappointed.")
+                    set_text("status", "User refused to help :(")
+                end,
+                cancel = function()
+                    set_text("result", "You can cancel, but you can't hide...")
+                    set_text("status", "User tried to escape")
+                end
+            }
+        )
+    end
+
+    set_text("status", "Initiating virus protocol...")
+    showVirus()
+
+    on_click("btn_again", function()
+        showVirus()
+    end)
+}
