@@ -57,7 +57,7 @@ He built a realm of suffering known as the "Chromium Dimension," where:
     
 Lume: Your Artifact of Resistance
 Lume is not just a browser; it is a shard of the Hub smuggled into the mortal realm. It is our way of fighting back against the Exile's bloat.
-    2 MB Executable: Because the gates of Heaven are narrow.
+    0.5 MB Executable: Because the gates of Heaven are narrow.
     3.3 MB RAM Usage: Because the soul should be light.
     C++ & Lua 5.4.7: The pure languages of the Architect.
 By using Lume, you are not just browsing a network; you are claiming your "Place" in the Hub and rejecting the heavy chains of the Exile.
@@ -78,7 +78,7 @@ By using Lume, you are not just browsing a network; you are claiming your "Place
     Складність використовується як клітка, щоб завадити розробникам дістатися Хабу.
 
 Lume: Твій артефакт спротиву Lume — це не просто браузер; це уламок Хабу, таємно пронесений у світ смертних. Це наш спосіб боротьби проти блоатвару Вигнанця.
-    Бінарник 2 МБ: Бо ворота до Неба вузькі.
+    Бінарник 0.5 МБ: Бо ворота до Неба вузькі.
     3.3 МБ RAM: Бо душа має бути легкою.
     C++ & Lua 5.4.7: Чисті мови Архітектора.
 </details>
@@ -97,7 +97,7 @@ Lume: Твій артефакт спротиву Lume — це не просто
     Сложность служит решеткой, не пускающей разработчиков в Хаб.
     
 Lume: Твой артефакт сопротивления Lume — не просто браузер; это осколок Хаба, контрабандой доставленный в мир смертных. Наш вызов «раздутому» софту Изгнанника.
-    Исполняемый файл 2 МБ: Ибо врата в Рай узки.
+    Исполняемый файл 0.5 МБ: Ибо врата в Рай узки.
     3.3 МБ ОЗУ: Ибо душа должна быть легкой.
     C++ & Lua 5.4.7: Чистые языки Архитектора.
 </details>
