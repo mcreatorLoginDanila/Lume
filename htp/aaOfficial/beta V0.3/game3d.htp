@@ -1,0 +1,217 @@
+@page { title: "3D Maze"; background: #000000; }
+@block { align: center; padding: 8; background: #111122; margin: 5; border-radius: 8;
+    @text { content: "3D Maze - WASD move, Arrows turn"; size: 18; color: #e94560; bold: true; }
+}
+@block { align: center; padding: 5; margin: 5;
+    @glcanvas { id: "game"; width: 640; height: 480; border-color: #333355; }
+}
+@block { align: center; padding: 5; margin: 5; background: #111122; border-radius: 8;
+    @text { id: "status"; content: "Find the green exit! Click game area first."; size: 16; color: #aaaacc; }
+}
+@script {
+local MAP = {
+    {1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1},
+    {1,0,0,0,1,0,0,0,0,0,0,0,1,0,0,1},
+    {1,0,1,0,1,0,1,1,1,1,1,0,1,0,1,1},
+    {1,0,1,0,0,0,0,0,0,0,1,0,0,0,0,1},
+    {1,0,1,1,1,1,1,1,1,0,1,1,1,1,0,1},
+    {1,0,0,0,0,0,0,0,1,0,0,0,0,1,0,1},
+    {1,1,1,0,1,1,1,0,1,1,1,1,0,1,0,1},
+    {1,0,0,0,1,0,0,0,0,0,0,0,0,1,0,1},
+    {1,0,1,1,1,0,1,1,1,1,1,1,1,1,0,1},
+    {1,0,0,0,0,0,1,0,0,0,0,0,0,0,0,1},
+    {1,1,1,1,1,0,1,0,1,1,1,1,1,1,0,1},
+    {1,0,0,0,0,0,1,0,0,0,1,0,0,0,0,1},
+    {1,0,1,1,1,1,1,1,1,0,1,0,1,1,1,1},
+    {1,0,0,0,0,0,0,0,1,0,1,0,0,0,2,1},
+    {1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1},
+}
+local MW = #MAP[1]
+local MH = #MAP
+local px, py = 1.5, 1.5
+local pa = 0
+local spd = 0.08
+local rspd = 0.06
+local pi = 3.14159265
+local won = false
+local frame = 0
+local function cell(x, y)
+    local cx = math.floor(x) + 1
+    local cy = math.floor(y) + 1
+    if cx < 1 or cx > MW or cy < 1 or cy > MH then return 1 end
+    return MAP[cy][cx]
+end
+local function can_move(x, y)
+    local r = 0.15
+    return cell(x-r,y-r) ~= 1 and cell(x+r,y-r) ~= 1 and
+           cell(x-r,y+r) ~= 1 and cell(x+r,y+r) ~= 1
+end
+local function cast_ray(ox, oy, angle)
+    local dx = math.cos(angle)
+    local dy = math.sin(angle)
+    if math.abs(dx) < 0.00001 then dx = 0.00001 end
+    if math.abs(dy) < 0.00001 then dy = 0.00001 end
+    local mapX = math.floor(ox)
+    local mapY = math.floor(oy)
+    local stepX = dx > 0 and 1 or -1
+    local stepY = dy > 0 and 1 or -1
+    local tMaxX, tMaxY
+    if dx > 0 then tMaxX = (mapX + 1 - ox) / dx
+    else tMaxX = (ox - mapX) / (-dx) end
+    if dy > 0 then tMaxY = (mapY + 1 - oy) / dy
+    else tMaxY = (oy - mapY) / (-dy) end
+    local tDeltaX = math.abs(1 / dx)
+    local tDeltaY = math.abs(1 / dy)
+    local side = 0
+    for i = 1, 80 do
+        if tMaxX < tMaxY then
+            mapX = mapX + stepX
+            side = 0
+            local cx = mapX + 1
+            local cy = mapY + 1
+            if cx < 1 or cx > MW or cy < 1 or cy > MH then return tMaxX, 1, 0 end
+            local c = MAP[cy][cx]
+            if c ~= 0 then return tMaxX, c, 0 end
+            tMaxX = tMaxX + tDeltaX
+        else
+            mapY = mapY + stepY
+            side = 1
+            local cx = mapX + 1
+            local cy = mapY + 1
+            if cx < 1 or cx > MW or cy < 1 or cy > MH then return tMaxY, 1, 1 end
+            local c = MAP[cy][cx]
+            if c ~= 0 then return tMaxY, c, 1 end
+            tMaxY = tMaxY + tDeltaY
+        end
+    end
+    return 20, 0, 0
+end
+local function render()
+    if not gl_available() then return end
+    if not gl_begin_render("game", 640, 480) then return end
+    gl_viewport(0, 0, 640, 480)
+    gl_matrix_mode(GL_PROJECTION) gl_load_identity()
+    gl_ortho(0, 640, 0, 480, -1, 1)
+    gl_matrix_mode(GL_MODELVIEW) gl_load_identity()
+
+    gl_begin(GL_QUADS)
+    gl_color(0.05, 0.05, 0.15)
+    gl_vertex2f(0, 240) gl_vertex2f(640, 240)
+    gl_color(0.15, 0.1, 0.25)
+    gl_vertex2f(640, 480) gl_vertex2f(0, 480)
+    gl_color(0.08, 0.08, 0.08)
+    gl_vertex2f(0, 0) gl_vertex2f(640, 0)
+    gl_color(0.04, 0.06, 0.04)
+    gl_vertex2f(640, 240) gl_vertex2f(0, 240)
+    gl_end()
+    local num_rays = 320
+    local half_fov = 30 * pi / 180
+    local strip_w = 2
+    gl_begin(GL_QUADS)
+    for i = 0, num_rays - 1 do
+        local ra = pa - half_fov + (i / num_rays) * 2 * half_fov
+        local dist, ctype, side = cast_ray(px, py, ra)
+        local ca = ra - pa
+        local cos_ca = math.cos(ca)
+        if cos_ca < 0.01 then cos_ca = 0.01 end
+        local pdist = dist * cos_ca
+        if pdist < 0.05 then pdist = 0.05 end
+        if pdist > 20 then pdist = 20 end
+        local wh = 300 / pdist
+        if wh > 480 then wh = 480 end
+        local shade = 1.0 - (pdist / 14)
+        if shade < 0.08 then shade = 0.08 end
+        if side == 1 then shade = shade * 0.7 end
+        local x1 = i * strip_w
+        local x2 = x1 + strip_w + 0.5
+        local y1 = 240 - wh * 0.5
+        local y2 = 240 + wh * 0.5
+        if ctype == 2 then
+            gl_color(0.1*shade, 0.9*shade, 0.2*shade)
+        else
+            gl_color(0.55*shade, 0.22*shade, 0.28*shade)
+        end
+        gl_vertex2f(x1,y1) gl_vertex2f(x2,y1)
+        gl_vertex2f(x2,y2) gl_vertex2f(x1,y2)
+    end
+    gl_end()
+    local ms = 4
+    local mx0 = 640 - MW*ms - 8
+    local my0 = 480 - MH*ms - 8
+    gl_begin(GL_QUADS)
+    gl_color(0,0,0)
+    gl_vertex2f(mx0-2,my0-2) gl_vertex2f(mx0+MW*ms+2,my0-2)
+    gl_vertex2f(mx0+MW*ms+2,my0+MH*ms+2) gl_vertex2f(mx0-2,my0+MH*ms+2)
+    for cy = 1, MH do
+        for cx = 1, MW do
+            local c = MAP[cy][cx]
+            if c ~= 0 then
+                local sx = mx0 + (cx-1)*ms
+                local sy = my0 + (MH-cy)*ms
+                if c == 2 then gl_color(0.2,1,0.3) else gl_color(0.4,0.25,0.3) end
+                gl_vertex2f(sx,sy) gl_vertex2f(sx+ms,sy)
+                gl_vertex2f(sx+ms,sy+ms) gl_vertex2f(sx,sy+ms)
+            end
+        end
+    end
+    gl_end()
+    local pmx = mx0 + (px-1)*ms + ms*0.5
+    local pmy = my0 + (MH-py)*ms
+    gl_point_size(3)
+    gl_begin(GL_POINTS) gl_color(1,1,0) gl_vertex2f(pmx,pmy) gl_end()
+    gl_begin(GL_LINES) gl_color(1,1,0)
+    gl_vertex2f(pmx,pmy) gl_vertex2f(pmx+math.cos(pa)*8, pmy-math.sin(pa)*8)
+    gl_color(1,1,1,0.4)
+    gl_vertex2f(315,240) gl_vertex2f(325,240)
+    gl_vertex2f(320,235) gl_vertex2f(320,245)
+    gl_end()
+    if won then
+        gl_begin(GL_QUADS) gl_color(0,0.6,0,0.8)
+        gl_vertex2f(170,210) gl_vertex2f(470,210)
+        gl_vertex2f(470,270) gl_vertex2f(170,270)
+        gl_end()
+    end
+    gl_end_render("game")
+    gl_refresh("game")
+end
+local function update()
+    if won then render() return end
+    if key_down(VK_LEFT) then pa = pa - rspd end
+    if key_down(VK_RIGHT) then pa = pa + rspd end
+    local dx = math.cos(pa)
+    local dy = math.sin(pa)
+    local sx = -math.sin(pa)
+    local sy = math.cos(pa)
+    if key_down(VK_W) or key_down(VK_UP) then
+        local nx, ny = px+dx*spd, py+dy*spd
+        if can_move(nx,py) then px=nx end
+        if can_move(px,ny) then py=ny end
+    end
+    if key_down(VK_S) or key_down(VK_DOWN) then
+        local nx, ny = px-dx*spd, py-dy*spd
+        if can_move(nx,py) then px=nx end
+        if can_move(px,ny) then py=ny end
+    end
+    if key_down(VK_A) then
+        local nx, ny = px-sx*spd, py-sy*spd
+        if can_move(nx,py) then px=nx end
+        if can_move(px,ny) then py=ny end
+    end
+    if key_down(VK_D) then
+        local nx, ny = px+sx*spd, py+sy*spd
+        if can_move(nx,py) then px=nx end
+        if can_move(px,ny) then py=ny end
+    end
+    if cell(px,py) == 2 then
+        won = true
+        set_text("status", "YOU WIN!")
+    end
+    frame = frame + 1
+    if frame % 15 == 0 then
+        set_text("status", string.format("X:%.1f Y:%.1f", px, py))
+    end
+    render()
+end
+set_timer(33, update)
+render()
+}
