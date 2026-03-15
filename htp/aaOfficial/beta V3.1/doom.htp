@@ -1,0 +1,790 @@
+@page{
+    title:"DOOM Lume Eternal (Optimized)";
+    background:#0b0b12;
+}
+
+@block{
+    align:center;
+    padding:20;
+    margin:20;
+    background:#161625;
+    border-radius:10;
+
+    @text{
+        content:"DOOM Lume Eternal";
+        size:30;
+        color:#ff4a4a;
+        bold:true;
+    }
+
+    @br{size:8;}
+
+    @text{
+        content:"WASD - move | SPACE - jump | SHIFT - dash | LMB - shoot | F - parry | P - cheat | ESC - release mouse | F11 - fullscreen";
+        size:14;
+        color:#9aa0c8;
+    }
+
+    @br{size:12;}
+
+    @glcanvas{
+        id:"doom_gl";
+        width:960;
+        height:540;
+        border-color:#0abde3;
+    }
+
+    @br{size:12;}
+
+    @text{
+        id:"hud_text";
+        content:"Loading...";
+        size:15;
+        color:#d0d6ff;
+    }
+
+    @text{
+        id:"hint_text";
+        content:"Click canvas to capture mouse";
+        size:14;
+        color:#7f86b5;
+    }
+}
+
+@block{
+    padding:10;
+    margin:20;
+    background:#16213e;
+    border-radius:8;
+    @link{content:"Home";url:"about:home";color:#0abde3;size:16;}
+}
+
+@script{
+math.randomseed(os.time())
+
+-- Кэширование математики для максимальной скорости Lua
+local m_sin, m_cos = math.sin, math.cos
+local m_sqrt, m_atan = math.sqrt, math.atan
+local m_min, m_max = math.min, math.max
+local m_floor = math.floor
+
+local W, H = 960, 540
+local canvas = "doom_gl"
+
+local WORLD_SIZE = 64
+local GRAVITY = 0.015
+local FRICTION = 0.80
+local JUMP = 0.35
+
+local wave = 0
+local enemiesAlive = 0
+local waveTimer = 100
+
+local cheatMode = false
+local cheatDigits = ""
+
+local projectiles = {}
+local demons = {}
+local particles = {}
+local strikes = {}
+
+local player = {
+    x = WORLD_SIZE / 2, y = 3.0, z = WORLD_SIZE / 2,
+    vx = 0, vy = 0, vz = 0,
+    yaw = 0, pitch = 0, hp = 100,
+    jumpCount = 0, dashCooldown = 0, shootCooldown = 0,
+    parryTimer = 0, parryCooldown = 0, gunRecoil = 0,
+    damageFlash = 0, parryFlash = 0,
+    onGround = false, jumpLatch = false
+}
+
+-- ==========================================
+-- ОПТИМИЗАЦИЯ: DISPLAY LISTS
+-- ==========================================
+local listsBuilt = false
+local baseCubeList = nil
+local groundList = nil
+local strikeCircleList = nil
+local strikeCylinderList = nil
+
+local function initGLLists()
+    -- 1. Базовый куб 1x1x1 (центр 0,0,0)
+    baseCubeList = gl_gen_list()
+    gl_new_list(baseCubeList)
+    gl_begin(GL_QUADS)
+    gl_vertex3f(-0.5,-0.5, 0.5) gl_vertex3f( 0.5,-0.5, 0.5) gl_vertex3f( 0.5, 0.5, 0.5) gl_vertex3f(-0.5, 0.5, 0.5)
+    gl_vertex3f( 0.5,-0.5,-0.5) gl_vertex3f(-0.5,-0.5,-0.5) gl_vertex3f(-0.5, 0.5,-0.5) gl_vertex3f( 0.5, 0.5,-0.5)
+    gl_vertex3f(-0.5,-0.5,-0.5) gl_vertex3f(-0.5,-0.5, 0.5) gl_vertex3f(-0.5, 0.5, 0.5) gl_vertex3f(-0.5, 0.5,-0.5)
+    gl_vertex3f( 0.5,-0.5, 0.5) gl_vertex3f( 0.5,-0.5,-0.5) gl_vertex3f( 0.5, 0.5,-0.5) gl_vertex3f( 0.5, 0.5, 0.5)
+    gl_vertex3f(-0.5, 0.5, 0.5) gl_vertex3f( 0.5, 0.5, 0.5) gl_vertex3f( 0.5, 0.5,-0.5) gl_vertex3f(-0.5, 0.5,-0.5)
+    gl_vertex3f(-0.5,-0.5,-0.5) gl_vertex3f( 0.5,-0.5,-0.5) gl_vertex3f( 0.5,-0.5, 0.5) gl_vertex3f(-0.5,-0.5, 0.5)
+    gl_end()
+    gl_end_list()
+
+    -- 2. Вся карта (Пол и стены компилируются ОДИН раз)
+    groundList = gl_gen_list()
+    gl_new_list(groundList)
+    for x = 0, WORLD_SIZE - 1 do
+        for z = 0, WORLD_SIZE - 1 do
+            gl_color(0.20, 0.20, 0.22, 1)
+            gl_push_matrix()
+            gl_translatef(x + 0.5, -0.05, z + 0.5)
+            gl_scalef(1.0, 0.1, 1.0)
+            gl_call_list(baseCubeList)
+            gl_pop_matrix()
+        end
+    end
+    for x = 0, WORLD_SIZE - 1 do
+        for h = 0, 4 do
+            gl_color(0.45, 0.20, 0.12, 1)
+            gl_push_matrix() gl_translatef(x + 0.5, h + 0.5, 0.0) gl_scalef(1, 1, 0.2) gl_call_list(baseCubeList) gl_pop_matrix()
+            gl_push_matrix() gl_translatef(x + 0.5, h + 0.5, WORLD_SIZE) gl_scalef(1, 1, 0.2) gl_call_list(baseCubeList) gl_pop_matrix()
+        end
+    end
+    for z = 0, WORLD_SIZE - 1 do
+        for h = 0, 4 do
+            gl_color(0.45, 0.20, 0.12, 1)
+            gl_push_matrix() gl_translatef(0.0, h + 0.5, z + 0.5) gl_scalef(0.2, 1, 1) gl_call_list(baseCubeList) gl_pop_matrix()
+            gl_push_matrix() gl_translatef(WORLD_SIZE, h + 0.5, z + 0.5) gl_scalef(0.2, 1, 1) gl_call_list(baseCubeList) gl_pop_matrix()
+        end
+    end
+    gl_end_list()
+
+    -- 3. Круг орбитального удара
+    strikeCircleList = gl_gen_list()
+    gl_new_list(strikeCircleList)
+    gl_begin(GL_LINE_LOOP)
+    for i = 0, 31 do
+        local a = (i / 32) * 6.2831853
+        gl_vertex3f(m_cos(a) * 2.5, 0.05, m_sin(a) * 2.5)
+    end
+    gl_end()
+    gl_end_list()
+
+    -- 4. Цилиндр орбитального удара
+    strikeCylinderList = gl_gen_list()
+    gl_new_list(strikeCylinderList)
+    gl_begin(GL_LINES)
+    for i = 0, 11 do
+        local a = (i / 12) * 6.2831853
+        local rx = m_cos(a) * 2.5
+        local rz = m_sin(a) * 2.5
+        gl_vertex3f(rx, 0.0, rz)
+        gl_vertex3f(rx, 20.0, rz)
+    end
+    gl_end()
+    gl_end_list()
+
+    listsBuilt = true
+end
+
+-- СВЕРХБЫСТРЫЙ КУБ (через Display List)
+local function cube(x, y, z, sx, sy, sz, r, g, b)
+    gl_color(r, g, b, 1)
+    gl_push_matrix()
+    gl_translatef(x, y, z)
+    gl_scalef(sx, sy, sz)
+    gl_call_list(baseCubeList)
+    gl_pop_matrix()
+end
+
+local function clamp(v, a, b)
+    if v < a then return a end
+    if v > b then return b end
+    return v
+end
+
+local function rnd(a, b)
+    return a + math.random() * (b - a)
+end
+
+local function setHud()
+    local dash = (player.dashCooldown == 0) and "RDY" or "CD"
+    local parry = "CD"
+    if player.parryTimer > 0 then parry = "ACTIVE"
+    elseif player.parryCooldown == 0 then parry = "RDY" end
+
+    if cheatMode then
+        set_text("hud_text", "CHEAT: jump to wave -> " .. cheatDigits)
+        set_text("hint_text", "Digits 0-9, BACKSPACE, ENTER")
+    else
+        set_text("hud_text",
+            "WAVE: " .. wave ..
+            " | ENEMIES: " .. enemiesAlive ..
+            " | HP: " .. player.hp ..
+            " | DASH: " .. dash ..
+            " | PARRY(F): " .. parry
+        )
+        if is_mouse_captured() then
+            set_text("hint_text", "Mouse captured. WASD active. ESC to release.")
+        else
+            set_text("hint_text", "Click canvas to capture mouse")
+        end
+    end
+end
+
+local function isSolidXZ(x, z)
+    if x < 1 or z < 1 or x >= WORLD_SIZE - 1 or z >= WORLD_SIZE - 1 then
+        return true
+    end
+    return false
+end
+
+local function generateArena()
+    projectiles = {}
+    demons = {}
+    particles = {}
+    strikes = {}
+
+    player.x = WORLD_SIZE / 2; player.z = WORLD_SIZE / 2; player.y = 1.0
+    player.vx = 0; player.vy = 0; player.vz = 0
+    player.yaw = 0; player.pitch = 0; player.hp = 100
+    player.jumpCount = 0; player.dashCooldown = 0; player.shootCooldown = 0
+    player.parryTimer = 0; player.parryCooldown = 0; player.gunRecoil = 0
+    player.damageFlash = 0; player.parryFlash = 0
+    player.onGround = true; player.jumpLatch = false
+
+    wave = 0; enemiesAlive = 0; waveTimer = 100
+    cheatMode = false; cheatDigits = ""
+    setHud()
+end
+
+local function spawnParticles(x, y, z, kind, count)
+    for i = 1, count do
+        particles[#particles + 1] = {
+            x = x, y = y, z = z,
+            vx = rnd(-0.2, 0.2), vy = rnd(0.0, 0.35), vz = rnd(-0.2, 0.2),
+            life = 1.0, kind = kind or 0
+        }
+    end
+end
+
+local function spawnWave()
+    wave = wave + 1
+    local redCount   = wave + 1
+    local greenCount = (wave >= 3) and (wave - 1) or 0
+    local blueCount  = (wave >= 5) and m_floor((wave - 3) / 2) or 0
+    local headCount  = (wave >= 8) and m_floor((wave - 6) / 2) or 0
+    local angelCount = (wave >= 11) and m_floor((wave - 9) / 2) or 0
+
+    local total = redCount + greenCount + blueCount + headCount + angelCount
+    for i = 1, total do
+        local d = {
+            x = rnd(5, WORLD_SIZE - 5), z = rnd(5, WORLD_SIZE - 5), y = 1.0,
+            vx = 0, vy = 0, vz = 0,
+            type = 0, hp = 40,
+            shootCooldown = math.random(0, 60),
+            attackStep = 0, active = true
+        }
+
+        if i <= redCount then
+            d.type = 0; d.hp = 40; d.y = 1.0
+        elseif i <= redCount + greenCount then
+            d.type = 1; d.hp = 30; d.y = 1.0
+        elseif i <= redCount + greenCount + blueCount then
+            d.type = 2; d.hp = 60; d.y = 4.0
+        elseif i <= redCount + greenCount + blueCount + headCount then
+            d.type = 3; d.hp = 120; d.y = 5.0
+        else
+            d.type = 4; d.hp = 200; d.y = 7.0
+        end
+
+        demons[#demons + 1] = d
+        enemiesAlive = enemiesAlive + 1
+    end
+end
+
+local function drawEnemy(d)
+    if not d.active then return end
+    if d.type == 0 then cube(d.x, d.y, d.z, 0.8, 1.8, 0.8, 0.85, 0.15, 0.15)
+    elseif d.type == 1 then cube(d.x, d.y, d.z, 0.8, 1.8, 0.8, 0.15, 0.75, 0.15)
+    elseif d.type == 2 then cube(d.x, d.y, d.z, 0.8, 0.8, 0.8, 0.20, 0.45, 1.00)
+    elseif d.type == 3 then cube(d.x, d.y, d.z, 1.0, 1.0, 1.0, 0.65, 0.35, 0.10)
+    else cube(d.x, d.y, d.z, 1.2, 1.2, 1.2, 0.30, 0.65, 1.00) end
+end
+
+local function drawProjectile(pj)
+    if not pj.active then return end
+    if pj.type == 0 then cube(pj.x, pj.y, pj.z, 0.18, 0.18, 0.18, 0.0, 0.85, 1.0)
+    elseif pj.type == 1 then cube(pj.x, pj.y, pj.z, 0.20, 0.20, 0.20, 1.0, 0.45, 0.0)
+    elseif pj.type == 2 then cube(pj.x, pj.y, pj.z, 0.22, 0.22, 0.22, 1.0, 0.0, 1.0)
+    else cube(pj.x, pj.y, pj.z, 0.30, 0.10, 0.30, 1.0, 1.0, 0.8) end
+end
+
+local function drawParticle(pt)
+    if pt.life <= 0 then return end
+    local s = 0.08 * pt.life + 0.02
+    if pt.kind == 1 then cube(pt.x, pt.y, pt.z, s, s, s, 0.8, 0.0, 0.0)
+    elseif pt.kind == 2 then cube(pt.x, pt.y, pt.z, s, s, s, 1.0, 0.4, 0.0)
+    else cube(pt.x, pt.y, pt.z, s, s, s, 1.0, 1.0, 1.0) end
+end
+
+local function drawStrike(s)
+    if not s.active then return end
+    gl_push_matrix()
+    gl_translatef(s.x, 0, s.z)
+    if s.state == 0 or s.state == 1 then
+        local alpha = (s.state == 1 and (s.timer % 10) > 5) and 0.2 or 1.0
+        gl_color(1, 1, 1, alpha)
+        gl_call_list(strikeCircleList)
+    else
+        gl_color(0.8, 1.0, 1.0, 0.8)
+        gl_call_list(strikeCylinderList)
+    end
+    gl_pop_matrix()
+end
+
+local function drawCrosshair()
+    gl_matrix_mode(GL_PROJECTION) gl_push_matrix() gl_load_identity()
+    gl_ortho(0, W, H, 0, -1, 1)
+    gl_matrix_mode(GL_MODELVIEW) gl_push_matrix() gl_load_identity()
+
+    gl_disable(GL_DEPTH_TEST)
+    gl_line_width(2)
+    gl_color(0, 1, 0, 1)
+    gl_begin(GL_LINES)
+    gl_vertex2f(W/2 - 10, H/2) gl_vertex2f(W/2 + 10, H/2)
+    gl_vertex2f(W/2, H/2 - 10) gl_vertex2f(W/2, H/2 + 10)
+    gl_end()
+
+    if player.damageFlash > 0 then
+        gl_color(1, 0, 0, player.damageFlash * 0.4)
+        gl_begin(GL_QUADS) gl_vertex2f(0,0) gl_vertex2f(W,0) gl_vertex2f(W,H) gl_vertex2f(0,H) gl_end()
+    end
+
+    if player.parryFlash > 0 then
+        gl_color(1, 1, 1, player.parryFlash * 0.6)
+        gl_begin(GL_QUADS) gl_vertex2f(0,0) gl_vertex2f(W,0) gl_vertex2f(W,H) gl_vertex2f(0,H) gl_end()
+    end
+
+    gl_pop_matrix()
+    gl_matrix_mode(GL_PROJECTION) gl_pop_matrix()
+    gl_matrix_mode(GL_MODELVIEW)
+end
+
+local function render3D()
+    if not gl_available() then return end
+    if not gl_begin_render(canvas, W, H) then return end
+
+    if not listsBuilt then initGLLists() end
+
+    gl_viewport(0, 0, W, H)
+    gl_clear(0.07, 0.03, 0.03, 1)
+    gl_enable(GL_DEPTH_TEST)
+
+    gl_matrix_mode(GL_PROJECTION) gl_load_identity()
+    glu_perspective(90, W / H, 0.1, 200.0)
+
+    gl_matrix_mode(GL_MODELVIEW) gl_load_identity()
+    local camDx = m_sin(player.yaw) * m_cos(player.pitch)
+    local camDy = -m_sin(player.pitch)
+    local camDz = -m_cos(player.yaw) * m_cos(player.pitch)
+
+    glu_look_at(
+        player.x, player.y + 1.6, player.z,
+        player.x + camDx, player.y + 1.6 + camDy, player.z + camDz,
+        0, 1, 0
+    )
+
+    -- Магия оптимизации: ВЕСЬ ПОЛ И СТЕНЫ РИСУЮТСЯ ОДНИМ ВЫЗОВОМ
+    gl_call_list(groundList)
+
+    for i = 1, #strikes do drawStrike(strikes[i]) end
+    for i = 1, #demons do drawEnemy(demons[i]) end
+    for i = 1, #projectiles do drawProjectile(projectiles[i]) end
+    for i = 1, #particles do drawParticle(particles[i]) end
+
+    gl_disable(GL_DEPTH_TEST)
+    gl_push_matrix()
+    gl_load_identity()
+    gl_translatef(0.45, -0.35 - player.gunRecoil * 0.15, -1.0 + player.gunRecoil * 0.2)
+    gl_rotatef(10, 0, 1, 0)
+    cube(0, 0, 0, 0.28, 0.18, 0.9, 0.45, 0.45, 0.45)
+    cube(0, 0.10, -0.10, 0.08, 0.05, 0.5, 0.0, 0.8, 1.0)
+    gl_pop_matrix()
+
+    drawCrosshair()
+
+    gl_end_render(canvas)
+    gl_refresh(canvas)
+end
+
+local function tryShoot()
+    if player.shootCooldown > 0 then return end
+    if not key_down(VK_LBUTTON) then return end
+
+    local vx = m_sin(player.yaw) * m_cos(player.pitch) * 2.0
+    local vy = -m_sin(player.pitch) * 2.0
+    local vz = -m_cos(player.yaw) * m_cos(player.pitch) * 2.0
+
+    projectiles[#projectiles + 1] = {
+        x = player.x, y = player.y + 1.5, z = player.z,
+        vx = vx, vy = vy, vz = vz,
+        isEnemy = false, type = 0, damage = 20, active = true
+    }
+    
+    if playSfx then playSfx("laser", 30) end
+
+    player.shootCooldown = 8
+    player.gunRecoil = 1.0
+end
+
+local function processPlayer()
+    local speed = 0.05
+    local fx, fz = 0, 0
+
+    if is_mouse_captured() then
+        if key_down(VK_W) then fx = fx + m_sin(player.yaw); fz = fz - m_cos(player.yaw) end
+        if key_down(VK_S) then fx = fx - m_sin(player.yaw); fz = fz + m_cos(player.yaw) end
+        if key_down(VK_A) then fx = fx - m_cos(player.yaw); fz = fz - m_sin(player.yaw) end
+        if key_down(VK_D) then fx = fx + m_cos(player.yaw); fz = fz + m_sin(player.yaw) end
+    end
+
+    local len = m_sqrt(fx*fx + fz*fz)
+    if len > 0 then fx = (fx / len) * speed; fz = (fz / len) * speed end
+
+    player.vx = player.vx + fx; player.vz = player.vz + fz
+    player.vx = player.vx * FRICTION; player.vz = player.vz * FRICTION
+
+    if player.dashCooldown > 0 then player.dashCooldown = player.dashCooldown - 1 end
+    if is_mouse_captured() and key_down(VK_SHIFT) and player.dashCooldown == 0 and len > 0 then
+        player.vx = player.vx + (fx / speed) * 1.5
+        player.vz = player.vz + (fz / speed) * 1.5
+        player.dashCooldown = 60
+        if playSfx then playSfx("jump", 40) end
+    end
+
+    if player.parryCooldown > 0 then player.parryCooldown = player.parryCooldown - 1 end
+    if player.parryTimer > 0 then player.parryTimer = player.parryTimer - 1 end
+    if is_mouse_captured() and key_down(VK_F) and player.parryCooldown == 0 then
+        player.parryTimer = 15; player.parryCooldown = 80
+    end
+
+    local nx = player.x + player.vx
+    local nz = player.z + player.vz
+
+    if not isSolidXZ(nx, player.z) then player.x = nx else player.vx = 0 end
+    if not isSolidXZ(player.x, nz) then player.z = nz else player.vz = 0 end
+
+    player.vy = player.vy - GRAVITY
+    player.y = player.y + player.vy
+
+    if player.y <= 1.0 then
+        player.y = 1.0
+        if player.vy < 0 then player.onGround = true; player.jumpCount = 0 end
+        player.vy = 0
+    else
+        player.onGround = false
+    end
+
+    if is_mouse_captured() and key_down(VK_SPACE) and not player.jumpLatch then
+        if player.jumpCount < 2 then
+            player.vy = JUMP
+            player.jumpCount = player.jumpCount + 1
+            player.onGround = false
+        end
+        player.jumpLatch = true
+    elseif not key_down(VK_SPACE) then
+        player.jumpLatch = false
+    end
+
+    if player.y < -10 or player.hp <= 0 then
+        if playSfx then playSfx("gameover", 80) end
+        generateArena()
+    end
+
+    if player.shootCooldown > 0 then player.shootCooldown = player.shootCooldown - 1 end
+    if player.gunRecoil > 0 then player.gunRecoil = m_max(0, player.gunRecoil - 0.1) end
+    if player.damageFlash > 0 then player.damageFlash = m_max(0, player.damageFlash - 0.05) end
+    if player.parryFlash > 0 then player.parryFlash = m_max(0, player.parryFlash - 0.05) end
+
+    if is_mouse_captured() then tryShoot() end
+end
+
+local function processEnemies()
+    for i = 1, #demons do
+        local d = demons[i]
+        if d.active then
+            local dx = player.x - d.x
+            local dz = player.z - d.z
+            local dist = m_sqrt(dx*dx + dz*dz)
+            local angle = m_atan(dx, dz)
+
+            if d.type == 2 then
+                d.vx = m_sin(angle) * 0.03
+                d.vz = m_cos(angle) * 0.03
+                d.vy = ((player.y + 4.0) - d.y) * 0.02
+                d.x = d.x + d.vx; d.y = d.y + d.vy; d.z = d.z + d.vz
+
+                if d.shootCooldown > 0 then d.shootCooldown = d.shootCooldown - 1 end
+                if dist < 40 and d.shootCooldown == 0 then
+                    for s = -2, 2 do
+                        local spread = s * 0.2
+                        projectiles[#projectiles + 1] = {
+                            x = d.x, y = d.y, z = d.z,
+                            vx = m_sin(angle + spread) * 0.3, vy = 0.2, vz = m_cos(angle + spread) * 0.3,
+                            isEnemy = true, type = 2, damage = 5, active = true
+                        }
+                    end
+                    d.shootCooldown = 150
+                end
+            elseif d.type == 3 then
+                d.vx = m_sin(angle) * 0.02
+                d.vz = m_cos(angle) * 0.02
+                d.vy = ((player.y + 5.0) - d.y) * 0.02
+                d.x = d.x + d.vx; d.y = d.y + d.vy; d.z = d.z + d.vz
+
+                if d.shootCooldown > 0 then d.shootCooldown = d.shootCooldown - 1 end
+                if dist < 35 and d.shootCooldown == 0 then
+                    local tx = dx; local ty = (player.y + 1.0) - d.y; local tz = dz
+                    local l = m_sqrt(tx*tx + ty*ty + tz*tz)
+                    if l < 0.001 then l = 1 end
+
+                    if d.attackStep < 5 then
+                        projectiles[#projectiles + 1] = {
+                            x = d.x, y = d.y, z = d.z,
+                            vx = (tx/l)*0.6, vy = (ty/l)*0.6, vz = (tz/l)*0.6,
+                            isEnemy = true, type = 1, damage = 8, active = true
+                        }
+                        d.attackStep = d.attackStep + 1
+                        d.shootCooldown = 15
+                    else
+                        projectiles[#projectiles + 1] = {
+                            x = d.x, y = d.y, z = d.z,
+                            vx = (tx/l)*1.5, vy = (ty/l)*1.5, vz = (tz/l)*1.5,
+                            isEnemy = true, type = 3, damage = 20, active = true
+                        }
+                        d.attackStep = 0
+                        d.shootCooldown = 120
+                    end
+                end
+            elseif d.type == 4 then
+                d.vy = ((player.y + 10.0) - d.y) * 0.02
+                if dist < 15 then d.vx = -m_sin(angle)*0.03; d.vz = -m_cos(angle)*0.03
+                elseif dist > 25 then d.vx = m_sin(angle)*0.03; d.vz = m_cos(angle)*0.03
+                else d.vx = 0; d.vz = 0 end
+
+                d.x = d.x + d.vx; d.y = d.y + d.vy; d.z = d.z + d.vz
+
+                if d.shootCooldown > 0 then d.shootCooldown = d.shootCooldown - 1 end
+                if d.shootCooldown == 0 then
+                    strikes[#strikes + 1] = { x = player.x, z = player.z, state = 0, timer = 90, active = true }
+                    d.shootCooldown = 300
+                end
+            else
+                local eSpeed = (d.type == 1) and 0.12 or 0.06
+                if dist < 30 then
+                    d.vx = m_sin(angle) * eSpeed; d.vz = m_cos(angle) * eSpeed
+                    local tx = d.x + d.vx; local tz = d.z + d.vz
+                    if not isSolidXZ(tx, d.z) then d.x = tx end
+                    if not isSolidXZ(d.x, tz) then d.z = tz end
+
+                    if d.type == 1 then
+                        if d.shootCooldown > 0 then d.shootCooldown = d.shootCooldown - 1 end
+                        if dist < 1.5 and d.shootCooldown == 0 then
+                            if player.parryTimer > 0 then
+                                d.hp = 0; player.parryFlash = 1.0; player.hp = m_min(100, player.hp + 20)
+                                spawnParticles(d.x, d.y, d.z, 1, 30)
+                                if playSfx then playSfx("powerup", 60) end
+                            else
+                                player.hp = player.hp - 10; player.damageFlash = 1.0; d.shootCooldown = 40
+                                if playSfx then playSfx("hit", 60) end
+                            end
+                        end
+                    else
+                        if d.shootCooldown > 0 then d.shootCooldown = d.shootCooldown - 1 end
+                        if dist < 20 and d.shootCooldown == 0 then
+                            local tx = dx; local ty = (player.y + 1.0) - (d.y + 1.0); local tz = dz
+                            local l = m_sqrt(tx*tx + ty*ty + tz*tz)
+                            if l < 0.001 then l = 1 end
+                            projectiles[#projectiles + 1] = {
+                                x = d.x, y = d.y + 1.0, z = d.z,
+                                vx = (tx/l)*0.6, vy = (ty/l)*0.6, vz = (tz/l)*0.6,
+                                isEnemy = true, type = 1, damage = 8, active = true
+                            }
+                            d.shootCooldown = 80
+                        end
+                    end
+                end
+            end
+
+            if d.hp <= 0 and d.active then
+                d.active = false
+                enemiesAlive = enemiesAlive - 1
+                player.hp = m_min(100, player.hp + 5)
+                if playSfx then playSfx("explosion", 50) end
+            end
+        end
+    end
+end
+
+local function processProjectiles()
+    for i = 1, #projectiles do
+        local pj = projectiles[i]
+        if pj.active then
+            if pj.type == 2 and pj.isEnemy then
+                local tx = player.x - pj.x
+                local ty = (player.y + 1.0) - pj.y
+                local tz = player.z - pj.z
+                local l = m_sqrt(tx*tx + ty*ty + tz*tz)
+                if l > 0.001 then tx = tx / l; ty = ty / l; tz = tz / l end
+                pj.vx = pj.vx + tx * 0.015; pj.vy = pj.vy + ty * 0.015; pj.vz = pj.vz + tz * 0.015
+
+                local pl = m_sqrt(pj.vx*pj.vx + pj.vy*pj.vy + pj.vz*pj.vz)
+                if pl > 0.001 then pj.vx = (pj.vx/pl)*0.3; pj.vy = (pj.vy/pl)*0.3; pj.vz = (pj.vz/pl)*0.3 end
+            end
+
+            pj.x = pj.x + pj.vx; pj.y = pj.y + pj.vy; pj.z = pj.z + pj.vz
+
+            if pj.x < 0 or pj.z < 0 or pj.x > WORLD_SIZE or pj.z > WORLD_SIZE or pj.y < -2 or pj.y > 30 then
+                pj.active = false
+            end
+
+            if pj.active and isSolidXZ(pj.x, pj.z) and pj.y < 1.2 then
+                pj.active = false
+                spawnParticles(pj.x, pj.y, pj.z, 2, 10)
+            end
+
+            if pj.active and pj.isEnemy then
+                if math.abs(pj.x - player.x) < 0.5 and pj.y > player.y and pj.y < player.y + 1.8 and math.abs(pj.z - player.z) < 0.5 then
+                    if player.parryTimer > 0 then
+                        player.parryFlash = 1.0; player.hp = m_min(100, player.hp + 15)
+                        pj.isEnemy = false; pj.damage = 100
+                        local defSpeed = 3.0
+                        pj.vx = m_sin(player.yaw) * m_cos(player.pitch) * defSpeed
+                        pj.vy = -m_sin(player.pitch) * defSpeed
+                        pj.vz = -m_cos(player.yaw) * m_cos(player.pitch) * defSpeed
+                        if playSfx then playSfx("powerup", 70) end
+                    else
+                        player.hp = player.hp - pj.damage
+                        player.damageFlash = 1.0
+                        pj.active = false
+                        if playSfx then playSfx("hit", 60) end
+                    end
+                end
+            elseif pj.active and not pj.isEnemy then
+                for j = 1, #demons do
+                    local d = demons[j]
+                    if d.active and math.abs(pj.x - d.x) < 0.7 and pj.y > d.y - 0.8 and pj.y < d.y + 1.2 and math.abs(pj.z - d.z) < 0.7 then
+                        d.hp = d.hp - pj.damage
+                        pj.active = false
+                        spawnParticles(pj.x, pj.y, pj.z, 1, 20)
+                        if playSfx then playSfx("beep_down", 30) end
+                        if d.hp <= 0 and d.active then
+                            d.active = false; enemiesAlive = enemiesAlive - 1; player.hp = m_min(100, player.hp + 5)
+                            if playSfx then playSfx("explosion", 50) end
+                        end
+                        break
+                    end
+                end
+            end
+        end
+    end
+end
+
+local function processStrikes()
+    for i = 1, #strikes do
+        local s = strikes[i]
+        if s.active then
+            if s.state == 0 then
+                s.x = s.x + (player.x - s.x) * 0.1
+                s.z = s.z + (player.z - s.z) * 0.1
+                s.timer = s.timer - 1
+                if s.timer <= 0 then s.state = 1; s.timer = 60 end
+            elseif s.state == 1 then
+                s.timer = s.timer - 1
+                if s.timer <= 0 then s.state = 2; s.timer = 20 end
+            else
+                local d = m_sqrt((player.x - s.x)^2 + (player.z - s.z)^2)
+                if d < 2.5 then player.hp = player.hp - 5; player.damageFlash = 1.0 end
+                s.timer = s.timer - 1
+                if s.timer <= 0 then s.active = false end
+            end
+        end
+    end
+end
+
+local function processParticles()
+    for i = #particles, 1, -1 do
+        local pt = particles[i]
+        if pt.life > 0 then
+            pt.vy = pt.vy - GRAVITY * 0.5
+            pt.x = pt.x + pt.vx; pt.y = pt.y + pt.vy; pt.z = pt.z + pt.vz
+            pt.life = pt.life - 0.05
+        else
+            table.remove(particles, i)
+        end
+    end
+end
+
+local function updateMouseLook()
+    if not is_mouse_captured() then return end
+    local dx, dy = get_mouse_delta()
+    if dx ~= 0 or dy ~= 0 then
+        player.yaw = player.yaw + dx * 0.003
+        player.pitch = clamp(player.pitch + dy * 0.003, -1.5, 1.5)
+    end
+end
+
+local function updateGame()
+    if cheatMode then
+        render3D()
+        setHud()
+        return
+    end
+
+    if enemiesAlive <= 0 then
+        if waveTimer > 0 then waveTimer = waveTimer - 1 else spawnWave() end
+    end
+
+    updateMouseLook()
+    processPlayer()
+    processEnemies()
+    processProjectiles()
+    processStrikes()
+    processParticles()
+    setHud()
+    render3D()
+end
+
+on_key_down(function(vk)
+    if vk == VK_ESCAPE then
+        if cheatMode then cheatMode = false; cheatDigits = ""; setHud() end
+        return
+    end
+
+    if vk == VK_F11 then
+        fullscreen_canvas(canvas, not is_fullscreen())
+        return
+    end
+
+    if vk == VK_P and not cheatMode then
+        cheatMode = true; cheatDigits = ""; setHud()
+        return
+    end
+
+    if cheatMode then
+        if vk >= 0x30 and vk <= 0x39 then cheatDigits = cheatDigits .. string.char(vk); setHud(); return end
+        if vk == 0x08 then if #cheatDigits > 0 then cheatDigits = cheatDigits:sub(1, #cheatDigits - 1); setHud() end return end
+        if vk == VK_RETURN then
+            local targetWave = tonumber(cheatDigits or "")
+            if targetWave and targetWave > 0 then
+                wave = targetWave - 1
+                for i = 1, #demons do demons[i].active = false end
+                for i = 1, #strikes do strikes[i].active = false end
+                enemiesAlive = 0; waveTimer = 0
+            end
+            cheatMode = false; cheatDigits = ""; setHud()
+            return
+        end
+    end
+end)
+
+generateArena()
+render3D()
+setHud()
+
+set_timer(16, function()
+    updateGame()
+end)
+}

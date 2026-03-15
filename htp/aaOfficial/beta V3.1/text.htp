@@ -1,0 +1,44 @@
+@page { title: "Moving Text"; background: #0a0a1a; }
+@block { align: center; padding: 30; margin: 10; background: #111133; border-radius: 12;
+    @text { id: "t1"; content: "LUME BROWSER"; size: 42; color: #e94560; bold: true; }
+}
+@block { align: center; padding: 25; margin: 10; background: #0f1a2e; border-radius: 10;
+    @text { id: "t2"; content: "Floating Text"; size: 30; color: #00ff88; bold: true; }
+}
+@block { align: center; padding: 25; margin: 10; background: #1a0a2e; border-radius: 10;
+    @text { id: "t3"; content: "Bouncing!"; size: 34; color: #ffaa00; bold: true; }
+}
+@block { align: center; padding: 25; margin: 10; background: #0a1a1a; border-radius: 10;
+    @text { id: "t4"; content: "Gentle Wave"; size: 26; color: #88ccff; }
+}
+@block { align: center; padding: 25; margin: 10; background: #1a1a0a; border-radius: 10;
+    @text { id: "t5"; content: "Elastic!"; size: 36; color: #ff66aa; bold: true; }
+}
+@block { align: center; padding: 25; margin: 10; background: #0a0a2a; border-radius: 10;
+    @text { id: "t6"; content: "Heartbeat"; size: 28; color: #ff3355; bold: true; }
+}
+@script {
+local frame = 0
+local pi = 3.14159265
+local function update()
+    frame = frame + 1
+    local t = frame * 0.05
+    set_offset_y("t1", math.floor(math.sin(t) * 15))
+    set_offset_y("t2", math.floor(math.sin(t * 0.7) * 20))
+    set_offset_y("t3", math.floor(-math.abs(math.sin(t * 1.5)) * 25))
+    set_offset_y("t4", math.floor(math.sin(t * 0.4) * 10))
+    local elastic = math.sin(t * 2) * math.exp(-((frame % 90) * 0.03)) * 30
+    set_offset_y("t5", math.floor(elastic))
+    local beat = (frame % 60)
+    local hb = 0
+    if beat < 6 then
+        hb = -math.sin(beat / 6 * pi) * 12
+    elseif beat < 10 then
+        hb = 0
+    elseif beat < 16 then
+        hb = -math.sin((beat - 10) / 6 * pi) * 8
+    end
+    set_offset_y("t6", math.floor(hb))
+end
+set_timer(33, update)
+}

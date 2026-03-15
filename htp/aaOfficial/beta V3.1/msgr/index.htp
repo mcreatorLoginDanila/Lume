@@ -1,0 +1,161 @@
+@page {
+    title: "Lume Messenger (SPA)";
+    background: #0f0f1a;
+}
+@block {
+    align: center;
+    padding: 10;
+    @text(id="title") { content: "LUME CHAT"; size: 28; color: #0abde3; bold: true; }
+    @text(id="status") { content: "Please Login"; size: 14; color: #666688; }
+    @br{size:10;}
+}
+@block(id="app_container") {
+    align: center;
+    @text { content: "Loading interface..."; size: 14; color: #fff; }
+}
+@script {
+    local API_URL = "htp://localhost:8080/api/"
+    local token = nil
+    local my_name = ""
+    local current_group = "general"
+    local messages = {}
+    local groups = {"general"}
+    local CV_W, CV_H = 600, 380
+    local poll_timer = nil
+    local LOGIN_UI = [[
+        @block {
+            align: center; padding: 30; background: #16213e; border-radius: 12; margin: 20;
+            @text { content: "WELCOME TO LUME"; size: 20; color: #ffffff; bold: true; }
+            @br{size:20;}
+            @input(id="inp_user") { width: 220; height: 35; placeholder: "Username"; }
+            @br{size:10;}
+            @input(id="inp_pass") { width: 220; height: 35; placeholder: "Password"; }
+            @br{size:20;}
+            @button(id="btn_login") { content: "LOGIN / REGISTER"; width: 220; height: 40; background: #e94560; color: #fff; }
+        }
+    ]]
+    local CHAT_UI = [[
+        @block {
+            align: center;
+            @canvas(id="ui_canvas") { width: 600; height: 380; border-color: #333344; }
+            @br{size:15;}
+            @row { gap: 10;
+                @input(id="inp_msg") { width: 480; height: 35; placeholder: "Type a message..."; }
+                @button(id="btn_send") { content: "SEND"; width: 110; height: 35; background: #0abde3; color: #fff; }
+            }
+            @br{size:10;}
+            @row { gap: 10;
+                @input(id="inp_group") { width: 200; height: 30; placeholder: "New Group Name"; }
+                @button(id="btn_group") { content: "JOIN GROUP"; width: 120; height: 30; background: #444466; color: #fff; }
+                @button(id="btn_logout") { content: "LOGOUT"; width: 100; height: 30; background: #883333; color: #fff; }
+            }
+        }
+    ]]
+    function api_call(endpoint, params)
+        local query = ""
+        for k,v in pairs(params) do
+            query = query .. k .. "=" .. v .. "&"
+        end
+        query = query:gsub(" ", "%%20")
+        local body, code = http_request(API_URL .. endpoint .. "?" .. query)
+        if code == 200 and body and #body > 0 then
+            local fn, err = load(body)
+            if fn then return fn() end
+        end
+        return {status="error", msg="Net Error"}
+    end
+    function do_login()
+        local u = get_input("inp_user")
+        local p = get_input("inp_pass")
+        if u == "" or p == "" then 
+            alert("Please enter username and password") 
+            return 
+        end
+        set_text("status", "Connecting...")
+        local res = api_call("auth", {u=u, p=p})
+        if res.status == "ok" then
+            token = res.token
+            my_name = res.user
+            set_inner_htp("app_container", CHAT_UI)
+            set_text("title", "Chat: " .. current_group)
+            set_text("status", "Logged as " .. my_name)
+            start_poll_timer()
+        else
+            set_text("status", "Error: " .. (res.msg or "Unknown"))
+        end
+    end
+    function send_msg()
+        local txt = get_input("inp_msg")
+        if txt == "" then return end
+        api_call("send", {token=token, group=current_group, msg=txt})
+        set_input("inp_msg", "")
+        poll()
+    end
+    function join_group()
+        local new_grp = get_input("inp_group")
+        if new_grp == "" then return end
+        api_call("create", {token=token, name=new_grp})
+        current_group = new_grp
+        set_input("inp_group", "")
+        set_text("title", "Chat: " .. current_group)
+        messages = {}
+        poll()
+    end
+    function do_logout()
+        if poll_timer then kill_timer(poll_timer) poll_timer = nil end
+        token = nil
+        set_inner_htp("app_container", LOGIN_UI)
+        set_text("title", "LUME CHAT")
+        set_text("status", "Please Login")
+    end
+    function poll()
+        if not token then return end
+        local res = api_call("poll", {token=token, group=current_group})
+        if res.status == "ok" then
+            messages = res.messages
+            groups = res.groups
+            draw_chat()
+        end
+    end
+
+    function start_poll_timer()
+        if poll_timer then kill_timer(poll_timer) end
+        poll()
+        poll_timer = set_timer(2000, poll)
+    end
+    function draw_chat()
+        canvas_clear("ui_canvas", "#16213e")
+        canvas_rect("ui_canvas", 0, 0, 140, CV_H, "#0f0f1a")
+        canvas_line("ui_canvas", 140, 0, 140, CV_H, "#444", 1)
+        local gy = 15
+        canvas_text("ui_canvas", 10, gy, "GROUPS:", 16, "#e94560")
+        gy = gy + 30
+        for i, g in ipairs(groups) do
+            local col = (g == current_group) and "#0abde3" or "#888"
+            canvas_text("ui_canvas", 15, gy, "# " .. g, 14, col)
+            gy = gy + 25
+        end
+        local mx = 155
+        local y_pos = CV_H - 40
+        if #messages == 0 then
+            canvas_text("ui_canvas", 250, 160, "No messages yet...", 16, "#555")
+        end
+        for i = #messages, 1, -1 do
+            local m = messages[i]
+            if y_pos > 20 then
+                local is_me = (m.u == my_name)
+                local header = m.u .. "  [" .. m.time .. "]"
+                canvas_text("ui_canvas", mx, y_pos-16, header, 12, is_me and "#0abde3" or "#e94560")
+                canvas_text("ui_canvas", mx, y_pos+2, m.t, 15, "#ffffff")
+                canvas_line("ui_canvas", mx, y_pos+24, CV_W-10, y_pos+24, "#222233", 1)
+                y_pos = y_pos - 45
+            end
+        end
+        refresh()
+    end
+    on_click("btn_login", do_login)
+    on_click("btn_send", send_msg)
+    on_click("btn_group", join_group)
+    on_click("btn_logout", do_logout)
+    set_inner_htp("app_container", LOGIN_UI)
+}
