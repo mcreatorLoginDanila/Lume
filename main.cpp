@@ -2626,7 +2626,7 @@ int WINAPI WinMain(HINSTANCE hI, HINSTANCE, LPSTR cmd, int show) {
         WS_EX_ACCEPTFILES,
         "LumeClass",
         "Lume",
-        WS_OVERLAPPEDWINDOW,
+        WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
         CW_USEDEFAULT, CW_USEDEFAULT, 1024, 768,
         0, 0, hI, 0);
     if (!g_mainWnd) return 1;
