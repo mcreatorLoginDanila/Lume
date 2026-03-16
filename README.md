@@ -127,3 +127,6 @@ cl /EHsc /std:c++17 /O2 /I. main.cpp lib/lapi.c lib/lcode.c lib/lctype.c lib/lde
 
 added gradient text on v3.1
 <img width="347" height="67" alt="изображение" src="https://github.com/user-attachments/assets/31412967-4053-419b-a09f-669e76c4c921" />
+3d canvas?
+<img width="1473" height="725" alt="изображение" src="https://github.com/user-attachments/assets/1cbf7836-f4ac-48f7-a278-832604edc0df" />
+
