@@ -35,6 +35,19 @@ extern "C" {
 typedef HGLRC(WINAPI* PFN_wglCreateContext)(HDC);
 typedef BOOL(WINAPI* PFN_wglMakeCurrent)(HDC, HGLRC);
 typedef BOOL(WINAPI* PFN_wglDeleteContext)(HGLRC);
+static double g_perfFreqInv = 0.0;
+static LARGE_INTEGER g_perfStart = {};
+void initHighResTimer() {
+    LARGE_INTEGER freq;
+    QueryPerformanceFrequency(&freq);
+    g_perfFreqInv = 1.0 / (double)freq.QuadPart;
+    QueryPerformanceCounter(&g_perfStart);
+}
+double getHighResTime() {
+    LARGE_INTEGER now;
+    QueryPerformanceCounter(&now);
+    return (double)(now.QuadPart - g_perfStart.QuadPart) * g_perfFreqInv;
+}
 namespace GLLoader {
 static HMODULE hGL = nullptr;
 static PFN_wglCreateContext pfn_wglCreateContext = nullptr;
@@ -155,6 +168,9 @@ void releaseMouse() {
         ShowCursor(TRUE);
         ClipCursor(nullptr);
     }
+}
+namespace Script {
+    void fireCanvasClick(const std::string& canvasId, int x, int y, int button);
 }
 namespace GLCanvas {
     struct GLView;
@@ -732,6 +748,13 @@ namespace GLCanvas {
         bool fullscreen = false;
     };
     std::map<std::string, std::shared_ptr<GLView>> g_views;
+    std::string findIdByHwnd(HWND hwnd) {
+        for (auto& kv : g_views) {
+            if (kv.second && kv.second->hwnd == hwnd)
+                return kv.first;
+        }
+        return "";
+    }
     LRESULT CALLBACK CanvasWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         switch (msg) {
         case WM_ERASEBKGND:
@@ -743,13 +766,51 @@ namespace GLCanvas {
             return 0;
         }
         case WM_LBUTTONDOWN: {
-            if (g_mainWnd) {
-                SetFocus(g_mainWnd);
-                POINT pt = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
-                ClientToScreen(hwnd, &pt);
-                ScreenToClient(g_mainWnd, &pt);
-                SendMessage(g_mainWnd, WM_LBUTTONDOWN, wp, MAKELPARAM(pt.x, pt.y));
+            if (!g_mainWnd) return 0;
+            std::string canvasId = findIdByHwnd(hwnd);
+            int localX = GET_X_LPARAM(lp);
+            int localY = GET_Y_LPARAM(lp);
+
+            if (!canvasId.empty()) {
+                Script::fireCanvasClick(canvasId, localX, localY, 1);
+
+                if (!g_mouseCaptured) {
+                    auto v = find(canvasId);
+                    if (v && v->valid) {
+                        g_mouseCaptured = true;
+                        g_ignoreWarpMouse = false;
+                        g_capturedCanvasId = canvasId;
+                        g_capturedCanvasW = v->w;
+                        g_capturedCanvasH = v->h;
+                        g_capturedCanvasX = v->x;
+                        g_capturedCanvasY = v->y - TOOLBAR_H;
+                        SetCapture(g_mainWnd);
+                        ShowCursor(FALSE);
+                        RECT wr;
+                        GetWindowRect(v->hwnd, &wr);
+                        ClipCursor(&wr);
+                    }
+                }
             }
+            SetFocus(g_mainWnd);
+            return 0;
+        }
+        case WM_RBUTTONDOWN: {
+            if (!g_mainWnd) return 0;
+            std::string canvasId = findIdByHwnd(hwnd);
+            if (!canvasId.empty()) {
+                Script::fireCanvasClick(canvasId, GET_X_LPARAM(lp), GET_Y_LPARAM(lp), 2);
+            }
+            SetFocus(g_mainWnd);
+            return 0;
+        }
+        case WM_MBUTTONDOWN: {
+            if (!g_mainWnd) return 0;
+            std::string canvasId = findIdByHwnd(hwnd);
+            if (!canvasId.empty()) {
+                Script::fireCanvasClick(canvasId, GET_X_LPARAM(lp), GET_Y_LPARAM(lp), 3);
+            }
+            SetFocus(g_mainWnd);
             return 0;
         }
         case WM_MOUSEMOVE: {
@@ -905,7 +966,7 @@ namespace GLCanvas {
             if (kv.second) kv.second->touchedThisLayout = false;
         }
     }
-    void place(const std::string& id, int x, int y, int w, int h) {
+    void place(const std::string& id, int x, int y, int w, int h, int scrollY = 0, int toolbarH = 0) {
         auto v = ensure(id, w, h);
         if (!v || !v->valid) return;
         v->touchedThisLayout = true;
@@ -919,11 +980,24 @@ namespace GLCanvas {
         v->w = w;
         v->h = h;
         v->visible = true;
-        if (changed) {
-            MoveWindow(v->hwnd, x, y, w, h, FALSE);
+        RECT cr;
+        GetClientRect(g_mainWnd, &cr);
+        int contentTop = toolbarH;
+        int contentBot = cr.bottom - STATUS_H;
+        bool inView = (y + h > contentTop) && (y < contentBot);
+
+        if (inView) {
+            if (changed) {
+                MoveWindow(v->hwnd, x, y, w, h, FALSE);
+            }
+            if (!IsWindowVisible(v->hwnd)) {
+                ShowWindow(v->hwnd, SW_SHOWNA);
+            }
         }
-        if (!IsWindowVisible(v->hwnd)) {
-            ShowWindow(v->hwnd, SW_SHOW);
+        else {
+            if (IsWindowVisible(v->hwnd)) {
+                ShowWindow(v->hwnd, SW_HIDE);
+            }
         }
     }
     void endLayoutPass() {
@@ -1072,6 +1146,8 @@ std::map<std::string, int> g_offsets_y;
 std::map<std::string, float> g_shimmer_offsets;
 std::map<std::string, std::function<void()>> g_clicks;
 std::map<int, int> g_timerRefs;
+std::map<std::string, int> g_canvasClickRefs;
+std::map<std::string, int> g_canvasMouseMoveRefs;
 int g_timerN = 9000;
 int g_keyDownRef = LUA_NOREF;
 lua_State* g_L = nullptr;
@@ -1412,6 +1488,47 @@ static int l_on_key_down(lua_State* L) {
     g_keyDownRef = luaL_ref(L, LUA_REGISTRYINDEX);
     return 0;
 }
+static int l_get_time(lua_State* L) {
+    lua_pushnumber(L, getHighResTime());
+    return 1;
+}
+static int l_get_window_size(lua_State* L) {
+    RECT cr;
+    GetClientRect(g_hwnd, &cr);
+    if (g_fullscreenCanvas) {
+        lua_pushinteger(L, cr.right);
+        lua_pushinteger(L, cr.bottom);
+    }
+    else {
+        lua_pushinteger(L, cr.right);
+        lua_pushinteger(L, cr.bottom - TOOLBAR_H - STATUS_H);
+    }
+    return 2;
+}
+void fireCanvasClick(const std::string& canvasId, int x, int y, int button) {
+    auto it = g_canvasClickRefs.find(canvasId);
+    if (it == g_canvasClickRefs.end() || !g_L) return;
+    lua_rawgeti(g_L, LUA_REGISTRYINDEX, it->second);
+    lua_pushinteger(g_L, x);
+    lua_pushinteger(g_L, y);
+    lua_pushinteger(g_L, button);
+    if (lua_pcall(g_L, 3, 0, 0) != 0) {
+        OutputDebugStringA(lua_tostring(g_L, -1));
+        lua_pop(g_L, 1);
+    }
+}
+static int l_on_canvas_click(lua_State* L) {
+    const char* id = luaL_checkstring(L, 1);
+    luaL_checktype(L, 2, LUA_TFUNCTION);
+    std::string sid = id;
+    auto it = g_canvasClickRefs.find(sid);
+    if (it != g_canvasClickRefs.end()) {
+        luaL_unref(L, LUA_REGISTRYINDEX, it->second);
+    }
+    lua_pushvalue(L, 2);
+    g_canvasClickRefs[sid] = luaL_ref(L, LUA_REGISTRYINDEX);
+    return 0;
+}
 void registerGLConstants(lua_State* L) {
     struct { const char* n; int v; } cs[] = {
         {"GL_POINTS",GL_POINTS},{"GL_LINES",GL_LINES},{"GL_LINE_STRIP",GL_LINE_STRIP},{"GL_LINE_LOOP",GL_LINE_LOOP},
@@ -1499,6 +1616,9 @@ void init() {
     lua_register(g_L, "gl_end_list", l_gl_end_list);
     lua_register(g_L, "gl_call_list", l_gl_call_list);
     lua_register(g_L, "gl_delete_list", l_gl_delete_list);
+    lua_register(g_L, "get_time", l_get_time);
+    lua_register(g_L, "get_window_size", l_get_window_size);
+    lua_register(g_L, "on_canvas_click", l_on_canvas_click);
     registerGLConstants(g_L);
     Plugins::initAllPlugins(g_L);
 }
@@ -1523,6 +1643,10 @@ void reset() {
         KillTimer(g_hwnd, kv.first);
         if (g_L) luaL_unref(g_L, LUA_REGISTRYINDEX, kv.second);
     }
+    for (auto& kv : g_canvasClickRefs) {
+        if (g_L) luaL_unref(g_L, LUA_REGISTRYINDEX, kv.second);
+    }
+    g_canvasClickRefs.clear();
     g_timerRefs.clear();
     g_timerN = 9000;
     g_clicks.clear();
@@ -1912,7 +2036,7 @@ class Engine {
             DeleteObject(p);
             auto glv = GLCanvas::ensure(id, cw, ch);
             if (glv && glv->valid) {
-                GLCanvas::place(id, cx, TOOLBAR_H + cy, cw, ch);
+                GLCanvas::place(id, cx, TOOLBAR_H + cy, cw, ch, scrollY, TOOLBAR_H);
             }
             else {
                 HBRUSH fb = CreateSolidBrush(RGB(40, 40, 60));
@@ -2411,6 +2535,9 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
         for (auto& h : g_ren.hits) {
             if (mx >= h.r.left && mx <= h.r.right && my >= h.r.top && my <= h.r.bottom) {
                 if (h.isGLCanvas) {
+                    int localX = mx - h.r.left;
+                    int localY = my - h.r.top;
+                    Script::fireCanvasClick(h.canvasId, localX, localY, 1);
                     auto v = GLCanvas::find(h.canvasId);
                     if (v && v->valid) {
                         g_mouseCaptured = true;
@@ -2608,6 +2735,7 @@ int WINAPI WinMain(HINSTANCE hI, HINSTANCE, LPSTR cmd, int show) {
     WSAStartup(MAKEWORD(2, 2), &wd);
     INITCOMMONCONTROLSEX ic = { sizeof(ic),ICC_STANDARD_CLASSES };
     InitCommonControlsEx(&ic);
+    initHighResTimer();
     GLLoader::load();
     Plugins::initHostAPI();
     Plugins::discoverPlugins();
