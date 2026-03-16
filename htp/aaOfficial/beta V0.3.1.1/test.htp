@@ -1,0 +1,11 @@
+@page{title:"Test";background:#0f0f23;}
+@block{align:center;padding:30;background:#1a1a3e;margin:20;border-radius:12;
+  @text{id:"title";content:"LUME BROWSER";size:42;color:#e94560;gradient:#0abde3;bold:true;}
+}
+@script{
+local t = 0
+set_timer(50, function()
+  t = t + 0.02
+  set_shimmer("title", t)
+end)
+}
