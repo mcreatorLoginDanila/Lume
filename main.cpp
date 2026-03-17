@@ -30,8 +30,9 @@ extern "C" {
 #pragma comment(lib, "comctl32.lib")
 #pragma comment(lib, "shell32.lib")
 #pragma comment(lib, "opengl32.lib")
+#pragma comment(lib, "glu32.lib")
 #include <GL/gl.h>
-
+#include <GL/glu.h>
 typedef HGLRC(WINAPI* PFN_wglCreateContext)(HDC);
 typedef BOOL(WINAPI* PFN_wglMakeCurrent)(HDC, HGLRC);
 typedef BOOL(WINAPI* PFN_wglDeleteContext)(HGLRC);
@@ -1529,6 +1530,19 @@ static int l_on_canvas_click(lua_State* L) {
     g_canvasClickRefs[sid] = luaL_ref(L, LUA_REGISTRYINDEX);
     return 0;
 }
+static int l_gl_blend_func(lua_State* L) {
+    glBlendFunc((GLenum)luaL_checkinteger(L, 1), (GLenum)luaL_checkinteger(L, 2));
+    return 0;
+}
+static int l_glu_sphere(lua_State* L) {
+    double radius = luaL_checknumber(L, 1);
+    int slices = (int)luaL_checkinteger(L, 2);
+    int stacks = (int)luaL_checkinteger(L, 3);
+    GLUquadric* q = gluNewQuadric();
+    gluSphere(q, radius, slices, stacks);
+    gluDeleteQuadric(q);
+    return 0;
+}
 void registerGLConstants(lua_State* L) {
     struct { const char* n; int v; } cs[] = {
         {"GL_POINTS",GL_POINTS},{"GL_LINES",GL_LINES},{"GL_LINE_STRIP",GL_LINE_STRIP},{"GL_LINE_LOOP",GL_LINE_LOOP},
@@ -1542,6 +1556,10 @@ void registerGLConstants(lua_State* L) {
         {"VK_ESCAPE",VK_ESCAPE},{"VK_RETURN",VK_RETURN},
         {"VK_Q",0x51},{"VK_E",0x45},{"VK_R",0x52},{"VK_F",0x46},
         {"VK_LBUTTON",VK_LBUTTON},{"VK_F11",VK_F11},{"VK_P",0x50},
+        {"GL_SRC_ALPHA", 0x0302},
+        {"GL_ONE_MINUS_SRC_ALPHA", 0x0303},
+        {"GL_ONE", 1},
+        {"GL_ZERO", 0},
         {nullptr,0}
     };
     for (int i = 0; cs[i].n; i++) {
@@ -1619,6 +1637,8 @@ void init() {
     lua_register(g_L, "get_time", l_get_time);
     lua_register(g_L, "get_window_size", l_get_window_size);
     lua_register(g_L, "on_canvas_click", l_on_canvas_click);
+    lua_register(g_L, "gl_blend_func", l_gl_blend_func);
+    lua_register(g_L, "glu_sphere", l_glu_sphere);
     registerGLConstants(g_L);
     Plugins::initAllPlugins(g_L);
 }
