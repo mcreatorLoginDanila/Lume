@@ -2604,128 +2604,301 @@ public:
 };
 };
 namespace Pages {
-std::string readF(const std::string& p) {
-    std::ifstream f(p);
-    if (!f) return "";
-    std::stringstream s;
-    s << f.rdbuf();
-    return s.str();
+    std::string readF(const std::string& p) {
+        std::ifstream f(p);
+        if (!f) return "";
+        std::stringstream s;
+        s << f.rdbuf();
+        return s.str();
+    }
+
+    std::string home() {
+        auto c = readF("home.htp");
+        if (!c.empty()) return c;
+        return R"htp(
+@page { title:"Lume - Start"; background:"#09090b"; }
+@block { align:"center"; padding:50; background:"#09090b"; margin:0;
+  @br{size:20;}
+  @text { id:"logo"; content:"LUME"; size:86; color:"#ff0000"; gradient:"#0000ff"; bold:"true"; }
+  @br { size:5; }
+  @text { content:"The Custom Lightweight Engine"; size:18; color:"#71717a"; italic:"true"; }
+  @br { size:40; }
+  @row { gap:10;
+     @input { id:"url_box"; placeholder:"Type address (e.g. about:info or file://...)"; width:420; height:40; }
+     @button { id:"btn_go"; content:"Navigate"; width:110; height:40; background:"#27272a"; color:"#fafafa"; border-radius:6; size:15; }
+  }
+  @br{size:8;}
+  @text { id:"search_err"; content:""; size:14; color:"#ef4444"; }
 }
-std::string home() {
-    auto c = readF("home.htp");
-    if (!c.empty()) return c;
-    std::string s;
-    s.reserve(1024);
-    s += "@page{title:\"Lume\";background:#0f0f23;}\n";
-    s += "@block{align:center;padding:40;background:#1a1a3e;border-radius:12;margin:20;\n";
-    s += "  @text{content:\"Lume\";size:42;color:#e94560;bold:true;}\n";
-    s += "  @br{size:10;}\n";
-    s += "  @text{content:\"Lua + Canvas + OpenGL + Plugins\";size:18;color:#8888aa;italic:true;}\n";
-    s += "}\n";
-    s += "@block{padding:20;margin:20;background:#16213e;border-radius:8;\n";
-    s += "  @text{content:\"Quick links:\";size:18;color:#ffffff;bold:true;}\n";
-    s += "  @br{size:10;}\n";
-    s += "  @link{content:\"Server localhost:8080\";url:\"htp://localhost:8080/index.htp\";color:#0abde3;size:16;}\n";
-    s += "  @link{content:\"OpenGL Demo\";url:\"about:gldemo\";color:#0abde3;size:16;}\n";
-    s += "  @link{content:\"Plugin Demo\";url:\"about:plugindemo\";color:#0abde3;size:16;}\n";
-    s += "  @link{content:\"About\";url:\"about:info\";color:#0abde3;size:16;}\n";
-    s += "}\n";
-    return s;
+@block { align:"left"; padding:30; margin:10; background:"#09090b";
+    @row { gap:20;
+        @column { background:"#18181b"; padding:25; border-radius:10; width:280;
+            @text { content:"3D Graphics"; size:20; color:"#fafafa"; bold:"true"; }
+            @divider { color:"#27272a"; thickness:1; margin:15; }
+            @text { content:"Hardware accelerated OpenGL rendering built directly into the UI layer."; size:15; color:"#a1a1aa"; }
+            @br { size:20; }
+            @button { content:"Launch Demo"; width:140; height:35; background:"#3f3f46"; color:"#ffffff"; border-radius:6; url:"about:gldemo"; }
+            @br { size:30; } 
+        }
+        @column { background:"#18181b"; padding:25; border-radius:10; width:280;
+            @text { content:"Native Plugins"; size:20; color:"#fafafa"; bold:"true"; }
+            @divider { color:"#27272a"; thickness:1; margin:15; }
+            @text { content:"Extend functionality using the dynamic C++ DLL system. Build anything."; size:15; color:"#a1a1aa"; }
+            @br { size:20; }
+            @button { content:"View Plugins"; width:140; height:35; background:"#3f3f46"; color:"#ffffff"; border-radius:6; url:"about:plugindemo"; }
+            @br { size:30; }
+        }
+        @column { background:"#18181b"; padding:25; border-radius:10; width:280;
+            @text { content:"About"; size:20; color:"#fafafa"; bold:"true"; }
+            @divider { color:"#27272a"; thickness:1; margin:15; }
+            @text { content:"Learn about the Lua 5.4 integration, HTP tags, and custom networking."; size:15; color:"#a1a1aa"; }
+            @br { size:20; }
+            @button { content:"Read More"; width:140; height:35; background:"#3f3f46"; color:"#ffffff"; border-radius:6; url:"about:info"; }
+            @br { size:30; }
+        }
+    }
 }
-std::string about() {
-    auto c = readF("about_browser.htp");
-    if (!c.empty()) return c;
-    return "@page{title:\"About\";background:#0f0f23;}\n"
-        "@block{align:center;padding:30;background:#1a1a3e;margin:20;border-radius:10;\n"
-        "  @text{content:\"Lume\";size:36;color:#e94560;bold:true;}\n}\n"
-        "@block{padding:20;margin:20;background:#16213e;border-radius:8;\n"
-        "  @list{\n"
-        "    @item{content:\"Lua 5.4 + GDI + OpenGL\";size:15;color:#ccccee;}\n"
-        "    @item{content:\"DLL Plugin system\";size:15;color:#ccccee;}\n"
-        "    @item{content:\"Mouse capture + Fullscreen canvas\";size:15;color:#ccccee;}\n"
-        "    @item{content:\"gluPerspective + gluLookAt\";size:15;color:#ccccee;}\n"
-        "    @item{content:\"Display Lists for performance\";size:15;color:#ccccee;}\n"
-        "    @item{content:\"Gradient text + Shimmer\";size:15;color:#ccccee;}\n"
-        "  }\n  @br{size:15;}\n"
-        "  @link{content:\"Home\";url:\"about:home\";color:#0abde3;size:16;}\n}\n";
+@script {
+    local function hsv_to_hex(h, s, v)
+        local c = v * s
+        local x = c * (1 - math.abs((h / 60) % 2 - 1))
+        local m = v - c
+        local r, g, b = 0, 0, 0
+        if h < 60 then r, g, b = c, x, 0
+        elseif h < 120 then r, g, b = x, c, 0
+        elseif h < 180 then r, g, b = 0, c, x
+        elseif h < 240 then r, g, b = 0, x, c
+        elseif h < 300 then r, g, b = x, 0, c
+        else r, g, b = c, 0, x end
+        r = math.floor((r + m) * 255)
+        g = math.floor((g + m) * 255)
+        b = math.floor((b + m) * 255)
+        return string.format("#%02X%02X%02X", r, g, b)
+    end
+    local hue = 0
+    local spread = 150
+    set_timer(16, function()
+        hue = hue + 2
+        if hue >= 360 then hue = hue - 360 end
+        local hex1 = hsv_to_hex(hue % 360, 1.0, 1.0)
+        local hex2 = hsv_to_hex((hue + spread) % 360, 1.0, 1.0)
+        set_prop('logo', 'color', hex1)
+        set_prop('logo', 'gradient', hex2)
+    end)
+    local function do_search()
+        local query = get_input('url_box')
+        if query and query ~= "" then
+            set_text('search_err', '')
+            navigate(query)
+        else
+            set_text('search_err', 'Please enter a valid URL')
+        end
+    end
+    on_click('btn_go', do_search)
+    on_key_down(function(vk)
+        if vk == 13 then do_search() end
+    end)
 }
-std::string glDemo() {
-    std::string s;
-    s.reserve(2048);
-    s += "@page{title:\"GL Demo\";background:#0f0f23;}\n";
-    s += "@block{align:center;padding:20;background:#1a1a3e;margin:20;border-radius:10;\n";
-    s += "  @text{content:\"OpenGL Canvas\";size:32;color:#e94560;bold:true;}\n";
-    s += "  @br{size:10;}\n";
-    s += "  @text{content:\"Click canvas to capture mouse, ESC to release, F11 fullscreen\";size:14;color:#8888aa;}\n";
-    s += "  @br{size:10;}\n";
-    s += "  @glcanvas{id:\"gl1\";width:400;height:300;border-color:#0abde3;}\n";
-    s += "  @br{size:10;}\n";
-    s += "  @button{id:\"btn_spin\";content:\"Toggle Spin\";width:150;height:35;background:#e94560;}\n";
-    s += "  @text{id:\"gl_status\";content:\"Ready\";size:14;color:#aaaacc;}\n}\n";
-    s += "@block{padding:10;margin:20;background:#16213e;border-radius:8;\n";
-    s += "  @link{content:\"Home\";url:\"about:home\";color:#0abde3;size:16;}\n}\n";
-    s += "@script{\n";
-    s += "local spinning=false local angle=0 local tid=nil\n";
-    s += "local function rgl()\n";
-    s += "  if not gl_available() then return end\n";
-    s += "  if not gl_begin_render('gl1',400,300) then return end\n";
-    s += "  gl_viewport(0,0,400,300)\n";
-    s += "  gl_matrix_mode(GL_PROJECTION) gl_load_identity()\n";
-    s += "  glu_perspective(60, 400/300, 0.1, 100)\n";
-    s += "  gl_matrix_mode(GL_MODELVIEW) gl_load_identity()\n";
-    s += "  glu_look_at(0,0,3, 0,0,0, 0,1,0)\n";
-    s += "  gl_clear(0.06,0.06,0.14,1)\n";
-    s += "  gl_enable(GL_DEPTH_TEST)\n";
-    s += "  gl_push_matrix() gl_rotatef(angle,0,1,0) gl_rotatef(angle*0.7,1,0,0)\n";
-    s += "  gl_begin(GL_QUADS)\n";
-    s += "  gl_color(1,0.27,0.38) gl_vertex3f(-0.7,-0.7,-0.7) gl_vertex3f(0.7,-0.7,-0.7) gl_vertex3f(0.7,0.7,-0.7) gl_vertex3f(-0.7,0.7,-0.7)\n";
-    s += "  gl_color(0.04,0.74,0.89) gl_vertex3f(-0.7,-0.7,0.7) gl_vertex3f(0.7,-0.7,0.7) gl_vertex3f(0.7,0.7,0.7) gl_vertex3f(-0.7,0.7,0.7)\n";
-    s += "  gl_color(0.28,0.78,0.45) gl_vertex3f(-0.7,0.7,-0.7) gl_vertex3f(0.7,0.7,-0.7) gl_vertex3f(0.7,0.7,0.7) gl_vertex3f(-0.7,0.7,0.7)\n";
-    s += "  gl_color(1,0.85,0.2) gl_vertex3f(-0.7,-0.7,-0.7) gl_vertex3f(0.7,-0.7,-0.7) gl_vertex3f(0.7,-0.7,0.7) gl_vertex3f(-0.7,-0.7,0.7)\n";
-    s += "  gl_color(0.9,0.4,0.8) gl_vertex3f(0.7,-0.7,-0.7) gl_vertex3f(0.7,-0.7,0.7) gl_vertex3f(0.7,0.7,0.7) gl_vertex3f(0.7,0.7,-0.7)\n";
-    s += "  gl_color(0.3,0.5,0.9) gl_vertex3f(-0.7,-0.7,-0.7) gl_vertex3f(-0.7,-0.7,0.7) gl_vertex3f(-0.7,0.7,0.7) gl_vertex3f(-0.7,0.7,-0.7)\n";
-    s += "  gl_end() gl_pop_matrix()\n";
-    s += "  gl_end_render('gl1') gl_refresh('gl1')\n";
-    s += "end\n";
-    s += "rgl()\n";
-    s += "on_click('btn_spin',function()\n";
-    s += "  spinning=not spinning\n";
-    s += "  if spinning then set_text('gl_status','Spinning...')\n";
-    s += "    tid=set_timer(33,function() angle=angle+2 if angle>=360 then angle=angle-360 end rgl() end)\n";
-    s += "  else set_text('gl_status','Stopped') if tid then kill_timer(tid) tid=nil end end\n";
-    s += "end)\n";
-    s += "}\n";
-    return s;
+)htp";
+    }
+
+    std::string about() {
+        auto c = readF("about_browser.htp");
+        if (!c.empty()) return c;
+        return R"htp(
+@page { title:"Lume - About"; background:"#09090b"; }
+@block { align:"center"; padding:40; background:"#09090b"; margin:0;
+  @text { content:"About Lume"; size:46; color:"#fafafa"; bold:"true"; }
+  @br { size:5; }
+  @text { content:"The architecture behind the custom engine."; size:18; color:"#a1a1aa"; italic:"true"; }
 }
-std::string pluginDemo() {
-    std::string s;
-    s += "@page{title:\"Plugin Demo\";background:#0f0f23;}\n";
-    s += "@block{align:center;padding:30;background:#1a1a3e;margin:20;border-radius:10;\n";
-    s += "  @text{content:\"Plugin Demo\";size:32;color:#e94560;bold:true;}\n}\n";
-    s += "@block{padding:20;margin:20;background:#16213e;border-radius:8;\n";
-    s += "  @button{id:\"btn_yesno\";content:\"Yes/No?\";width:200;height:40;background:#e94560;}\n";
-    s += "  @text{id:\"result\";content:\"Click above\";size:15;color:#aaaacc;}\n}\n";
-    s += "@block{padding:10;margin:20;background:#16213e;border-radius:8;\n";
-    s += "  @link{content:\"Home\";url:\"about:home\";color:#0abde3;size:16;}\n}\n";
-    s += "@script{\n";
-    s += "on_click('btn_yesno',function()\n";
-    s += "  if msgBox then\n";
-    s += "    msgBox('Test','Delete?',{yes=function() set_text('result','Yes!') end,no=function() set_text('result','No!') end})\n";
-    s += "  else set_text('result','No plugin loaded') end\n";
-    s += "end)\n";
-    s += "}\n";
-    return s;
+@block { align:"center"; padding:20; margin:0; background:"#09090b";
+    @row { gap:20;
+        @column { background:"#18181b"; padding:25; border-radius:10;
+            @text { content:"[*] Custom Rendering"; size:20; color:"#fafafa"; bold:"true"; }
+            @divider { color:"#27272a"; thickness:1; margin:15; }
+            @text { content:"No CEF or Chromium overhead. Everything is drawn natively using WinAPI, GDI+, and custom layout algorithms."; size:15; color:"#a1a1aa"; }
+        }
+        @column { background:"#18181b"; padding:25; border-radius:10;
+            @text { content:"[+] Lua 5.4 Powered"; size:20; color:"#fafafa"; bold:"true"; }
+            @divider { color:"#27272a"; thickness:1; margin:15; }
+            @text { content:"Fast and lightweight scripting. Direct bindings to DOM elements, inputs, and canvases without JS bloat."; size:15; color:"#a1a1aa"; }
+        }
+        @column { background:"#18181b"; padding:25; border-radius:10;
+            @text { content:"[>] OpenGL Integration"; size:20; color:"#fafafa"; bold:"true"; }
+            @divider { color:"#27272a"; thickness:1; margin:15; }
+            @text { content:"Hardware-accelerated canvases embedded directly into the UI flow with full mouse capture support."; size:15; color:"#a1a1aa"; }
+        }
+        @column { background:"#18181b"; padding:25; border-radius:10;
+            @text { content:"[~] Native Plugins"; size:20; color:"#fafafa"; bold:"true"; }
+            @divider { color:"#27272a"; thickness:1; margin:15; }
+            @text { content:"Extend the engine dynamically using C++ DLLs. Add new network protocols, physics, or OS integrations."; size:15; color:"#a1a1aa"; }
+        }
+    }
+    @br { size:40; }
+    @button { content:"Back to Home"; width:180; height:40; background:"#27272a"; color:"#fafafa"; border-radius:6; url:"about:home"; size:15; }
 }
-std::string error(const std::string& e, const std::string& u) {
-    return "@page{title:\"Error\";background:#1a0000;}\n"
-        "@block{align:center;padding:40;margin:30;background:#2a1010;border-radius:10;\n"
-        "  @text{content:\"Error\";size:32;color:#ff4444;bold:true;}\n"
-        "  @br{size:15;}\n"
-        "  @text{content:\"" + e + "\";size:16;color:#ff8888;}\n"
-        "  @text{content:\"" + u + "\";size:14;color:#aa6666;}\n"
-        "  @br{size:20;}\n"
-        "  @link{content:\"Home\";url:\"about:home\";color:#0abde3;size:16;}\n}\n";
+)htp";
+    }
+
+    std::string glDemo() {
+        return R"htp(
+@page { title:"Lume - 3D Engine"; background:"#09090b"; }
+@block { align:"center"; padding:30; background:"#09090b"; margin:0;
+  @text { content:"Hardware Acceleration"; size:36; color:"#fafafa"; bold:"true"; }
+  @br { size:5; }
+  @text { content:"Click canvas to capture mouse | ESC to release | F11 for Fullscreen"; size:15; color:"#71717a"; }
 }
+@block { align:"center"; padding:0; margin:10; background:"#09090b";
+  @column { background:"#18181b"; padding:25; border-radius:12; width:650;
+    @glcanvas { id:"gl1"; width:600; height:400; border-color:"#27272a"; }
+    @br { size:20; }
+    @row { gap:20;
+      @button { id:"btn_spin"; content:"Toggle Animation"; width:160; height:35; background:"#3f3f46"; color:"#ffffff"; border-radius:6; }
+      @text { id:"gl_status"; content:"Status: Animated"; size:15; color:"#10b981"; }
+    }
+  }
+  @br { size:30; }
+  @button { content:"Back to Home"; width:180; height:40; background:"#27272a"; color:"#fafafa"; border-radius:6; url:"about:home"; size:15; }
+}
+@script {
+  local animating = true 
+  local tid = nil
+  local function rgl()
+    if not gl_available() then return end
+    if not gl_begin_render('gl1', 600, 400) then return end
+    local time = get_time()
+    if not animating then time = 0 end
+    local curW, curH = 600, 400
+    if is_fullscreen() then
+        curW, curH = get_window_size()
+    end
+    if curH == 0 then curH = 1 end
+    gl_viewport(0, 0, curW, curH)
+    gl_matrix_mode(GL_PROJECTION)
+    gl_load_identity()
+    glu_perspective(50, curW / curH, 0.1, 100)
+    gl_matrix_mode(GL_MODELVIEW)
+    gl_load_identity()
+    glu_look_at(0, 2.5, 7, 0, 0, 0, 0, 1, 0)
+    gl_clear(0.04, 0.04, 0.06, 1)
+    gl_enable(GL_DEPTH_TEST)
+    gl_enable(GL_BLEND)
+    gl_blend_func(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+    gl_push_matrix()
+    local grid_offset = (time * 3.0) % 1.0
+    gl_translatef(0, -1.5, grid_offset)
+    gl_line_width(2.0)
+    gl_begin(GL_LINES)
+    for i = -15, 15 do
+        gl_color(0.9, 0.2, 0.6, 0.4)
+        gl_vertex3f(i, 0, -15)
+        gl_vertex3f(i, 0, 15)
+        local alpha = 1.0 - (math.abs(i) / 15.0)
+        if alpha < 0 then alpha = 0 end
+        gl_color(0.1, 0.8, 0.9, alpha * 0.6)
+        gl_vertex3f(-15, 0, i)
+        gl_vertex3f(15, 0, i)
+    end
+    gl_end()
+    gl_pop_matrix()
+    gl_push_matrix()
+    local float_y = math.sin(time * 2.5) * 0.4
+    gl_translatef(0, float_y + 0.5, 0)
+    gl_rotatef(time * 40, 0, 1, 0)
+    gl_rotatef(time * 15, 1, 0, 0)
+    gl_begin(GL_TRIANGLES)
+    gl_color(0.9, 0.2, 0.6, 0.6) gl_vertex3f(0,1.5,0) gl_vertex3f(-1,0,1) gl_vertex3f(1,0,1)
+    gl_color(0.7, 0.1, 0.8, 0.6) gl_vertex3f(0,1.5,0) gl_vertex3f(1,0,1) gl_vertex3f(1,0,-1)
+    gl_color(0.5, 0.0, 0.9, 0.6) gl_vertex3f(0,1.5,0) gl_vertex3f(1,0,-1) gl_vertex3f(-1,0,-1)
+    gl_color(0.8, 0.0, 0.5, 0.6) gl_vertex3f(0,1.5,0) gl_vertex3f(-1,0,-1) gl_vertex3f(-1,0,1)
+    gl_color(0.1, 0.8, 0.9, 0.6) gl_vertex3f(0,-1.5,0) gl_vertex3f(1,0,1) gl_vertex3f(-1,0,1)
+    gl_color(0.1, 0.6, 0.9, 0.6) gl_vertex3f(0,-1.5,0) gl_vertex3f(1,0,-1) gl_vertex3f(1,0,1)
+    gl_color(0.1, 0.4, 0.9, 0.6) gl_vertex3f(0,-1.5,0) gl_vertex3f(-1,0,-1) gl_vertex3f(1,0,-1)
+    gl_color(0.1, 0.5, 0.7, 0.6) gl_vertex3f(0,-1.5,0) gl_vertex3f(-1,0,1) gl_vertex3f(-1,0,-1)
+    gl_end()
+    gl_disable(GL_DEPTH_TEST)
+    gl_line_width(2.0)
+    gl_color(1, 1, 1, 0.9)
+    gl_begin(GL_LINES)
+    local pts = { {0,1.5,0}, {0,-1.5,0}, {1,0,1}, {-1,0,1}, {1,0,-1}, {-1,0,-1} }
+    local edges = { {1,3},{1,4},{1,5},{1,6}, {2,3},{2,4},{2,5},{2,6}, {3,4},{4,6},{6,5},{5,3} }
+    for i=1, #edges do
+        gl_vertex3f(pts[edges[i][1]][1], pts[edges[i][1]][2], pts[edges[i][1]][3])
+        gl_vertex3f(pts[edges[i][2]][1], pts[edges[i][2]][2], pts[edges[i][2]][3])
+    end
+    gl_end()
+    gl_pop_matrix()
+    gl_end_render('gl1') 
+    gl_refresh('gl1')
+  end
+  rgl()
+  tid = set_timer(16, rgl)
+  on_click('btn_spin', function()
+    animating = not animating
+    if animating then 
+      set_text('gl_status', 'Status: Animated')
+      if not tid then tid = set_timer(16, rgl) end
+    else 
+      set_text('gl_status', 'Status: Paused') 
+      if tid then kill_timer(tid) tid = nil end 
+      rgl() 
+    end
+  end)
+  on_key_down(function(vk)
+    if vk == VK_F11 then
+        fullscreen_canvas('gl1', not is_fullscreen())
+    end
+  end)
+}
+)htp";
+    }
+    std::string pluginDemo() {
+        return R"htp(
+@page { title:"Lume - Plugins"; background:"#09090b"; }
+@block { align:"center"; padding:40; background:"#09090b"; margin:0;
+  @text { content:"Native Plugin Bridge"; size:36; color:"#fafafa"; bold:"true"; }
+  @br { size:5; }
+  @text { content:"Triggering OS-level calls via dynamically loaded C++ DLLs."; size:15; color:"#71717a"; }
+}
+@block { align:"center"; padding:0; margin:10; background:"#09090b";
+  @column { background:"#18181b"; padding:30; border-radius:12; width:400;
+    @text { content:"Test Windows Message Box"; size:18; color:"#fafafa"; bold:"true"; }
+    @divider { color:"#27272a"; thickness:1; margin:15; }
+    @text { content:"This button uses Lua to call a C++ plugin function that interacts with the Windows API natively."; size:14; color:"#a1a1aa"; }
+    @br { size:25; }
+    @button { id:"btn_yesno"; content:"Execute Plugin"; width:200; height:40; background:"#3b82f6"; color:"#ffffff"; border-radius:6; size:15; }
+    @br { size:20; }
+    @text { id:"result"; content:"Waiting for input..."; size:14; color:"#f59e0b"; }
+  }
+  @br { size:30; }
+  @button { content:"Back to Home"; width:180; height:40; background:"#27272a"; color:"#fafafa"; border-radius:6; url:"about:home"; size:15; }
+}
+
+@script {
+  on_click('btn_yesno', function()
+    if msgBox then
+      msgBox('Lume Engine', 'Do you want to proceed with this native action?', {
+        yes = function() set_text('result', 'Result: User clicked YES') end,
+        no = function() set_text('result', 'Result: User clicked NO') end
+      })
+    else 
+      set_text('result', 'Error: Plugin DLL not found in /plugins folder.') 
+    end
+  end)
+}
+)htp";
+    }
+    std::string error(const std::string& e, const std::string& u) {
+        return "@page{title:\"Error\";background:#1a0000;}\n"
+            "@block{align:center;padding:40;margin:30;background:#2a1010;border-radius:10;\n"
+            "  @text{content:\"Error\";size:32;color:#ff4444;bold:true;}\n"
+            "  @br{size:15;}\n"
+            "  @text{content:\"" + e + "\";size:16;color:#ff8888;}\n"
+            "  @text{content:\"" + u + "\";size:14;color:#aa6666;}\n"
+            "  @br{size:20;}\n"
+            "  @link{content:\"Home\";url:\"about:home\";color:#0abde3;size:16;}\n}\n";
+    }
 }
 HTP::Doc g_doc;
 Render::Engine g_ren;
