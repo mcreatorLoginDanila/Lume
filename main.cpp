@@ -18,12 +18,17 @@
 #include <cmath>
 #include <cstring>
 #include <cctype>
+#include <thread>
+#include <mutex>
 extern "C" {
 #include "lib/lua.h"
 #include "lib/lauxlib.h"
 #include "lib/lualib.h"
 }
 #include "lume_plugin.h"
+#include <objidl.h>
+#include <gdiplus.h>
+#pragma comment(lib, "gdiplus.lib")
 #pragma comment(lib, "ws2_32.lib")
 #pragma comment(lib, "gdi32.lib")
 #pragma comment(lib, "user32.lib")
@@ -91,7 +96,7 @@ const int STATUS_H = 24;
 #define ID_BACK 1003
 #define ID_FWD  1004
 #define ID_REF  1005
-
+ULONG_PTR g_gdiplusToken;
 static HDC g_backDC = nullptr;
 static HBITMAP g_backBmp = nullptr;
 static HBITMAP g_backOld = nullptr;
@@ -693,6 +698,125 @@ Resp fetch(const URL& url) {
 }
 Resp fetchUrl(const std::string& u) { return fetch(URL::parse(u)); }
 }
+namespace AsyncNet {
+    struct DLState {
+        int status = 0;
+        std::string localPath;
+        size_t downloadedBytes = 0;
+        size_t totalBytes = 0;
+    };
+    std::map<std::string, DLState> g_downloads;
+    std::mutex g_dlMutex;
+    std::string getTempDir() {
+        char ep[MAX_PATH] = {};
+        GetModuleFileNameA(nullptr, ep, MAX_PATH);
+        std::string dir = ep;
+        auto ls = dir.find_last_of("\\/");
+        dir = (ls != std::string::npos) ? dir.substr(0, ls + 1) : ".\\";
+        std::string td = dir + "temp\\";
+        CreateDirectoryA(td.c_str(), nullptr);
+        return td;
+    }
+    void startDownload(const std::string& urlStr, const std::string& filename) {
+        {
+            std::lock_guard<std::mutex> lock(g_dlMutex);
+            g_downloads[urlStr] = { 0, "", 0, 0 };
+        }
+        std::thread([urlStr, filename]() {
+            Net::URL url = Net::URL::parse(urlStr);
+            std::string outPath = getTempDir() + filename;
+            auto setError = [&]() {
+                std::lock_guard<std::mutex> lock(g_dlMutex);
+                g_downloads[urlStr].status = -1;
+                };
+            addrinfo hints = {}, * res = nullptr;
+            hints.ai_family = AF_INET;
+            hints.ai_socktype = SOCK_STREAM;
+            if (getaddrinfo(url.host.c_str(), std::to_string(url.port).c_str(), &hints, &res) != 0) {
+                setError(); return;
+            }
+            SOCKET s = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+            if (s == INVALID_SOCKET) { freeaddrinfo(res); setError(); return; }
+            DWORD to = 15000;
+            setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, (char*)&to, sizeof(to));
+            setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, (char*)&to, sizeof(to));
+            if (connect(s, res->ai_addr, (int)res->ai_addrlen) == SOCKET_ERROR) {
+                closesocket(s); freeaddrinfo(res); setError(); return;
+            }
+            freeaddrinfo(res);
+            std::string req = "GET " + url.path + " HTTP/1.1\r\n"
+                "Host: " + url.host + "\r\n"
+                "User-Agent: Lume\r\n"
+                "Connection: close\r\n\r\n";
+            send(s, req.c_str(), (int)req.length(), 0);
+            char buf[8192];
+            std::string headerStr;
+            int n = 0;
+            bool headersParsed = false;
+            size_t contentLength = 0;
+            std::ofstream outFile;
+            while ((n = recv(s, buf, sizeof(buf), 0)) > 0) {
+                if (!headersParsed) {
+                    headerStr.append(buf, n);
+                    auto pos = headerStr.find("\r\n\r\n");
+                    if (pos != std::string::npos) {
+                        headersParsed = true;
+                        int code = 0;
+                        auto spacePos = headerStr.find(' ');
+                        if (spacePos != std::string::npos) {
+                            try { code = std::stoi(headerStr.substr(spacePos + 1, 3)); }
+                            catch (...) {}
+                        }
+                        if (code < 200 || code >= 400) { closesocket(s); setError(); return; }
+                        std::string lowerHeader = headerStr;
+                        for (char& c : lowerHeader) c = (char)std::tolower((unsigned char)c);
+                        auto clPos = lowerHeader.find("content-length:");
+                        if (clPos != std::string::npos) {
+                            auto endLine = lowerHeader.find("\r\n", clPos);
+                            if (endLine != std::string::npos) {
+                                std::string clStr = headerStr.substr(clPos + 15, endLine - (clPos + 15));
+                                try { contentLength = std::stoull(clStr); }
+                                catch (...) {}
+                            }
+                        }
+                        {
+                            std::lock_guard<std::mutex> lock(g_dlMutex);
+                            g_downloads[urlStr].totalBytes = contentLength;
+                        }
+                        outFile.open(outPath, std::ios::binary);
+                        if (!outFile) { closesocket(s); setError(); return; }
+                        size_t headerSize = pos + 4;
+                        size_t bodyPartSize = headerStr.size() - headerSize;
+                        if (bodyPartSize > 0) {
+                            outFile.write(headerStr.data() + headerSize, bodyPartSize);
+                            std::lock_guard<std::mutex> lock(g_dlMutex);
+                            g_downloads[urlStr].downloadedBytes += bodyPartSize;
+                        }
+                    }
+                }
+                else {
+                    outFile.write(buf, n);
+                    std::lock_guard<std::mutex> lock(g_dlMutex);
+                    g_downloads[urlStr].downloadedBytes += n;
+                }
+            }
+            if (outFile.is_open()) outFile.close();
+            closesocket(s);
+            std::lock_guard<std::mutex> lock(g_dlMutex);
+            bool success = (n == 0);
+            if (contentLength > 0 && g_downloads[urlStr].downloadedBytes >= contentLength) {
+                success = true;
+            }
+            if (success) {
+                g_downloads[urlStr].status = 1;
+                g_downloads[urlStr].localPath = outPath;
+            }
+            else {
+                g_downloads[urlStr].status = -1;
+            }
+            }).detach();
+    }
+}
 namespace Canvas {
 struct Buf {
     int w = 0, h = 0;
@@ -1077,29 +1201,139 @@ namespace GLCanvas {
 
 }
 namespace GradientText {
-void draw(HDC dc, const std::string& text, HFONT font, int x, int y, HTP::Color c1, HTP::Color c2, float shimmer_offset = 0.0f) {
-    if (text.empty()) return;
-    auto of = SelectObject(dc, font);
-    SetBkMode(dc, TRANSPARENT);
-    int cx = x;
-    int len = (int)text.length();
-    for (int i = 0; i < len; i++) {
-        float t = (len > 1) ? (float)i / (float)(len - 1) : 0.0f;
-        t += shimmer_offset;
-        t = t - floorf(t);
-        float wave = (t < 0.5f) ? t * 2.0f : 2.0f - t * 2.0f;
-        int r = (std::max)(0, (std::min)(255, (int)(c1.r + (c2.r - c1.r) * wave)));
-        int g = (std::max)(0, (std::min)(255, (int)(c1.g + (c2.g - c1.g) * wave)));
-        int b = (std::max)(0, (std::min)(255, (int)(c1.b + (c2.b - c1.b) * wave)));
-        SetTextColor(dc, RGB(r, g, b));
-        char ch = text[i];
-        TextOutA(dc, cx, y, &ch, 1);
-        SIZE sz;
-        GetTextExtentPoint32A(dc, &ch, 1, &sz);
-        cx += sz.cx;
+    struct HSV { float h, s, v; };
+    static HSV rgb2hsv(HTP::Color c) {
+        float r = c.r / 255.0f;
+        float g = c.g / 255.0f;
+        float b = c.b / 255.0f;
+        float max_val = (std::max)(r, (std::max)(g, b));
+        float min_val = (std::min)(r, (std::min)(g, b));
+        float d = max_val - min_val;
+        float h = 0.0f;
+        float s = (max_val == 0.0f) ? 0.0f : (d / max_val);
+        float v = max_val;
+        if (d != 0.0f) {
+            if (max_val == r) {
+                h = (g - b) / d + (g < b ? 6.0f : 0.0f);
+            }
+            else if (max_val == g) {
+                h = (b - r) / d + 2.0f;
+            }
+            else {
+                h = (r - g) / d + 4.0f;
+            }
+            h /= 6.0f;
+        }
+        return { h * 360.0f, s, v };
     }
-    SelectObject(dc, of);
-}
+    static HTP::Color hsv2rgb(HSV hsv) {
+        float c = hsv.v * hsv.s;
+        float x = c * (1.0f - std::abs(fmodf(hsv.h / 60.0f, 2.0f) - 1.0f));
+        float m = hsv.v - c;
+        float r = 0, g = 0, b = 0;
+        if (hsv.h >= 0 && hsv.h < 60) { r = c; g = x; b = 0; }
+        else if (hsv.h >= 60 && hsv.h < 120) { r = x; g = c; b = 0; }
+        else if (hsv.h >= 120 && hsv.h < 180) { r = 0; g = c; b = x; }
+        else if (hsv.h >= 180 && hsv.h < 240) { r = 0; g = x; b = c; }
+        else if (hsv.h >= 240 && hsv.h < 300) { r = x; g = 0; b = c; }
+        else { r = c; g = 0; b = x; }
+        return {
+            (int)((r + m) * 255.0f),
+            (int)((g + m) * 255.0f),
+            (int)((b + m) * 255.0f),
+            255
+        };
+    }
+    static HTP::Color lerpColor(HTP::Color c1, HTP::Color c2, float t) {
+        if (t < 0.0f) t = 0.0f;
+        if (t > 1.0f) t = 1.0f;
+        HSV hsv1 = rgb2hsv(c1);
+        HSV hsv2 = rgb2hsv(c2);
+        float h1 = hsv1.h;
+        float h2 = hsv2.h;
+        float d = h2 - h1;
+        if (d > 180.0f) {
+            h1 += 360.0f;
+        }
+        else if (d < -180.0f) {
+            h2 += 360.0f;
+        }
+        float h = h1 + (h2 - h1) * t;
+        if (h >= 360.0f) h -= 360.0f;
+        if (h < 0.0f) h += 360.0f;
+        float s = hsv1.s + (hsv2.s - hsv1.s) * t;
+        float v = hsv1.v + (hsv2.v - hsv1.v) * t;
+        return hsv2rgb({ h, s, v });
+    }
+    void draw(HDC dc, const std::string& text, HFONT font,int x, int y, HTP::Color c1, HTP::Color c2,float shimmer_offset = 0.0f)
+    {
+        if (text.empty()) return;
+        HFONT oldFont = (HFONT)SelectObject(dc, font);
+        SetBkMode(dc, TRANSPARENT);
+        SIZE totalSz;
+        GetTextExtentPoint32A(dc, text.c_str(), (int)text.length(), &totalSz);
+        int W = totalSz.cx;
+        int H = totalSz.cy;
+        if (W <= 0 || H <= 0) {
+            SelectObject(dc, oldFont);
+            return;
+        }
+        BITMAPINFO bmi = {};
+        bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+        bmi.bmiHeader.biWidth = W;
+        bmi.bmiHeader.biHeight = -H;
+        bmi.bmiHeader.biPlanes = 1;
+        bmi.bmiHeader.biBitCount = 32;
+        bmi.bmiHeader.biCompression = BI_RGB;
+        BYTE* maskBits = nullptr;
+        HDC maskDC = CreateCompatibleDC(dc);
+        HBITMAP maskBmp = CreateDIBSection(maskDC, &bmi, DIB_RGB_COLORS,(void**)&maskBits, NULL, 0);
+        HBITMAP oldMaskBmp = (HBITMAP)SelectObject(maskDC, maskBmp);
+        HFONT oldMaskFont = (HFONT)SelectObject(maskDC, font);
+        memset(maskBits, 0, W * H * 4);
+        SetBkMode(maskDC, TRANSPARENT);
+        SetTextColor(maskDC, RGB(255, 255, 255));
+        TextOutA(maskDC, 0, 0, text.c_str(), (int)text.length());
+        GdiFlush();
+        BYTE* outBits = nullptr;
+        HDC outDC = CreateCompatibleDC(dc);
+        HBITMAP outBmp = CreateDIBSection(outDC, &bmi, DIB_RGB_COLORS,(void**)&outBits, NULL, 0);
+        HBITMAP oldOutBmp = (HBITMAP)SelectObject(outDC, outBmp);
+        BitBlt(outDC, 0, 0, W, H, dc, x, y, SRCCOPY);
+        GdiFlush();
+        float span = 2.0f;
+        for (int py = 0; py < H; py++) {
+            for (int px = 0; px < W; px++) {
+                int idx = (py * W + px) * 4;
+                BYTE mask = maskBits[idx];
+                if (mask == 0) continue;
+                float normX = (W > 1) ? (float)px / (float)(W - 1) : 0.0f;
+                float t = normX + shimmer_offset;
+                t = fmodf(t, span);
+                if (t < 0.f) t += span;
+                if (t > 1.0f) t = span - t;
+                if (t < 0.f) t = 0.f;
+                if (t > 1.f) t = 1.f;
+                HTP::Color gc = lerpColor(c1, c2, t);
+                float alpha = mask / 255.0f;
+                BYTE bgB = outBits[idx + 0];
+                BYTE bgG = outBits[idx + 1];
+                BYTE bgR = outBits[idx + 2];
+                outBits[idx + 0] = (BYTE)(bgB + (gc.b - bgB) * alpha);
+                outBits[idx + 1] = (BYTE)(bgG + (gc.g - bgG) * alpha);
+                outBits[idx + 2] = (BYTE)(bgR + (gc.r - bgR) * alpha);
+            }
+        }
+        BitBlt(dc, x, y, W, H, outDC, 0, 0, SRCCOPY);
+        SelectObject(maskDC, oldMaskFont);
+        SelectObject(maskDC, oldMaskBmp);
+        DeleteObject(maskBmp);
+        DeleteDC(maskDC);
+        SelectObject(outDC, oldOutBmp);
+        DeleteObject(outBmp);
+        DeleteDC(outDC);
+        SelectObject(dc, oldFont);
+    }
 }
 static void gluPerspective_impl(double fovY, double aspect, double zNear, double zFar) {
     double f = 1.0 / tan(fovY * 3.14159265358979323846 / 360.0);
@@ -1467,7 +1701,12 @@ static int l_set_timer(lua_State* L) {
         if (i == g_timerRefs.end() || !g_L) return;
 
         lua_rawgeti(g_L, LUA_REGISTRYINDEX, i->second);
-        if (lua_pcall(g_L, 0, 0, 0) != 0) lua_pop(g_L, 1);
+        if (lua_pcall(g_L, 0, 0, 0) != 0) {
+            const char* err = lua_tostring(g_L, -1);
+            OutputDebugStringA(err ? err : "Lua timer error\n");
+            MessageBoxA(g_hwnd, err ? err : "Unknown error", "Lua Timer Error", MB_OK | MB_ICONERROR);
+            lua_pop(g_L, 1);
+        }
     });
     lua_pushinteger(L, tid);
     return 1;
@@ -1543,6 +1782,119 @@ static int l_glu_sphere(lua_State* L) {
     gluDeleteQuadric(q);
     return 0;
 }
+static int l_gl_bind_texture(lua_State* L) {
+    glBindTexture(GL_TEXTURE_2D, (GLuint)luaL_checkinteger(L, 1)); return 0;
+}
+static int l_gl_text_coord2f(lua_State* L) {
+    glTexCoord2f((float)luaL_checknumber(L, 1), (float)luaL_checknumber(L, 2)); return 0;
+}
+static int l_gl_load_texture(lua_State* L) {
+    const char* path = luaL_checkstring(L, 1);
+    int len = MultiByteToWideChar(CP_UTF8, 0, path, -1, NULL, 0);
+    std::wstring wpath(len, 0);
+    MultiByteToWideChar(CP_UTF8, 0, path, -1, &wpath[0], len);
+    Gdiplus::Bitmap bmp(wpath.c_str());
+    if (bmp.GetLastStatus() != Gdiplus::Ok) {
+        lua_pushnil(L);
+        return 1;
+    }
+    int w = bmp.GetWidth();
+    int h = bmp.GetHeight();
+    Gdiplus::Rect rect(0, 0, w, h);
+    Gdiplus::BitmapData bmpData;
+    bmp.LockBits(&rect, Gdiplus::ImageLockModeRead, PixelFormat32bppARGB, &bmpData);
+    std::vector<unsigned char> pixels(w * h * 4);
+    const unsigned char* src = (const unsigned char*)bmpData.Scan0;
+    int stride = bmpData.Stride;
+    for (int y = 0; y < h; y++) {
+        for (int x = 0; x < w; x++) {
+            int i = y * stride + x * 4;
+            int p = (y * w + x) * 4;
+            pixels[p + 0] = src[i + 2];
+            pixels[p + 1] = src[i + 1];
+            pixels[p + 2] = src[i + 0];
+            pixels[p + 3] = src[i + 3];
+        }
+    }
+    bmp.UnlockBits(&bmpData);
+    GLuint texID;
+    glGenTextures(1, &texID);
+    glBindTexture(GL_TEXTURE_2D, texID);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+
+    lua_pushinteger(L, texID);
+    return 1;
+}
+static int l_gl_load_obj(lua_State* L) {
+    const char* path = luaL_checkstring(L, 1);
+    std::ifstream file(path);
+    if (!file) {
+        lua_pushnil(L);
+        return 1;
+    }
+    std::vector<float> verts;
+    GLuint listId = glGenLists(1);
+    glNewList(listId, GL_COMPILE);
+    glBegin(GL_TRIANGLES);
+    std::string line;
+    while (std::getline(file, line)) {
+        if (line.length() >= 2 && line.substr(0, 2) == "v ") {
+            float x, y, z;
+            if (sscanf(line.c_str(), "v %f %f %f", &x, &y, &z) == 3) {
+                verts.push_back(x);
+                verts.push_back(y);
+                verts.push_back(z);
+            }
+        }
+        else if (line.length() >= 2 && line.substr(0, 2) == "f ") {
+            std::istringstream iss(line.substr(2));
+            std::string token;
+            std::vector<int> face_verts;
+            while (iss >> token) {
+                int v = 0;
+                if (sscanf(token.c_str(), "%d", &v) == 1) {
+                    face_verts.push_back(v);
+                }
+            }
+            if (face_verts.size() >= 3) {
+                glVertex3f(verts[(face_verts[0] - 1) * 3], verts[(face_verts[0] - 1) * 3 + 1], verts[(face_verts[0] - 1) * 3 + 2]);
+                glVertex3f(verts[(face_verts[1] - 1) * 3], verts[(face_verts[1] - 1) * 3 + 1], verts[(face_verts[1] - 1) * 3 + 2]);
+                glVertex3f(verts[(face_verts[2] - 1) * 3], verts[(face_verts[2] - 1) * 3 + 1], verts[(face_verts[2] - 1) * 3 + 2]);
+                if (face_verts.size() >= 4) {
+                    glVertex3f(verts[(face_verts[0] - 1) * 3], verts[(face_verts[0] - 1) * 3 + 1], verts[(face_verts[0] - 1) * 3 + 2]);
+                    glVertex3f(verts[(face_verts[2] - 1) * 3], verts[(face_verts[2] - 1) * 3 + 1], verts[(face_verts[2] - 1) * 3 + 2]);
+                    glVertex3f(verts[(face_verts[3] - 1) * 3], verts[(face_verts[3] - 1) * 3 + 1], verts[(face_verts[3] - 1) * 3 + 2]);
+                }
+            }
+        }
+    }
+    glEnd();
+    glEndList();
+    lua_pushinteger(L, listId);
+    return 1;
+}
+static int l_download_async(lua_State* L) {
+    std::string url = luaL_checkstring(L, 1);
+    std::string fname = luaL_checkstring(L, 2);
+    AsyncNet::startDownload(url, fname);
+    return 0;
+}
+static int l_download_status(lua_State* L) {
+    std::string url = luaL_checkstring(L, 1);
+    std::lock_guard<std::mutex> lock(AsyncNet::g_dlMutex);
+    auto it = AsyncNet::g_downloads.find(url);
+    if (it != AsyncNet::g_downloads.end()) {
+        lua_pushinteger(L, it->second.status);
+        lua_pushstring(L, it->second.localPath.c_str());
+        lua_pushinteger(L, (lua_Integer)it->second.downloadedBytes);
+        lua_pushinteger(L, (lua_Integer)it->second.totalBytes);
+        return 4;
+    }
+    lua_pushinteger(L, -404);
+    return 1;
+}
 void registerGLConstants(lua_State* L) {
     struct { const char* n; int v; } cs[] = {
         {"GL_POINTS",GL_POINTS},{"GL_LINES",GL_LINES},{"GL_LINE_STRIP",GL_LINE_STRIP},{"GL_LINE_LOOP",GL_LINE_LOOP},
@@ -1560,6 +1912,7 @@ void registerGLConstants(lua_State* L) {
         {"GL_ONE_MINUS_SRC_ALPHA", 0x0303},
         {"GL_ONE", 1},
         {"GL_ZERO", 0},
+        {"GL_TEXTURE_2D", 0x0DE1},
         {nullptr,0}
     };
     for (int i = 0; cs[i].n; i++) {
@@ -1639,6 +1992,12 @@ void init() {
     lua_register(g_L, "on_canvas_click", l_on_canvas_click);
     lua_register(g_L, "gl_blend_func", l_gl_blend_func);
     lua_register(g_L, "glu_sphere", l_glu_sphere);
+    lua_register(g_L, "gl_bind_texture", l_gl_bind_texture);
+    lua_register(g_L, "gl_text_coord2f", l_gl_text_coord2f);
+    lua_register(g_L, "gl_load_texture", l_gl_load_texture);
+    lua_register(g_L, "gl_load_obj", l_gl_load_obj);
+    lua_register(g_L, "download_async", l_download_async);
+    lua_register(g_L, "download_status", l_download_status);
     registerGLConstants(g_L);
     Plugins::initAllPlugins(g_L);
 }
@@ -1719,8 +2078,14 @@ struct Hit {
     bool isInput = false, isBtn = false, isGLCanvas = false;
     std::string canvasId;
     int canvasW = 0, canvasH = 0;
+    int zIndex = 0;
 };
 class Engine {
+    struct RenderCmd {
+        int zIndex;
+        std::function<void()> drawCall;
+    };
+    std::vector<RenderCmd> renderQueue;
     int scrollY = 0, contentH = 0, curY = 0;
     std::vector<Hit>* pH = nullptr;
     HDC refDC = nullptr;
@@ -1827,13 +2192,18 @@ class Engine {
             int pad = e->props.getInt("padding", 5);
             int rad = e->props.getInt("border-radius", 4);
             std::string bg = e->props.get("background", "");
-            int th = 0;
-            for (auto& c : e->children) th += estH(c);
-            th += pad * 2;
-
-            if (!bg.empty()) fillRR(dc, x, y - scrollY, mw, th, HTP::Color::fromHex(bg), rad);
+            int z = e->props.getInt("z-index", 0);
+            auto realHeight = std::make_shared<int>(0);
+            if (!bg.empty()) {
+                renderQueue.push_back({ z, [=]() {
+                    fillRR(dc, x, y - scrollY, mw, *realHeight, HTP::Color::fromHex(bg), rad);
+                } });
+            }
             curY = y + pad;
-            for (auto& c : e->children) draw(dc, c, x + pad, curY, mw - pad * 2);
+            for (auto& c : e->children) {
+                draw(dc, c, x + pad, curY, mw - pad * 2);
+            }
+            *realHeight = (curY - y) + pad;
             curY += pad;
             break;
         }
@@ -1843,11 +2213,15 @@ class Engine {
             int rad = e->props.getInt("border-radius", 6);
             std::string bg = e->props.get("background", "");
             std::string align = e->props.get("align", "left");
-            int iy = y + mar + pad, ty = iy;
-            for (auto& c : e->children) ty += estH(c);
-            int bh = (ty - iy) + pad * 2;
-            if (!bg.empty()) fillRR(dc, x + mar, y + mar - scrollY, mw - mar * 2, bh, HTP::Color::fromHex(bg), rad);
-            curY = iy;
+            int z = e->props.getInt("z-index", 0);
+            auto realHeight = std::make_shared<int>(0);
+            int startY = y + mar;
+            if (!bg.empty()) {
+                renderQueue.push_back({ z, [=]() {
+                    fillRR(dc, x + mar, startY - scrollY, mw - mar * 2, *realHeight, HTP::Color::fromHex(bg), rad);
+                } });
+            }
+            curY = startY + pad;
             for (auto& c : e->children) {
                 int cx = x + mar + pad;
                 int cmw = mw - (mar + pad) * 2;
@@ -1857,6 +2231,7 @@ class Engine {
                 }
                 draw(dc, c, cx, curY, cmw);
             }
+            *realHeight = (curY - startY) + pad;
             curY += pad + mar;
             break;
         }
@@ -1881,27 +2256,34 @@ class Engine {
                 auto si = Script::g_shimmer_offsets.find(id);
                 if (si != Script::g_shimmer_offsets.end()) shimmer = si->second;
             }
+            int z = e->props.getInt("z-index", 0);
             HFONT f = FontCache::get(sz,
                 e->props.getBool("bold"),
                 e->props.getBool("italic"),
                 e->props.get("font", "Segoe UI").c_str());
             int drawY = y - scrollY + offset_y;
-            if (!grad.empty()) {
-                GradientText::draw(dc, ct, f, x, drawY, col, HTP::Color::fromHex(grad), shimmer);
-                curY = y + sz + 4;
-            }
-            else {
+            int th = 0;
+            if (grad.empty()) {
                 auto of = SelectObject(dc, f);
-                SetTextColor(dc, col.cr());
-                SetBkMode(dc, TRANSPARENT);
-                RECT rc = { x, drawY, x + mw, drawY + 1000 };
-                DrawTextA(dc, ct.c_str(), -1, &rc, DT_WORDBREAK | DT_CALCRECT);
-                int th = rc.bottom - rc.top;
-                rc.bottom = rc.top + th;
-                DrawTextA(dc, ct.c_str(), -1, &rc, DT_WORDBREAK);
+                RECT rcCalc = { x, drawY, x + mw, drawY + 1000 };
+                DrawTextA(dc, ct.c_str(), -1, &rcCalc, DT_WORDBREAK | DT_CALCRECT);
+                th = rcCalc.bottom - rcCalc.top;
                 SelectObject(dc, of);
-                curY = y + th + 4;
             }
+            renderQueue.push_back({ z, [=]() {
+                if (!grad.empty()) {
+                    GradientText::draw(dc, ct, f, x, drawY, col, HTP::Color::fromHex(grad), shimmer);
+                }
+                else {
+                    auto of = SelectObject(dc, f);
+                    SetTextColor(dc, col.cr());
+                    SetBkMode(dc, TRANSPARENT);
+                    RECT rcDraw = { x, drawY, x + mw, drawY + th };
+                    DrawTextA(dc, ct.c_str(), -1, &rcDraw, DT_WORDBREAK);
+                    SelectObject(dc, of);
+                }
+            } });
+            curY = y + (grad.empty() ? th : sz) + 4;
             break;
         }
         case HTP::EType::LINK: {
@@ -1909,24 +2291,29 @@ class Engine {
             std::string url = resolveUrl(e->props.get("url", ""), g_curUrl);
             int sz = e->props.getInt("size", 16);
             auto col = e->props.getColor("color", { 10,189,227 });
+            int z = e->props.getInt("z-index", 0);
             HFONT f = FontCache::get(sz);
             auto of = SelectObject(dc, f);
-            SetTextColor(dc, col.cr());
-            SetBkMode(dc, TRANSPARENT);
             SIZE ts;
             GetTextExtentPoint32A(dc, ct.c_str(), (int)ct.length(), &ts);
-            RECT rc = { x,y - scrollY,x + ts.cx,y - scrollY + ts.cy };
-            DrawTextA(dc, ct.c_str(), -1, &rc, 0);
-            HPEN p = CreatePen(PS_SOLID, 1, col.cr());
-            auto op = SelectObject(dc, p);
-            MoveToEx(dc, x, y - scrollY + ts.cy - 1, 0);
-            LineTo(dc, x + ts.cx, y - scrollY + ts.cy - 1);
-            SelectObject(dc, op);
-            DeleteObject(p);
             SelectObject(dc, of);
+            renderQueue.push_back({ z, [=]() {
+                auto of2 = SelectObject(dc, f);
+                SetTextColor(dc, col.cr());
+                SetBkMode(dc, TRANSPARENT);
+                RECT rc = { x, y - scrollY, x + ts.cx, y - scrollY + ts.cy };
+                DrawTextA(dc, ct.c_str(), -1, &rc, 0);
+                HPEN p = CreatePen(PS_SOLID, 1, col.cr());
+                auto op = SelectObject(dc, p);
+                MoveToEx(dc, x, y - scrollY + ts.cy - 1, 0);
+                LineTo(dc, x + ts.cx, y - scrollY + ts.cy - 1);
+                SelectObject(dc, op);
+                DeleteObject(p);
+                SelectObject(dc, of2);
+            } });
             if (pH) {
                 Hit h;
-                h.r = { x,y - scrollY,x + ts.cx,y - scrollY + ts.cy };
+                h.r = { x, y - scrollY, x + ts.cx, y - scrollY + ts.cy };
                 h.url = url;
                 pH->push_back(h);
             }
@@ -1945,18 +2332,21 @@ class Engine {
             int rad = e->props.getInt("border-radius", 6);
             auto bg = e->props.getColor("background", { 233,69,96 });
             auto col = e->props.getColor("color", { 255,255,255 });
+            int z = e->props.getInt("z-index", 0);
             int bx = x, by = y - scrollY;
-            fillRR(dc, bx, by, bw, bh, bg, rad);
-            HFONT f = FontCache::get(sz, true);
-            auto of = SelectObject(dc, f);
-            SetTextColor(dc, col.cr());
-            SetBkMode(dc, TRANSPARENT);
-            RECT rc = { bx,by,bx + bw,by + bh };
-            DrawTextA(dc, ct.c_str(), -1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-            SelectObject(dc, of);
+            renderQueue.push_back({ z, [=]() {
+                fillRR(dc, bx, by, bw, bh, bg, rad);
+                HFONT f = FontCache::get(sz, true);
+                auto of = SelectObject(dc, f);
+                SetTextColor(dc, col.cr());
+                SetBkMode(dc, TRANSPARENT);
+                RECT rc = { bx, by, bx + bw, by + bh };
+                DrawTextA(dc, ct.c_str(), -1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                SelectObject(dc, of);
+            } });
             if (pH) {
                 Hit h;
-                h.r = { bx,by,bx + bw,by + bh };
+                h.r = { bx, by, bx + bw, by + bh };
                 h.url = url;
                 h.action = act;
                 h.elemId = id;
@@ -1971,49 +2361,54 @@ class Engine {
             std::string ph = e->props.get("placeholder", "");
             int iw = e->props.getInt("width", 250);
             int ih = e->props.getInt("height", 28);
+            int z = e->props.getInt("z-index", 0);
             auto& inp = Script::g_inputs[id];
             if (inp.placeholder.empty() && !ph.empty()) inp.placeholder = ph;
             inp.x = x; inp.y = y - scrollY; inp.w = iw; inp.h = ih;
             int ix = x, iy = y - scrollY;
             bool foc = (Script::g_focusId == id);
-            HBRUSH br = CreateSolidBrush(foc ? RGB(50, 50, 80) : RGB(40, 40, 60));
-            HPEN pn = CreatePen(PS_SOLID, foc ? 2 : 1, foc ? RGB(10, 189, 227) : RGB(100, 100, 140));
-            auto ob = SelectObject(dc, br);
-            auto op = SelectObject(dc, pn);
-            RoundRect(dc, ix, iy, ix + iw, iy + ih, 4, 4);
-            SelectObject(dc, ob);
-            SelectObject(dc, op);
-            DeleteObject(br);
-            DeleteObject(pn);
-            HFONT f = FontCache::get(14);
-            auto of = SelectObject(dc, f);
-            SetBkMode(dc, TRANSPARENT);
-            if (!inp.text.empty()) {
-                SetTextColor(dc, RGB(230, 230, 240));
-                RECT rc = { ix + 6,iy + 2,ix + iw - 4,iy + ih - 2 };
-                DrawTextA(dc, inp.text.c_str(), -1, &rc, DT_VCENTER | DT_SINGLELINE);
-                if (foc) {
-                    int cp = (std::min)(inp.cursor, (int)inp.text.length());
-                    SIZE ts;
-                    GetTextExtentPoint32A(dc, inp.text.c_str(), cp, &ts);
-                    HPEN cpen = CreatePen(PS_SOLID, 1, RGB(255, 255, 255));
-                    auto ocp = SelectObject(dc, cpen);
-                    MoveToEx(dc, ix + 6 + ts.cx, iy + 4, 0);
-                    LineTo(dc, ix + 6 + ts.cx, iy + ih - 4);
-                    SelectObject(dc, ocp);
-                    DeleteObject(cpen);
+            std::string textToDraw = inp.text;
+            std::string phToDraw = inp.placeholder;
+            int cursorToDraw = inp.cursor;
+            renderQueue.push_back({ z, [=]() {
+                HBRUSH br = CreateSolidBrush(foc ? RGB(50, 50, 80) : RGB(40, 40, 60));
+                HPEN pn = CreatePen(PS_SOLID, foc ? 2 : 1, foc ? RGB(10, 189, 227) : RGB(100, 100, 140));
+                auto ob = SelectObject(dc, br);
+                auto op = SelectObject(dc, pn);
+                RoundRect(dc, ix, iy, ix + iw, iy + ih, 4, 4);
+                SelectObject(dc, ob);
+                SelectObject(dc, op);
+                DeleteObject(br);
+                DeleteObject(pn);
+                HFONT f = FontCache::get(14);
+                auto of = SelectObject(dc, f);
+                SetBkMode(dc, TRANSPARENT);
+                if (!textToDraw.empty()) {
+                    SetTextColor(dc, RGB(230, 230, 240));
+                    RECT rc = { ix + 6, iy + 2, ix + iw - 4, iy + ih - 2 };
+                    DrawTextA(dc, textToDraw.c_str(), -1, &rc, DT_VCENTER | DT_SINGLELINE);
+                    if (foc) {
+                        int cp = (std::min)(cursorToDraw, (int)textToDraw.length());
+                        SIZE ts;
+                        GetTextExtentPoint32A(dc, textToDraw.c_str(), cp, &ts);
+                        HPEN cpen = CreatePen(PS_SOLID, 1, RGB(255, 255, 255));
+                        auto ocp = SelectObject(dc, cpen);
+                        MoveToEx(dc, ix + 6 + ts.cx, iy + 4, 0);
+                        LineTo(dc, ix + 6 + ts.cx, iy + ih - 4);
+                        SelectObject(dc, ocp);
+                        DeleteObject(cpen);
+                    }
                 }
-            }
-            else if (!inp.placeholder.empty()) {
-                SetTextColor(dc, RGB(120, 120, 140));
-                RECT rc = { ix + 6,iy + 2,ix + iw - 4,iy + ih - 2 };
-                DrawTextA(dc, inp.placeholder.c_str(), -1, &rc, DT_VCENTER | DT_SINGLELINE);
-            }
-            SelectObject(dc, of);
-
+                else if (!phToDraw.empty()) {
+                    SetTextColor(dc, RGB(120, 120, 140));
+                    RECT rc = { ix + 6, iy + 2, ix + iw - 4, iy + ih - 2 };
+                    DrawTextA(dc, phToDraw.c_str(), -1, &rc, DT_VCENTER | DT_SINGLELINE);
+                }
+                SelectObject(dc, of);
+            } });
             if (pH) {
                 Hit h;
-                h.r = { ix,iy,ix + iw,iy + ih };
+                h.r = { ix, iy, ix + iw, iy + ih };
                 h.elemId = id;
                 h.isInput = true;
                 pH->push_back(h);
@@ -2026,17 +2421,20 @@ class Engine {
             int cw = e->props.getInt("width", 400);
             int ch = e->props.getInt("height", 200);
             auto bdr = e->props.getColor("border-color", { 80,80,100 });
+            int z = e->props.getInt("z-index", 0);
             auto cb = Canvas::get(id, refDC, cw, ch);
             int cx = x, cy = y - scrollY;
-            HPEN p = CreatePen(PS_SOLID, 1, bdr.cr());
-            auto op = SelectObject(dc, p);
-            auto nb = (HBRUSH)GetStockObject(NULL_BRUSH);
-            auto ob = SelectObject(dc, nb);
-            Rectangle(dc, cx - 1, cy - 1, cx + cw + 1, cy + ch + 1);
-            SelectObject(dc, ob);
-            SelectObject(dc, op);
-            DeleteObject(p);
-            if (cb->dc) BitBlt(dc, cx, cy, cw, ch, cb->dc, 0, 0, SRCCOPY);
+            renderQueue.push_back({ z, [=]() {
+                HPEN p = CreatePen(PS_SOLID, 1, bdr.cr());
+                auto op = SelectObject(dc, p);
+                auto nb = (HBRUSH)GetStockObject(NULL_BRUSH);
+                auto ob = SelectObject(dc, nb);
+                Rectangle(dc, cx - 1, cy - 1, cx + cw + 1, cy + ch + 1);
+                SelectObject(dc, ob);
+                SelectObject(dc, op);
+                DeleteObject(p);
+                if (cb->dc) BitBlt(dc, cx, cy, cw, ch, cb->dc, 0, 0, SRCCOPY);
+            } });
             curY = y + ch + 8;
             break;
         }
@@ -2045,31 +2443,34 @@ class Engine {
             int cw = e->props.getInt("width", 400);
             int ch = e->props.getInt("height", 200);
             auto bdr = e->props.getColor("border-color", { 80,80,100 });
+            int z = e->props.getInt("z-index", 0);
             int cx = x, cy = y - scrollY;
-            HPEN p = CreatePen(PS_SOLID, 1, bdr.cr());
-            auto op = SelectObject(dc, p);
-            auto nb = (HBRUSH)GetStockObject(NULL_BRUSH);
-            auto ob = SelectObject(dc, nb);
-            Rectangle(dc, cx - 1, cy - 1, cx + cw + 1, cy + ch + 1);
-            SelectObject(dc, ob);
-            SelectObject(dc, op);
-            DeleteObject(p);
+            renderQueue.push_back({ z, [=]() {
+                HPEN p = CreatePen(PS_SOLID, 1, bdr.cr());
+                auto op = SelectObject(dc, p);
+                auto nb = (HBRUSH)GetStockObject(NULL_BRUSH);
+                auto ob = SelectObject(dc, nb);
+                Rectangle(dc, cx - 1, cy - 1, cx + cw + 1, cy + ch + 1);
+                SelectObject(dc, ob);
+                SelectObject(dc, op);
+                DeleteObject(p);
+                if (!GLLoader::available()) {
+                    HBRUSH fb = CreateSolidBrush(RGB(40, 40, 60));
+                    RECT fr = { cx, cy, cx + cw, cy + ch };
+                    FillRect(dc, &fr, fb);
+                    DeleteObject(fb);
+                    HFONT f = FontCache::get(14);
+                    auto of = SelectObject(dc, f);
+                    SetTextColor(dc, RGB(150, 150, 170));
+                    SetBkMode(dc, TRANSPARENT);
+                    RECT rc = { cx, cy, cx + cw, cy + ch };
+                    DrawTextA(dc, "No OpenGL", -1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                    SelectObject(dc, of);
+                }
+            } });
             auto glv = GLCanvas::ensure(id, cw, ch);
             if (glv && glv->valid) {
                 GLCanvas::place(id, cx, TOOLBAR_H + cy, cw, ch, scrollY, TOOLBAR_H);
-            }
-            else {
-                HBRUSH fb = CreateSolidBrush(RGB(40, 40, 60));
-                RECT fr = { cx, cy, cx + cw, cy + ch };
-                FillRect(dc, &fr, fb);
-                DeleteObject(fb);
-                HFONT f = FontCache::get(14);
-                auto of = SelectObject(dc, f);
-                SetTextColor(dc, RGB(150, 150, 170));
-                SetBkMode(dc, TRANSPARENT);
-                RECT rc = { cx, cy, cx + cw, cy + ch };
-                DrawTextA(dc, "No OpenGL", -1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-                SelectObject(dc, of);
             }
             if (pH) {
                 Hit h;
@@ -2087,12 +2488,15 @@ class Engine {
             auto col = e->props.getColor("color", { 60,60,80 });
             int t = e->props.getInt("thickness", 1);
             int m = e->props.getInt("margin", 10);
-            HPEN p = CreatePen(PS_SOLID, t, col.cr());
-            auto op = SelectObject(dc, p);
-            MoveToEx(dc, x, y + m - scrollY, 0);
-            LineTo(dc, x + mw, y + m - scrollY);
-            SelectObject(dc, op);
-            DeleteObject(p);
+            int z = e->props.getInt("z-index", 0);
+            renderQueue.push_back({ z, [=]() {
+                HPEN p = CreatePen(PS_SOLID, t, col.cr());
+                auto op = SelectObject(dc, p);
+                MoveToEx(dc, x, y + m - scrollY, 0);
+                LineTo(dc, x + mw, y + m - scrollY);
+                SelectObject(dc, op);
+                DeleteObject(p);
+            } });
             curY = y + m * 2 + t;
             break;
         }
@@ -2108,26 +2512,32 @@ class Engine {
             std::string ct = e->props.get("content", "");
             int sz = e->props.getInt("size", 14);
             auto col = e->props.getColor("color", { 200,200,200 });
+            int z = e->props.getInt("z-index", 0);
             int by = y - scrollY + sz / 2 - 2;
-            HBRUSH b = CreateSolidBrush(col.cr());
-            HPEN pn = CreatePen(PS_SOLID, 1, col.cr());
-            auto ob = SelectObject(dc, b);
-            auto op = SelectObject(dc, pn);
-            Ellipse(dc, x - 12, by, x - 4, by + 6);
-            SelectObject(dc, ob);
-            SelectObject(dc, op);
-            DeleteObject(b);
-            DeleteObject(pn);
             HFONT f = FontCache::get(sz);
             auto of = SelectObject(dc, f);
-            SetTextColor(dc, col.cr());
-            SetBkMode(dc, TRANSPARENT);
-            RECT rc = { x,y - scrollY,x + mw,y - scrollY + 200 };
-            DrawTextA(dc, ct.c_str(), -1, &rc, DT_WORDBREAK | DT_CALCRECT);
-            int th = rc.bottom - rc.top;
-            rc.bottom = rc.top + th;
-            DrawTextA(dc, ct.c_str(), -1, &rc, DT_WORDBREAK);
+            RECT rcCalc = { x, y - scrollY, x + mw, y - scrollY + 200 };
+            DrawTextA(dc, ct.c_str(), -1, &rcCalc, DT_WORDBREAK | DT_CALCRECT);
+            int th = rcCalc.bottom - rcCalc.top;
             SelectObject(dc, of);
+            renderQueue.push_back({ z, [=]() {
+                HBRUSH b = CreateSolidBrush(col.cr());
+                HPEN pn = CreatePen(PS_SOLID, 1, col.cr());
+                auto ob = SelectObject(dc, b);
+                auto op = SelectObject(dc, pn);
+                Ellipse(dc, x - 12, by, x - 4, by + 6);
+                SelectObject(dc, ob);
+                SelectObject(dc, op);
+                DeleteObject(b);
+                DeleteObject(pn);
+
+                auto of2 = SelectObject(dc, f);
+                SetTextColor(dc, col.cr());
+                SetBkMode(dc, TRANSPARENT);
+                RECT rcDraw = { x, y - scrollY, x + mw, y - scrollY + th };
+                DrawTextA(dc, ct.c_str(), -1, &rcDraw, DT_WORDBREAK);
+                SelectObject(dc, of2);
+            } });
             curY = y + th + 4;
             break;
         }
@@ -2139,22 +2549,26 @@ class Engine {
             int ih = e->props.getInt("height", 100);
             std::string alt = e->props.get("alt", "[image]");
             auto bdr = e->props.getColor("border-color", { 80,80,100 });
-            HBRUSH b = CreateSolidBrush(RGB(50, 50, 70));
-            HPEN p = CreatePen(PS_SOLID, 1, bdr.cr());
-            auto ob = SelectObject(dc, b);
-            auto op = SelectObject(dc, p);
-            Rectangle(dc, x, y - scrollY, x + iw, y - scrollY + ih);
-            SelectObject(dc, ob);
-            SelectObject(dc, op);
-            DeleteObject(b);
-            DeleteObject(p);
-            HFONT f = FontCache::get(12);
-            auto of = SelectObject(dc, f);
-            SetTextColor(dc, RGB(150, 150, 170));
-            SetBkMode(dc, TRANSPARENT);
-            RECT rc = { x + 4,y - scrollY + 4,x + iw - 4,y - scrollY + ih - 4 };
-            DrawTextA(dc, alt.c_str(), -1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-            SelectObject(dc, of);
+            int z = e->props.getInt("z-index", 0);
+            renderQueue.push_back({ z, [=]() {
+                HBRUSH b = CreateSolidBrush(RGB(50, 50, 70));
+                HPEN p = CreatePen(PS_SOLID, 1, bdr.cr());
+                auto ob = SelectObject(dc, b);
+                auto op = SelectObject(dc, p);
+                Rectangle(dc, x, y - scrollY, x + iw, y - scrollY + ih);
+                SelectObject(dc, ob);
+                SelectObject(dc, op);
+                DeleteObject(b);
+                DeleteObject(p);
+
+                HFONT f = FontCache::get(12);
+                auto of = SelectObject(dc, f);
+                SetTextColor(dc, RGB(150, 150, 170));
+                SetBkMode(dc, TRANSPARENT);
+                RECT rc = { x + 4, y - scrollY + 4, x + iw - 4, y - scrollY + ih - 4 };
+                DrawTextA(dc, alt.c_str(), -1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                SelectObject(dc, of);
+            } });
             curY = y + ih + 8;
             break;
         }
@@ -2174,14 +2588,21 @@ public:
         hits.clear();
         pH = &hits;
         refDC = tdc;
+        renderQueue.clear();
         HBRUSH bg = CreateSolidBrush(doc.bg.cr());
         RECT r = { 0,0,w,h };
         FillRect(tdc, &r, bg);
         DeleteObject(bg);
         draw(tdc, doc.root, 10, 10, w - 20);
+        std::stable_sort(renderQueue.begin(), renderQueue.end(), [](const RenderCmd& a, const RenderCmd& b) {
+            return a.zIndex < b.zIndex;
+            });
+        for (auto& cmd : renderQueue) {
+            cmd.drawCall();
+        }
     }
 };
-}
+};
 namespace Pages {
 std::string readF(const std::string& p) {
     std::ifstream f(p);
@@ -2551,46 +2972,55 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
         }
         int mx = LOWORD(lp);
         int my = HIWORD(lp) - TOOLBAR_H;
-        bool ci = false;
-        for (auto& h : g_ren.hits) {
+        Render::Hit clickedHit;
+        bool found = false;
+        for (const auto& h : g_ren.hits) {
             if (mx >= h.r.left && mx <= h.r.right && my >= h.r.top && my <= h.r.bottom) {
-                if (h.isGLCanvas) {
-                    int localX = mx - h.r.left;
-                    int localY = my - h.r.top;
-                    Script::fireCanvasClick(h.canvasId, localX, localY, 1);
-                    auto v = GLCanvas::find(h.canvasId);
-                    if (v && v->valid) {
-                        g_mouseCaptured = true;
-                        g_ignoreWarpMouse = false;
-                        g_capturedCanvasId = h.canvasId;
-                        g_capturedCanvasW = v->w;
-                        g_capturedCanvasH = v->h;
-                        g_capturedCanvasX = v->x;
-                        g_capturedCanvasY = v->y - TOOLBAR_H;
-                        SetCapture(hw);
-                        ShowCursor(FALSE);
-                        RECT wr;
-                        GetWindowRect(v->hwnd, &wr);
-                        ClipCursor(&wr);
-                    }
-                    SetFocus(hw);
+                clickedHit = h;
+                found = true;
+                break;
+            }
+        }
+        bool ci = false;
+        if (found) {
+            if (clickedHit.isGLCanvas) {
+                int localX = mx - clickedHit.r.left;
+                int localY = my - clickedHit.r.top;
+                Script::fireCanvasClick(clickedHit.canvasId, localX, localY, 1);
+                auto v = GLCanvas::find(clickedHit.canvasId);
+                if (v && v->valid) {
+                    g_mouseCaptured = true;
+                    g_ignoreWarpMouse = false;
+                    g_capturedCanvasId = clickedHit.canvasId;
+                    g_capturedCanvasW = v->w;
+                    g_capturedCanvasH = v->h;
+                    g_capturedCanvasX = v->x;
+                    g_capturedCanvasY = v->y - TOOLBAR_H;
+                    SetCapture(hw);
+                    ShowCursor(FALSE);
+                    RECT wr;
+                    GetWindowRect(v->hwnd, &wr);
+                    ClipCursor(&wr);
+                }
+                SetFocus(hw);
+                return 0;
+            }
+            if (clickedHit.isInput) {
+                Script::g_focusId = clickedHit.elemId;
+                Script::g_inputs[clickedHit.elemId].focused = true;
+                Script::g_inputs[clickedHit.elemId].cursor = (int)Script::g_inputs[clickedHit.elemId].text.length();
+                ci = true;
+                invalidateContent();
+            }
+            else {
+                if (clickedHit.isBtn && !clickedHit.elemId.empty()) {
+                    Script::fireClick(clickedHit.elemId);
+                    invalidateContent();
+                    if (!clickedHit.url.empty()) navigateTo(clickedHit.url);
                     return 0;
                 }
-                if (h.isInput) {
-                    Script::g_focusId = h.elemId;
-                    Script::g_inputs[h.elemId].focused = true;
-                    Script::g_inputs[h.elemId].cursor = (int)Script::g_inputs[h.elemId].text.length();
-                    ci = true;
-                    invalidateContent();
-                    break;
-                }
-                if (h.isBtn && !h.elemId.empty()) {
-                    Script::fireClick(h.elemId);
-                    invalidateContent();
-                    if (h.url.empty()) return 0;
-                }
-                if (!h.url.empty()) {
-                    navigateTo(h.url);
+                if (!clickedHit.url.empty()) {
+                    navigateTo(clickedHit.url);
                     return 0;
                 }
             }
@@ -2745,6 +3175,7 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
         Plugins::unloadAll();
         cleanupBackbuffer();
         FontCache::clear();
+        Gdiplus::GdiplusShutdown(g_gdiplusToken);
         PostQuitMessage(0);
         return 0;
     }
@@ -2756,6 +3187,8 @@ int WINAPI WinMain(HINSTANCE hI, HINSTANCE, LPSTR cmd, int show) {
     INITCOMMONCONTROLSEX ic = { sizeof(ic),ICC_STANDARD_CLASSES };
     InitCommonControlsEx(&ic);
     initHighResTimer();
+    Gdiplus::GdiplusStartupInput gdiplusStartupInput;
+    Gdiplus::GdiplusStartup(&g_gdiplusToken, &gdiplusStartupInput, NULL);
     GLLoader::load();
     Plugins::initHostAPI();
     Plugins::discoverPlugins();
