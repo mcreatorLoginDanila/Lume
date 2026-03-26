@@ -296,7 +296,18 @@ void initHostAPI() {
     g_hostAPI.invalidate_content = hostInvalidateContent;
     g_hostAPI.set_status = hostSetStatus;
     g_hostAPI.navigate_to = hostNavigateTo;
-    g_hostAPI.api_version = 1;
+    g_hostAPI.api_version = 2;
+
+    g_hostAPI.p_luaL_checknumber = luaL_checknumber;
+    g_hostAPI.p_luaL_checkinteger = luaL_checkinteger;
+    g_hostAPI.p_luaL_optinteger = luaL_optinteger;
+    g_hostAPI.p_luaL_optlstring = luaL_optlstring;
+    g_hostAPI.p_luaL_checklstring = luaL_checklstring;
+    g_hostAPI.p_lua_pushnumber = lua_pushnumber;
+    g_hostAPI.p_lua_pushboolean = lua_pushboolean;
+    g_hostAPI.p_lua_pushstring = lua_pushstring;
+    g_hostAPI.p_lua_pushcclosure = lua_pushcclosure;
+    g_hostAPI.p_lua_setglobal = lua_setglobal;
 }
 void discoverPlugins() {
     char ep[MAX_PATH] = {};
