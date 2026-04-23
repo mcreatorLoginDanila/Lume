@@ -4,8 +4,7 @@
 #include <windows.h>
 #include <windowsx.h>
 #include <commctrl.h>
-#include <winsock2.h>
-#include <ws2tcpip.h>
+#include <winhttp.h>
 #include <shellapi.h>
 #include <string>
 #include <vector>
@@ -29,7 +28,7 @@ extern "C" {
 #include <objidl.h>
 #include <gdiplus.h>
 #pragma comment(lib, "gdiplus.lib")
-#pragma comment(lib, "ws2_32.lib")
+#pragma comment(lib, "winhttp.lib")
 #pragma comment(lib, "gdi32.lib")
 #pragma comment(lib, "user32.lib")
 #pragma comment(lib, "comctl32.lib")
@@ -63,7 +62,10 @@ static bool g_loaded = false;
 bool load() {
     if (g_loaded) return hGL != nullptr;
     g_loaded = true;
-    hGL = LoadLibraryA("opengl32.dll");
+    char sysDir[MAX_PATH] = {};
+    GetSystemDirectoryA(sysDir, MAX_PATH);
+    std::string glPath = std::string(sysDir) + "\\opengl32.dll";
+    hGL = LoadLibraryA(glPath.c_str());
     if (!hGL) return false;
     pfn_wglCreateContext = (PFN_wglCreateContext)GetProcAddress(hGL, "wglCreateContext");
     pfn_wglMakeCurrent = (PFN_wglMakeCurrent)GetProcAddress(hGL, "wglMakeCurrent");
@@ -611,38 +613,48 @@ public:
     }
 };
 }
+std::wstring utf8_to_wstring(const std::string& str) {
+    if (str.empty()) return L"";
+    int size_needed = MultiByteToWideChar(CP_UTF8, 0, &str[0], (int)str.size(), NULL, 0);
+    std::wstring wstrTo(size_needed, 0);
+    MultiByteToWideChar(CP_UTF8, 0, &str[0], (int)str.size(), &wstrTo[0], size_needed);
+    return wstrTo;
+}
 namespace Net {
-struct URL {
-    std::string proto, host, path;
-    int port = 8080;
-    static URL parse(const std::string& s) {
-        URL u;
-        std::string r = s;
-        auto pe = r.find("://");
-        if (pe != std::string::npos) {
-            u.proto = r.substr(0, pe);
-            r = r.substr(pe + 3);
+    struct URL {
+        std::string proto, host, path;
+        int port = 80;
+        static URL parse(const std::string& s) {
+            URL u;
+            std::string r = s;
+            auto pe = r.find("://");
+            if (pe != std::string::npos) {
+                u.proto = r.substr(0, pe);
+                r = r.substr(pe + 3);
+            }
+            else u.proto = "http";
+            auto ps = r.find('/');
+            if (ps != std::string::npos) {
+                u.path = r.substr(ps);
+                r = r.substr(0, ps);
+            }
+            else u.path = "/";
+
+            auto pp = r.find(':');
+            if (pp != std::string::npos) {
+                u.host = r.substr(0, pp);
+                try { u.port = std::stoi(r.substr(pp + 1)); }
+                catch (...) {}
+            }
+            else {
+                u.host = r;
+                if (u.proto == "https") u.port = 443;
+                else u.port = 80;
+            }
+            if (u.path.empty()) u.path = "/";
+            return u;
         }
-        else u.proto = "htp";
-        auto ps = r.find('/');
-        if (ps != std::string::npos) {
-            u.path = r.substr(ps);
-            r = r.substr(0, ps);
-        }
-        else u.path = "/";
-        auto pp = r.find(':');
-        if (pp != std::string::npos) {
-            u.host = r.substr(0, pp);
-            try { u.port = std::stoi(r.substr(pp + 1)); }
-            catch (...) {}
-        }
-        else {
-            u.host = r;
-        }
-        if (u.path == "/" || u.path.empty()) u.path = "/index.htp";
-        return u;
-    }
-};
+    };
 struct Resp {
     int code = 0;
     std::string body, error;
@@ -650,61 +662,45 @@ struct Resp {
 };
 Resp fetch(const URL& url) {
     Resp resp;
-    addrinfo hints = {}, * res = nullptr;
-    hints.ai_family = AF_INET;
-    hints.ai_socktype = SOCK_STREAM;
-    if (getaddrinfo(url.host.c_str(), std::to_string(url.port).c_str(), &hints, &res) != 0) {
-        resp.error = "DNS fail";
-        return resp;
+    HINTERNET hSession = WinHttpOpen(L"Lume Browser Engine",WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,WINHTTP_NO_PROXY_NAME,WINHTTP_NO_PROXY_BYPASS,0);
+    if (!hSession) { resp.error = "WinHttpOpen failed"; return resp; }
+    HINTERNET hConnect = WinHttpConnect(hSession, utf8_to_wstring(url.host).c_str(), url.port, 0);
+    if (!hConnect) { WinHttpCloseHandle(hSession); resp.error = "WinHttpConnect failed"; return resp; }
+    DWORD flags = (url.proto == "https") ? WINHTTP_FLAG_SECURE : 0;
+    HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"GET", utf8_to_wstring(url.path).c_str(),NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, flags);
+    if (!hRequest) {
+        WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession);
+        resp.error = "WinHttpOpenRequest failed"; return resp;
     }
-    SOCKET s = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
-    if (s == INVALID_SOCKET) {
-        freeaddrinfo(res);
-        resp.error = "Socket fail";
-        return resp;
+    if (flags & WINHTTP_FLAG_SECURE) {
+        DWORD secFlags = SECURITY_FLAG_IGNORE_UNKNOWN_CA | SECURITY_FLAG_IGNORE_CERT_CN_INVALID | SECURITY_FLAG_IGNORE_CERT_DATE_INVALID;
+        WinHttpSetOption(hRequest, WINHTTP_OPTION_SECURITY_FLAGS, &secFlags, sizeof(secFlags));
     }
-    DWORD to = 5000;
-    setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, (char*)&to, sizeof(to));
-    setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, (char*)&to, sizeof(to));
-    if (connect(s, res->ai_addr, (int)res->ai_addrlen) == SOCKET_ERROR) {
-        freeaddrinfo(res);
-        closesocket(s);
-        resp.error = "Connect fail";
-        return resp;
+    bool bResults = WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0);
+    if (bResults) bResults = WinHttpReceiveResponse(hRequest, NULL);
+    if (bResults) {
+        DWORD dwStatusCode = 0;
+        DWORD dwSize = sizeof(dwStatusCode);
+        WinHttpQueryHeaders(hRequest,WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,WINHTTP_HEADER_NAME_BY_INDEX,&dwStatusCode,&dwSize,WINHTTP_NO_HEADER_INDEX);
+        resp.code = dwStatusCode;
+        resp.ok = (resp.code >= 200 && resp.code < 400);
+        DWORD dwDownloaded = 0;
+        do {
+            dwSize = 0;
+            if (!WinHttpQueryDataAvailable(hRequest, &dwSize)) break;
+            if (dwSize == 0) break;
+            std::vector<char> buffer(dwSize);
+            if (WinHttpReadData(hRequest, (LPVOID)buffer.data(), dwSize, &dwDownloaded)) {
+                resp.body.append(buffer.data(), dwDownloaded);
+            }
+        } while (dwSize > 0);
     }
-    freeaddrinfo(res);
-    std::string req =
-        "GET " + url.path + " HTTP/1.1\r\n"
-        "Host: " + url.host + "\r\n"
-        "User-Agent: Lume\r\n"
-        "Connection: close\r\n\r\n";
-    send(s, req.c_str(), (int)req.length(), 0);
-    std::string raw;
-    raw.reserve(8192);
-    char buf[4096];
-    int n;
-    while ((n = recv(s, buf, sizeof(buf), 0)) > 0) raw.append(buf, n);
-    closesocket(s);
-    if (raw.empty()) {
-        resp.error = "Empty";
-        return resp;
+    else {
+        resp.error = "HTTP Connection failed";
     }
-    auto he = raw.find("\r\n\r\n");
-    if (he == std::string::npos) {
-        resp.body = std::move(raw);
-        resp.ok = true;
-        return resp;
-    }
-    resp.body = raw.substr(he + 4);
-    auto fl = raw.find("\r\n");
-    auto sl = raw.substr(0, fl);
-    auto sp = sl.find(' ');
-    if (sp != std::string::npos) {
-        try { resp.code = std::stoi(sl.substr(sp + 1, 3)); }
-        catch (...) {}
-    }
-    resp.ok = (resp.code >= 200 && resp.code < 400);
-    if (!resp.ok) resp.error = "HTTP " + std::to_string(resp.code);
+    WinHttpCloseHandle(hRequest);
+    WinHttpCloseHandle(hConnect);
+    WinHttpCloseHandle(hSession);
     return resp;
 }
 Resp fetchUrl(const std::string& u) { return fetch(URL::parse(u)); }
@@ -740,91 +736,56 @@ namespace AsyncNet {
                 std::lock_guard<std::mutex> lock(g_dlMutex);
                 g_downloads[urlStr].status = -1;
                 };
-            addrinfo hints = {}, * res = nullptr;
-            hints.ai_family = AF_INET;
-            hints.ai_socktype = SOCK_STREAM;
-            if (getaddrinfo(url.host.c_str(), std::to_string(url.port).c_str(), &hints, &res) != 0) {
-                setError(); return;
+            HINTERNET hSession = WinHttpOpen(L"Lume Download Agent", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+            if (!hSession) { setError(); return; }
+            HINTERNET hConnect = WinHttpConnect(hSession, utf8_to_wstring(url.host).c_str(), url.port, 0);
+            if (!hConnect) { WinHttpCloseHandle(hSession); setError(); return; }
+            DWORD flags = (url.proto == "https") ? WINHTTP_FLAG_SECURE : 0;
+            HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"GET", utf8_to_wstring(url.path).c_str(), NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, flags);
+            if (!hRequest) { WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession); setError(); return; }
+            if (flags & WINHTTP_FLAG_SECURE) {
+                DWORD secFlags = SECURITY_FLAG_IGNORE_UNKNOWN_CA | SECURITY_FLAG_IGNORE_CERT_CN_INVALID | SECURITY_FLAG_IGNORE_CERT_DATE_INVALID;
+                WinHttpSetOption(hRequest, WINHTTP_OPTION_SECURITY_FLAGS, &secFlags, sizeof(secFlags));
             }
-            SOCKET s = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
-            if (s == INVALID_SOCKET) { freeaddrinfo(res); setError(); return; }
-            DWORD to = 15000;
-            setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, (char*)&to, sizeof(to));
-            setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, (char*)&to, sizeof(to));
-            if (connect(s, res->ai_addr, (int)res->ai_addrlen) == SOCKET_ERROR) {
-                closesocket(s); freeaddrinfo(res); setError(); return;
-            }
-            freeaddrinfo(res);
-            std::string req = "GET " + url.path + " HTTP/1.1\r\n"
-                "Host: " + url.host + "\r\n"
-                "User-Agent: Lume\r\n"
-                "Connection: close\r\n\r\n";
-            send(s, req.c_str(), (int)req.length(), 0);
-            char buf[8192];
-            std::string headerStr;
-            int n = 0;
-            bool headersParsed = false;
-            size_t contentLength = 0;
-            std::ofstream outFile;
-            while ((n = recv(s, buf, sizeof(buf), 0)) > 0) {
-                if (!headersParsed) {
-                    headerStr.append(buf, n);
-                    auto pos = headerStr.find("\r\n\r\n");
-                    if (pos != std::string::npos) {
-                        headersParsed = true;
-                        int code = 0;
-                        auto spacePos = headerStr.find(' ');
-                        if (spacePos != std::string::npos) {
-                            try { code = std::stoi(headerStr.substr(spacePos + 1, 3)); }
-                            catch (...) {}
-                        }
-                        if (code < 200 || code >= 400) { closesocket(s); setError(); return; }
-                        std::string lowerHeader = headerStr;
-                        for (char& c : lowerHeader) c = (char)std::tolower((unsigned char)c);
-                        auto clPos = lowerHeader.find("content-length:");
-                        if (clPos != std::string::npos) {
-                            auto endLine = lowerHeader.find("\r\n", clPos);
-                            if (endLine != std::string::npos) {
-                                std::string clStr = headerStr.substr(clPos + 15, endLine - (clPos + 15));
-                                try { contentLength = std::stoull(clStr); }
-                                catch (...) {}
-                            }
-                        }
-                        {
-                            std::lock_guard<std::mutex> lock(g_dlMutex);
-                            g_downloads[urlStr].totalBytes = contentLength;
-                        }
-                        outFile.open(outPath, std::ios::binary);
-                        if (!outFile) { closesocket(s); setError(); return; }
-                        size_t headerSize = pos + 4;
-                        size_t bodyPartSize = headerStr.size() - headerSize;
-                        if (bodyPartSize > 0) {
-                            outFile.write(headerStr.data() + headerSize, bodyPartSize);
-                            std::lock_guard<std::mutex> lock(g_dlMutex);
-                            g_downloads[urlStr].downloadedBytes += bodyPartSize;
-                        }
-                    }
-                }
-                else {
-                    outFile.write(buf, n);
+            bool bResults = WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0);
+            if (bResults) bResults = WinHttpReceiveResponse(hRequest, NULL);
+            if (bResults) {
+                DWORD statusCode = 0, sz = sizeof(statusCode);
+                WinHttpQueryHeaders(hRequest, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_HEADER_NAME_BY_INDEX, &statusCode, &sz, WINHTTP_NO_HEADER_INDEX);
+                if (statusCode >= 400) { WinHttpCloseHandle(hRequest); WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession); setError(); return;}
+                DWORD contentLength = 0;
+                sz = sizeof(contentLength);
+                WinHttpQueryHeaders(hRequest, WINHTTP_QUERY_CONTENT_LENGTH | WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_HEADER_NAME_BY_INDEX, &contentLength, &sz, WINHTTP_NO_HEADER_INDEX);
+                {
                     std::lock_guard<std::mutex> lock(g_dlMutex);
-                    g_downloads[urlStr].downloadedBytes += n;
+                    g_downloads[urlStr].totalBytes = contentLength;
                 }
-            }
-            if (outFile.is_open()) outFile.close();
-            closesocket(s);
-            std::lock_guard<std::mutex> lock(g_dlMutex);
-            bool success = (n == 0);
-            if (contentLength > 0 && g_downloads[urlStr].downloadedBytes >= contentLength) {
-                success = true;
-            }
-            if (success) {
-                g_downloads[urlStr].status = 1;
-                g_downloads[urlStr].localPath = outPath;
+                std::ofstream outFile(outPath, std::ios::binary);
+                if (!outFile) { WinHttpCloseHandle(hRequest); WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession); setError(); return; }
+                DWORD dwSize = 0, dwDownloaded = 0;
+                do {
+                    if (!WinHttpQueryDataAvailable(hRequest, &dwSize)) break;
+                    if (dwSize == 0) break;
+                    std::vector<char> buffer(dwSize);
+                    if (WinHttpReadData(hRequest, (LPVOID)buffer.data(), dwSize, &dwDownloaded)) {
+                        outFile.write(buffer.data(), dwDownloaded);
+                        std::lock_guard<std::mutex> lock(g_dlMutex);
+                        g_downloads[urlStr].downloadedBytes += dwDownloaded;
+                    }
+                } while (dwSize > 0);
+                outFile.close();
+                {
+                    std::lock_guard<std::mutex> lock(g_dlMutex);
+                    g_downloads[urlStr].status = 1;
+                    g_downloads[urlStr].localPath = outPath;
+                }
             }
             else {
-                g_downloads[urlStr].status = -1;
+                setError();
             }
+            WinHttpCloseHandle(hRequest);
+            WinHttpCloseHandle(hConnect);
+            WinHttpCloseHandle(hSession);
             }).detach();
     }
 }
@@ -1811,10 +1772,17 @@ static int l_gl_load_texture(lua_State* L) {
     }
     int w = bmp.GetWidth();
     int h = bmp.GetHeight();
+    std::vector<unsigned char> pixels;
+    try {
+        pixels.resize(w * h * 4);
+    }
+    catch (...) {
+        lua_pushnil(L);
+        return 1;
+    }
     Gdiplus::Rect rect(0, 0, w, h);
     Gdiplus::BitmapData bmpData;
     bmp.LockBits(&rect, Gdiplus::ImageLockModeRead, PixelFormat32bppARGB, &bmpData);
-    std::vector<unsigned char> pixels(w * h * 4);
     const unsigned char* src = (const unsigned char*)bmpData.Scan0;
     int stride = bmpData.Stride;
     for (int y = 0; y < h; y++) {
@@ -1831,10 +1799,9 @@ static int l_gl_load_texture(lua_State* L) {
     GLuint texID;
     glGenTextures(1, &texID);
     glBindTexture(GL_TEXTURE_2D, texID);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
-
     lua_pushinteger(L, texID);
     return 1;
 }
@@ -1886,6 +1853,39 @@ static int l_gl_load_obj(lua_State* L) {
     lua_pushinteger(L, listId);
     return 1;
 }
+static int l_gl_delete_texture(lua_State* L) {
+    GLuint texID = (GLuint)luaL_checkinteger(L, 1);
+    glDeleteTextures(1, &texID);
+    return 0;
+}
+static int l_gl_tex_parameteri(lua_State* L) {
+    glTexParameteri((GLenum)luaL_checkinteger(L, 1), (GLenum)luaL_checkinteger(L, 2), (GLint)luaL_checkinteger(L, 3));
+    return 0;
+}
+static int l_gl_lightfv(lua_State* L) {
+    GLenum light = (GLenum)luaL_checkinteger(L, 1);
+    GLenum pname = (GLenum)luaL_checkinteger(L, 2);
+    GLfloat params[4] = {
+        (GLfloat)luaL_checknumber(L, 3),
+        (GLfloat)luaL_checknumber(L, 4),
+        (GLfloat)luaL_checknumber(L, 5),
+        (GLfloat)luaL_optnumber(L, 6, 1.0)
+    };
+    glLightfv(light, pname, params);
+    return 0;
+}
+static int l_gl_materialfv(lua_State* L) {
+    GLenum face = (GLenum)luaL_checkinteger(L, 1);
+    GLenum pname = (GLenum)luaL_checkinteger(L, 2);
+    GLfloat params[4] = {
+        (GLfloat)luaL_checknumber(L, 3),
+        (GLfloat)luaL_optnumber(L, 4, 0.0),
+        (GLfloat)luaL_optnumber(L, 5, 0.0),
+        (GLfloat)luaL_optnumber(L, 6, 1.0)
+    };
+    glMaterialfv(face, pname, params);
+    return 0;
+}
 static int l_download_async(lua_State* L) {
     std::string url = luaL_checkstring(L, 1);
     std::string fname = luaL_checkstring(L, 2);
@@ -1924,6 +1924,20 @@ void registerGLConstants(lua_State* L) {
         {"GL_ONE", 1},
         {"GL_ZERO", 0},
         {"GL_TEXTURE_2D", 0x0DE1},
+        {"GL_TEXTURE_MIN_FILTER", 0x2801},
+        {"GL_TEXTURE_MAG_FILTER", 0x2800},
+        {"GL_NEAREST", 0x2600},
+        {"GL_LINEAR", 0x2601},
+        {"GL_POSITION", 0x1203},
+        {"GL_AMBIENT", 0x1200},
+        {"GL_DIFFUSE", 0x1201},
+        {"GL_SPECULAR", 0x1202},
+        {"GL_SHININESS", 0x1601},
+        {"GL_FRONT", 0x0404},
+        {"GL_BACK", 0x0405},
+        {"GL_FRONT_AND_BACK", 0x0408},
+        {"GL_LIGHT1", 0x4001},
+        {"GL_LIGHT2", 0x4002},
         {nullptr,0}
     };
     for (int i = 0; cs[i].n; i++) {
@@ -1934,7 +1948,10 @@ void registerGLConstants(lua_State* L) {
 void init() {
     if (g_L) lua_close(g_L);
     g_L = luaL_newstate();
-    luaL_openlibs(g_L);
+    luaL_requiref(g_L, "_G", luaopen_base, 1); lua_pop(g_L, 1);
+    luaL_requiref(g_L, "table", luaopen_table, 1); lua_pop(g_L, 1);
+    luaL_requiref(g_L, "string", luaopen_string, 1); lua_pop(g_L, 1);
+    luaL_requiref(g_L, "math", luaopen_math, 1); lua_pop(g_L, 1);
     lua_register(g_L, "set_prop", l_set_prop);
     lua_register(g_L, "set_inner_htp", l_set_inner_htp);
     lua_register(g_L, "set_text", l_set_text);
@@ -2009,6 +2026,10 @@ void init() {
     lua_register(g_L, "gl_load_obj", l_gl_load_obj);
     lua_register(g_L, "download_async", l_download_async);
     lua_register(g_L, "download_status", l_download_status);
+    lua_register(g_L, "gl_delete_texture", l_gl_delete_texture);
+    lua_register(g_L, "gl_tex_parameteri", l_gl_tex_parameteri);
+    lua_register(g_L, "gl_lightfv", l_gl_lightfv);
+    lua_register(g_L, "gl_materialfv", l_gl_materialfv);
     registerGLConstants(g_L);
     Plugins::initAllPlugins(g_L);
 }
@@ -2060,7 +2081,7 @@ std::string resolveUrl(const std::string& url, const std::string& baseUrl) {
     if (url.find("://") != std::string::npos || url.substr(0, 6) == "about:") return url;
     if (url.substr(0, 7) == "file://") return url;
     if (url.find('/') != std::string::npos && url.find("://") == std::string::npos) {
-        std::string proto = "htp";
+        std::string proto = "http";
         auto pe = baseUrl.find("://");
         if (pe != std::string::npos) proto = baseUrl.substr(0, pe);
         if (!url.empty() && url[0] == '/') {
@@ -2080,7 +2101,7 @@ std::string resolveUrl(const std::string& url, const std::string& baseUrl) {
         if (lastSlash != std::string::npos) return proto + "://" + rest.substr(0, lastSlash + 1) + url;
         return proto + "://" + rest + "/" + url;
     }
-    return "htp://" + url;
+    return "http://" + url;
 }
 namespace Render {
 struct Hit {
@@ -2915,10 +2936,57 @@ HTP::Doc g_doc;
 Render::Engine g_ren;
 std::vector<std::string> g_hist;
 int g_histPos = -1;
-void loadContent(const std::string& content, const std::string& url) {
+std::string buildTextHtp(const std::string& rawText) {
+    std::string htp = "@page { title:\"Text Document\"; background:\"#1e1e1e\"; }\n";
+    htp += "@column { padding:10; background:\"#1e1e1e\"; }\n";
+
+    std::istringstream iss(rawText);
+    std::string line;
+    while (std::getline(iss, line)) {
+        std::string escaped;
+        for (char c : line) {
+            if (c == '"') escaped += "\\\"";
+            else if (c == '\\') escaped += "\\\\";
+            else if (c == '\r') continue;
+            else escaped += c;
+        }
+
+        if (escaped.empty()) {
+            htp += "  @br { size:14; }\n";
+        }
+        else {
+            htp += "  @text { content:\"" + escaped + "\"; size:14; color:\"#cccccc\"; font:\"Consolas\"; }\n";
+        }
+    }
+    return htp;
+}
+void loadContent(const std::string& content, const std::string& url, bool isInternalHtp = false) {
+    std::string finalContent = content;
+    if (!isInternalHtp) {
+        std::string path = url;
+        auto q = path.find('?');
+        if (q != std::string::npos) path = path.substr(0, q);
+        auto slash = path.find_last_of('/');
+        if (slash != std::string::npos) path = path.substr(slash + 1);
+        bool isText = false;
+        if (!path.empty()) {
+            auto dot = path.find_last_of('.');
+            if (dot == std::string::npos) {
+                isText = true;
+            }
+            else {
+                std::string ext = path.substr(dot);
+                for (char& c : ext) c = tolower(c);
+                if (ext == ".txt" || ext == ".md" || ext == ".json" || ext == ".log" || ext == ".cpp" || ext == ".h") {
+                    isText = true;
+                }
+            }
+        }
+        if (isText) finalContent = buildTextHtp(content);
+    }
     Script::reset();
     HTP::Parser p;
-    g_doc = p.parse(content);
+    g_doc = p.parse(finalContent);
     g_curUrl = url;
     g_ren.setScroll(0);
     std::function<void(std::shared_ptr<HTP::Elem>)> run;
@@ -2926,7 +2994,7 @@ void loadContent(const std::string& content, const std::string& url) {
         if (!e) return;
         if (e->type == HTP::EType::SCRIPT && !e->scriptCode.empty()) Script::exec(e->scriptCode);
         for (auto& c : e->children) run(c);
-    };
+        };
     run(g_doc.root);
     SetWindowTextA(g_mainWnd, (g_doc.title + " - Lume").c_str());
     SetWindowTextA(g_addressBar, url.c_str());
@@ -2937,7 +3005,7 @@ void loadFile(const std::string& fp) {
     if (path.length() > 7 && path.substr(0, 7) == "file://") path = path.substr(7);
     std::ifstream f(path);
     if (!f) {
-        loadContent(Pages::error("Not found", path), "file://" + path);
+        loadContent(Pages::error("Not found", path), "file://" + path, true);
         return;
     }
     std::stringstream ss;
@@ -2953,13 +3021,13 @@ void navigateTo(const std::string& url) {
     auto nav = [&](const std::string& c, const std::string& nu) {
         g_hist.push_back(nu);
         g_histPos = (int)g_hist.size() - 1;
-        loadContent(c, nu);
+        loadContent(c, nu, true);
         setStatus("Ready");
         };
-    if (u == "about:home" || u == "about:blank" || u.empty()) { nav(Pages::home(), "about:home"); return; }
-    if (u == "about:info") { nav(Pages::about(), u); return; }
-    if (u == "about:gldemo") { nav(Pages::glDemo(), u); return; }
-    if (u == "about:plugindemo") { nav(Pages::pluginDemo(), u); return; }
+    if (u == "about:home" || u == "about:blank" || u.empty()) { nav(Pages::home(), "about:home"); return;}
+    if (u == "about:info") { nav(Pages::about(), u); return;}
+    if (u == "about:gldemo") { nav(Pages::glDemo(), u); return;}
+    if (u == "about:plugindemo") { nav(Pages::pluginDemo(), u); return;}
     if (u.length() > 7 && u.substr(0, 7) == "file://") {
         g_hist.push_back(u);
         g_histPos = (int)g_hist.size() - 1;
@@ -2977,9 +3045,10 @@ void navigateTo(const std::string& url) {
                 return;
             }
         }
-        u = "htp://" + u;
+        u = "http://" + u;
     }
-    if (u.length() > 6 && u.substr(0, 6) == "htp://") {
+    if ((u.length() > 7 && u.substr(0, 7) == "http://") ||
+        (u.length() > 8 && u.substr(0, 8) == "https://")) {
         setStatus("Loading...");
         auto r = Net::fetch(Net::URL::parse(u));
         g_hist.push_back(u);
@@ -2989,23 +3058,23 @@ void navigateTo(const std::string& url) {
             setStatus("OK");
         }
         else {
-            loadContent(Pages::error(r.error, u), u);
+            loadContent(Pages::error(r.error, u), u, true);
             setStatus("Err");
         }
         return;
     }
-    loadContent(Pages::error("Unknown protocol", u), u);
+    loadContent(Pages::error("Unknown protocol", u), u, true);
 }
 void histNav(const std::string& u) {
-    if (u == "about:home") loadContent(Pages::home(), u);
-    else if (u == "about:info") loadContent(Pages::about(), u);
-    else if (u == "about:gldemo") loadContent(Pages::glDemo(), u);
-    else if (u == "about:plugindemo") loadContent(Pages::pluginDemo(), u);
+    if (u == "about:home") loadContent(Pages::home(), u, true);
+    else if (u == "about:info") loadContent(Pages::about(), u, true);
+    else if (u == "about:gldemo") loadContent(Pages::glDemo(), u, true);
+    else if (u == "about:plugindemo") loadContent(Pages::pluginDemo(), u, true);
     else if (u.length() > 7 && u.substr(0, 7) == "file://") loadFile(u);
     else {
         auto r = Net::fetch(Net::URL::parse(u));
         if (r.ok) loadContent(r.body, u);
-        else loadContent(Pages::error(r.error, u), u);
+        else loadContent(Pages::error(r.error, u), u, true);
     }
 }
 void goBack() { if (g_histPos > 0) { g_histPos--; histNav(g_hist[g_histPos]); } }
@@ -3347,7 +3416,20 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
         DragQueryFileA(hd, 0, fp, MAX_PATH);
         DragFinish(hd);
         std::string p = fp;
-        if (p.length() > 4 && p.substr(p.length() - 4) == ".htp") loadFile(p);
+        auto slash = p.find_last_of("\\/");
+        std::string filename = (slash != std::string::npos) ? p.substr(slash + 1) : p;
+        auto dot = filename.find_last_of('.');
+
+        if (dot == std::string::npos) {
+            loadFile(p);
+        }
+        else {
+            std::string ext = filename.substr(dot);
+            for (char& c : ext) c = tolower(c);
+            if (ext == ".htp" || ext == ".txt" || ext == ".md" || ext == ".json" || ext == ".cpp" || ext == ".h" || ext == ".log") {
+                loadFile(p);
+            }
+        }
         return 0;
     }
     case WM_TIMER:
@@ -3366,8 +3448,6 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
     return DefWindowProcA(hw, msg, wp, lp);
 }
 int WINAPI WinMain(HINSTANCE hI, HINSTANCE, LPSTR cmd, int show) {
-    WSADATA wd;
-    WSAStartup(MAKEWORD(2, 2), &wd);
     INITCOMMONCONTROLSEX ic = { sizeof(ic),ICC_STANDARD_CLASSES };
     InitCommonControlsEx(&ic);
     initHighResTimer();
@@ -3412,6 +3492,5 @@ int WINAPI WinMain(HINSTANCE hI, HINSTANCE, LPSTR cmd, int show) {
     cleanupBackbuffer();
     FontCache::clear();
     GLLoader::unload();
-    WSACleanup();
     return (int)msg.wParam;
 }
