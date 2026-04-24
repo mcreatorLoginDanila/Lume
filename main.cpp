@@ -19,6 +19,7 @@
 #include <cctype>
 #include <thread>
 #include <mutex>
+#include <list>
 extern "C" {
 #include "lib/lua.h"
 #include "lib/lauxlib.h"
@@ -99,6 +100,7 @@ const int STATUS_H = 24;
 #define ID_BACK 1003
 #define ID_FWD  1004
 #define ID_REF  1005
+#define WM_UPDATE_CONTENT (WM_USER + 1)
 ULONG_PTR g_gdiplusToken;
 static HDC g_backDC = nullptr;
 static HBITMAP g_backBmp = nullptr;
@@ -115,7 +117,6 @@ static bool g_fullscreenCanvas = false;
 static std::string g_fullscreenCanvasId;
 static RECT g_preFullscreenRect = {};
 static LONG g_preFullscreenStyle = 0;
-
 void ensureBackbuffer(HDC hdc, int w, int h) {
     if (g_backDC && g_backW == w && g_backH == h) return;
     if (g_backDC) {
@@ -793,7 +794,9 @@ namespace AsyncNet {
 namespace ImageCache {
     std::map<std::string, std::shared_ptr<Gdiplus::Image>> cache;
     std::map<std::string, bool> loading;
+    std::list<std::string> history;
     std::mutex mtx;
+    const size_t MAX_CACHE_SIZE = 50;
     std::shared_ptr<Gdiplus::Image> get(const std::string& url) {
         if (url.empty()) return nullptr;
         {
@@ -836,9 +839,16 @@ namespace ImageCache {
                 std::lock_guard<std::mutex> lock(mtx);
                 cache[url] = img;
                 loading[url] = false;
+                if (img) {
+                    history.push_back(url);
+                    if (history.size() > MAX_CACHE_SIZE) {
+                        std::string oldest = history.front();
+                        history.pop_front();
+                        cache.erase(oldest);
+                    }
+                }
             }
-            g_contentDirty = true;
-            InvalidateRect(g_mainWnd, nullptr, FALSE);
+            PostMessage(g_mainWnd, WM_UPDATE_CONTENT, 0, 0);
             }).detach();
 
         return nullptr;
@@ -3031,6 +3041,8 @@ std::string buildTextHtp(const std::string& rawText) {
         for (char c : line) {
             if (c == '"') escaped += "\\\"";
             else if (c == '\\') escaped += "\\\\";
+            else if (c == '{') escaped += "\\{";
+            else if (c == '}') escaped += "\\}";
             else if (c == '\r') continue;
             else escaped += c;
         }
@@ -3527,6 +3539,10 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
         FontCache::clear();
         Gdiplus::GdiplusShutdown(g_gdiplusToken);
         PostQuitMessage(0);
+        return 0;
+    case WM_UPDATE_CONTENT:
+        g_contentDirty = true;
+        InvalidateRect(hw, nullptr, FALSE);
         return 0;
     }
     return DefWindowProcA(hw, msg, wp, lp);
