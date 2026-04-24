@@ -130,3 +130,5 @@ added gradient text on v3.1
 3d canvas?
 <img width="1473" height="725" alt="изображение" src="https://github.com/user-attachments/assets/1cbf7836-f4ac-48f7-a278-832604edc0df" />
 
+now supports https
+<img width="1918" height="1040" alt="image" src="https://github.com/user-attachments/assets/b5448290-b705-48e1-8e3e-38bf872b584e" />
