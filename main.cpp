@@ -39,6 +39,41 @@ extern "C" {
 #pragma comment(lib, "ole32.lib")
 #include <GL/gl.h>
 #include <GL/glu.h>
+std::wstring utf8_to_wstring(const std::string& str) {
+    if (str.empty()) return L"";
+    int size_needed = MultiByteToWideChar(CP_UTF8, 0, &str[0], (int)str.size(), NULL, 0);
+    std::wstring wstrTo(size_needed, 0);
+    MultiByteToWideChar(CP_UTF8, 0, &str[0], (int)str.size(), &wstrTo[0], size_needed);
+    return wstrTo;
+}
+std::string wstring_to_utf8(const std::wstring& wstr) {
+    if (wstr.empty()) return "";
+    int size = WideCharToMultiByte(CP_UTF8, 0, &wstr[0], (int)wstr.size(), NULL, 0, NULL, NULL);
+    std::string res(size, 0);
+    WideCharToMultiByte(CP_UTF8, 0, &wstr[0], (int)wstr.size(), &res[0], size, NULL, NULL);
+    return res;
+}
+int DrawTextU(HDC hdc, const char* str, int len, RECT* lprc, UINT format) {
+    std::wstring wstr = utf8_to_wstring(str);
+    return DrawTextW(hdc, wstr.c_str(), -1, lprc, format);
+}
+BOOL GetTextExtentPoint32U(HDC hdc, const char* str, int len, LPSIZE psizl) {
+    std::wstring wstr = utf8_to_wstring(str);
+    return GetTextExtentPoint32W(hdc, wstr.c_str(), (int)wstr.length(), psizl);
+}
+BOOL TextOutU(HDC hdc, int x, int y, const char* str, int len) {
+    std::wstring wstr = utf8_to_wstring(str);
+    return TextOutW(hdc, x, y, wstr.c_str(), (int)wstr.length());
+}
+BOOL SetWindowTextU(HWND hwnd, const char* str) {
+    std::wstring wstr = utf8_to_wstring(str);
+    return SetWindowTextW(hwnd, wstr.c_str());
+}
+int MessageBoxU(HWND hWnd, const char* text, const char* caption, UINT type) {
+    std::wstring wtext = utf8_to_wstring(text ? text : "");
+    std::wstring wcap = utf8_to_wstring(caption ? caption : "");
+    return MessageBoxW(hWnd, wtext.c_str(), wcap.c_str(), type);
+}
 typedef HGLRC(WINAPI* PFN_wglCreateContext)(HDC);
 typedef BOOL(WINAPI* PFN_wglMakeCurrent)(HDC, HGLRC);
 typedef BOOL(WINAPI* PFN_wglDeleteContext)(HGLRC);
@@ -167,7 +202,7 @@ void invalidateGLCanvasRect(int x, int y, int w, int h) {
     InvalidateRect(g_mainWnd, &r, FALSE);
 }
 void setStatus(const std::string& t) {
-    if (g_statusBar) SetWindowTextA(g_statusBar, t.c_str());
+    if (g_statusBar) SetWindowTextU(g_statusBar, t.c_str());
 }
 void releaseMouse() {
     if (g_mouseCaptured) {
@@ -268,16 +303,15 @@ HFONT get(int sz, bool b = false, bool i = false, const char* f = "Segoe UI") {
     Key k{ sz, b, i, f };
     auto it = g_cache.find(k);
     if (it != g_cache.end()) return it->second;
-
-    HFONT font = CreateFontA(-sz, 0, 0, 0,
+    std::wstring wface = utf8_to_wstring(f);
+    HFONT font = CreateFontW(-sz, 0, 0, 0,
         b ? FW_BOLD : FW_NORMAL,
         i, 0, 0,
         DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-        CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, f);
+        CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, wface.c_str());
     g_cache[k] = font;
     return font;
 }
-
 void clear() {
     for (auto& kv : g_cache) DeleteObject(kv.second);
     g_cache.clear();
@@ -615,13 +649,6 @@ public:
     }
 };
 }
-std::wstring utf8_to_wstring(const std::string& str) {
-    if (str.empty()) return L"";
-    int size_needed = MultiByteToWideChar(CP_UTF8, 0, &str[0], (int)str.size(), NULL, 0);
-    std::wstring wstrTo(size_needed, 0);
-    MultiByteToWideChar(CP_UTF8, 0, &str[0], (int)str.size(), &wstrTo[0], size_needed);
-    return wstrTo;
-}
 namespace Net {
     struct URL {
         std::string proto, host, path;
@@ -857,6 +884,7 @@ namespace ImageCache {
         std::lock_guard<std::mutex> lock(mtx);
         cache.clear();
         loading.clear();
+        history.clear();
     }
 }
 namespace Canvas {
@@ -900,7 +928,7 @@ std::shared_ptr<Buf> get(const std::string& id, HDC ref, int w, int h) {
 }
 }
 namespace GLCanvas {
-    static const char* kClassName = "LumeGLCanvasClass";
+    static const wchar_t* kClassName = L"LumeGLCanvasClass";
     static bool g_classRegistered = false;
     static HINSTANCE g_hInst = nullptr;
     struct GLView {
@@ -997,14 +1025,14 @@ namespace GLCanvas {
             return HTCLIENT;
 
         default:
-            return DefWindowProcA(hwnd, msg, wp, lp);
+            return DefWindowProcW(hwnd, msg, wp, lp);
         }
-        return DefWindowProcA(hwnd, msg, wp, lp);
+        return DefWindowProcW(hwnd, msg, wp, lp);
     }
     bool registerClass(HINSTANCE hInst) {
         if (g_classRegistered) return true;
         g_hInst = hInst;
-        WNDCLASSEXA wc = {};
+        WNDCLASSEXW wc = {};
         wc.cbSize = sizeof(wc);
         wc.lpfnWndProc = CanvasWndProc;
         wc.hInstance = hInst;
@@ -1012,7 +1040,7 @@ namespace GLCanvas {
         wc.lpszClassName = kClassName;
         wc.hbrBackground = nullptr;
 
-        if (!RegisterClassExA(&wc)) {
+        if (!RegisterClassExW(&wc)) {
             DWORD err = GetLastError();
             if (err != ERROR_CLASS_ALREADY_EXISTS) return false;
         }
@@ -1039,10 +1067,10 @@ namespace GLCanvas {
         v->id = id;
         v->w = w;
         v->h = h;
-        v->hwnd = CreateWindowExA(
+        v->hwnd = CreateWindowExW(
             0,
             kClassName,
-            "",
+            L"",
             WS_CHILD | WS_CLIPSIBLINGS | WS_CLIPCHILDREN | WS_VISIBLE,
             0, 0, w, h,
             g_mainWnd,
@@ -1313,7 +1341,7 @@ namespace GradientText {
         HFONT oldFont = (HFONT)SelectObject(dc, font);
         SetBkMode(dc, TRANSPARENT);
         SIZE totalSz;
-        GetTextExtentPoint32A(dc, text.c_str(), (int)text.length(), &totalSz);
+        GetTextExtentPoint32U(dc, text.c_str(), (int)text.length(), &totalSz);
         int W = totalSz.cx;
         int H = totalSz.cy;
         if (W <= 0 || H <= 0) {
@@ -1335,7 +1363,7 @@ namespace GradientText {
         memset(maskBits, 0, W * H * 4);
         SetBkMode(maskDC, TRANSPARENT);
         SetTextColor(maskDC, RGB(255, 255, 255));
-        TextOutA(maskDC, 0, 0, text.c_str(), (int)text.length());
+        TextOutU(maskDC, 0, 0, text.c_str(), (int)text.length());
         GdiFlush();
         BYTE* outBits = nullptr;
         HDC outDC = CreateCompatibleDC(dc);
@@ -1576,7 +1604,7 @@ static int l_http(lua_State* L) {
     return 2;
 }
 static int l_navigate(lua_State* L) { navigateTo(luaL_checkstring(L, 1)); return 0; }
-static int l_alert(lua_State* L) { MessageBoxA(g_hwnd, luaL_checkstring(L, 1), "Lume", MB_OK); return 0; }
+static int l_alert(lua_State* L) { MessageBoxU(g_hwnd, luaL_checkstring(L, 1), "Lume", MB_OK); return 0; }
 static int l_refresh(lua_State* L) { (void)L; invalidateContent(); return 0; }
 static int l_get_input(lua_State* L) {
     auto i = g_inputs.find(luaL_checkstring(L, 1));
@@ -1664,7 +1692,7 @@ static int l_cv_text(lua_State* L) {
         auto of = SelectObject(i->second->dc, f);
         SetTextColor(i->second->dc, c.cr());
         SetBkMode(i->second->dc, TRANSPARENT);
-        TextOutA(i->second->dc, x, y, txt, (int)strlen(txt));
+        TextOutU(i->second->dc, x, y, txt, (int)strlen(txt));
         SelectObject(i->second->dc, of);
     }
     return 0;
@@ -1746,7 +1774,7 @@ static int l_set_timer(lua_State* L) {
         if (lua_pcall(g_L, 0, 0, 0) != 0) {
             const char* err = lua_tostring(g_L, -1);
             OutputDebugStringA(err ? err : "Lua timer error\n");
-            MessageBoxA(g_hwnd, err ? err : "Unknown error", "Lua Timer Error", MB_OK | MB_ICONERROR);
+            MessageBoxU(g_hwnd, err ? err : "Unknown error", "Lua Timer Error", MB_OK | MB_ICONERROR);
             lua_pop(g_L, 1);
         }
     });
@@ -2115,7 +2143,7 @@ void exec(const std::string& code) {
         const char* e = lua_tostring(g_L, -1);
         OutputDebugStringA(e ? e : "lua err");
         OutputDebugStringA("\n");
-        MessageBoxA(g_hwnd, e ? e : "Unknown error", "Lua Error", MB_OK | MB_ICONERROR);
+        MessageBoxU(g_hwnd, e ? e : "Unknown error", "Lua Error", MB_OK | MB_ICONERROR);
         lua_pop(g_L, 1);
     }
 }
@@ -2375,7 +2403,7 @@ class Engine {
             if (grad.empty()) {
                 auto of = SelectObject(dc, f);
                 RECT rcCalc = { x, drawY, x + mw, drawY + 1000 };
-                DrawTextA(dc, ct.c_str(), -1, &rcCalc, DT_WORDBREAK | DT_CALCRECT);
+                DrawTextU(dc, ct.c_str(), -1, &rcCalc, DT_WORDBREAK | DT_CALCRECT);
                 th = rcCalc.bottom - rcCalc.top;
                 SelectObject(dc, of);
             }
@@ -2388,7 +2416,7 @@ class Engine {
                     SetTextColor(dc, col.cr());
                     SetBkMode(dc, TRANSPARENT);
                     RECT rcDraw = { x, drawY, x + mw, drawY + th };
-                    DrawTextA(dc, ct.c_str(), -1, &rcDraw, DT_WORDBREAK);
+                    DrawTextU(dc, ct.c_str(), -1, &rcDraw, DT_WORDBREAK);
                     SelectObject(dc, of);
                 }
             } });
@@ -2404,14 +2432,14 @@ class Engine {
             HFONT f = FontCache::get(sz);
             auto of = SelectObject(dc, f);
             SIZE ts;
-            GetTextExtentPoint32A(dc, ct.c_str(), (int)ct.length(), &ts);
+            GetTextExtentPoint32U(dc, ct.c_str(), (int)ct.length(), &ts);
             SelectObject(dc, of);
             renderQueue.push_back({ z, [=]() {
                 auto of2 = SelectObject(dc, f);
                 SetTextColor(dc, col.cr());
                 SetBkMode(dc, TRANSPARENT);
                 RECT rc = { x, y - scrollY, x + ts.cx, y - scrollY + ts.cy };
-                DrawTextA(dc, ct.c_str(), -1, &rc, 0);
+                DrawTextU(dc, ct.c_str(), -1, &rc, 0);
                 HPEN p = CreatePen(PS_SOLID, 1, col.cr());
                 auto op = SelectObject(dc, p);
                 MoveToEx(dc, x, y - scrollY + ts.cy - 1, 0);
@@ -2450,7 +2478,7 @@ class Engine {
                 SetTextColor(dc, col.cr());
                 SetBkMode(dc, TRANSPARENT);
                 RECT rc = { bx, by, bx + bw, by + bh };
-                DrawTextA(dc, ct.c_str(), -1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                DrawTextU(dc, ct.c_str(), -1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
                 SelectObject(dc, of);
             } });
             if (pH) {
@@ -2495,11 +2523,11 @@ class Engine {
                 if (!textToDraw.empty()) {
                     SetTextColor(dc, RGB(230, 230, 240));
                     RECT rc = { ix + 6, iy + 2, ix + iw - 4, iy + ih - 2 };
-                    DrawTextA(dc, textToDraw.c_str(), -1, &rc, DT_VCENTER | DT_SINGLELINE);
+                    DrawTextU(dc, textToDraw.c_str(), -1, &rc, DT_VCENTER | DT_SINGLELINE);
                     if (foc) {
                         int cp = (std::min)(cursorToDraw, (int)textToDraw.length());
                         SIZE ts;
-                        GetTextExtentPoint32A(dc, textToDraw.c_str(), cp, &ts);
+                        GetTextExtentPoint32U(dc, textToDraw.c_str(), cp, &ts);
                         HPEN cpen = CreatePen(PS_SOLID, 1, RGB(255, 255, 255));
                         auto ocp = SelectObject(dc, cpen);
                         MoveToEx(dc, ix + 6 + ts.cx, iy + 4, 0);
@@ -2511,7 +2539,7 @@ class Engine {
                 else if (!phToDraw.empty()) {
                     SetTextColor(dc, RGB(120, 120, 140));
                     RECT rc = { ix + 6, iy + 2, ix + iw - 4, iy + ih - 2 };
-                    DrawTextA(dc, phToDraw.c_str(), -1, &rc, DT_VCENTER | DT_SINGLELINE);
+                    DrawTextU(dc, phToDraw.c_str(), -1, &rc, DT_VCENTER | DT_SINGLELINE);
                 }
                 SelectObject(dc, of);
             } });
@@ -2573,7 +2601,7 @@ class Engine {
                     SetTextColor(dc, RGB(150, 150, 170));
                     SetBkMode(dc, TRANSPARENT);
                     RECT rc = { cx, cy, cx + cw, cy + ch };
-                    DrawTextA(dc, "No OpenGL", -1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                    DrawTextU(dc, "No OpenGL", -1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
                     SelectObject(dc, of);
                 }
             } });
@@ -2626,7 +2654,7 @@ class Engine {
             HFONT f = FontCache::get(sz);
             auto of = SelectObject(dc, f);
             RECT rcCalc = { x, y - scrollY, x + mw, y - scrollY + 200 };
-            DrawTextA(dc, ct.c_str(), -1, &rcCalc, DT_WORDBREAK | DT_CALCRECT);
+            DrawTextU(dc, ct.c_str(), -1, &rcCalc, DT_WORDBREAK | DT_CALCRECT);
             int th = rcCalc.bottom - rcCalc.top;
             SelectObject(dc, of);
             renderQueue.push_back({ z, [=]() {
@@ -2644,7 +2672,7 @@ class Engine {
                 SetTextColor(dc, col.cr());
                 SetBkMode(dc, TRANSPARENT);
                 RECT rcDraw = { x, y - scrollY, x + mw, y - scrollY + th };
-                DrawTextA(dc, ct.c_str(), -1, &rcDraw, DT_WORDBREAK);
+                DrawTextU(dc, ct.c_str(), -1, &rcDraw, DT_WORDBREAK);
                 SelectObject(dc, of2);
             } });
             curY = y + th + 4;
@@ -2691,7 +2719,7 @@ class Engine {
                     SetBkMode(dc, TRANSPARENT);
                     RECT rc = {x + 4, y - scrollY + 4, x + iw - 4, y - scrollY + ih - 4};
                     std::string drawAlt = src.empty() ? alt : "Loading...";
-                    DrawTextA(dc, drawAlt.c_str(), -1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                    DrawTextU(dc, drawAlt.c_str(), -1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
                     SelectObject(dc, of);
                 }
             }});
@@ -3092,8 +3120,8 @@ void loadContent(const std::string& content, const std::string& url, bool isInte
         for (auto& c : e->children) run(c);
         };
     run(g_doc.root);
-    SetWindowTextA(g_mainWnd, (g_doc.title + " - Lume").c_str());
-    SetWindowTextA(g_addressBar, url.c_str());
+    SetWindowTextU(g_mainWnd, (g_doc.title + " - Lume").c_str());
+    SetWindowTextU(g_addressBar, url.c_str());
     invalidateContent();
 }
 void loadFile(const std::string& fp) {
@@ -3178,9 +3206,9 @@ void goFwd() { if (g_histPos < (int)g_hist.size() - 1) { g_histPos++; histNav(g_
 WNDPROC g_origAddr = 0;
 LRESULT CALLBACK AddrProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     if (m == WM_KEYDOWN && w == VK_RETURN) {
-        char b[2048] = {};
-        GetWindowTextA(h, b, 2048);
-        navigateTo(b);
+        wchar_t b[2048] = {};
+        GetWindowTextW(h, b, 2048);
+        navigateTo(wstring_to_utf8(b));
         return 0;
     }
     if (m == WM_CHAR && w == VK_RETURN) return 0;
@@ -3387,20 +3415,26 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
         auto it = Script::g_inputs.find(Script::g_focusId);
         if (it != Script::g_inputs.end()) {
             auto& inp = it->second;
-            char c = (char)wp;
-            if (c == '\b') {
+            wchar_t wc = (wchar_t)wp;
+            if (wc == L'\b') {
                 if (inp.cursor > 0 && !inp.text.empty()) {
-                    inp.text.erase(inp.cursor - 1, 1);
-                    inp.cursor--;
+                    while (inp.cursor > 0) {
+                        inp.cursor--;
+                        char erased = inp.text[inp.cursor];
+                        inp.text.erase(inp.cursor, 1);
+                        if ((erased & 0xC0) != 0x80) break;
+                    }
                 }
             }
-            else if (c == '\r' || c == '\n') {
+            else if (wc == L'\r' || wc == L'\n') {
                 inp.focused = false;
                 Script::g_focusId.clear();
             }
-            else if (c >= 32) {
-                inp.text.insert(inp.cursor, 1, c);
-                inp.cursor++;
+            else if (wc >= 32) {
+                std::wstring ws(1, wc);
+                std::string utf8_char = wstring_to_utf8(ws);
+                inp.text.insert(inp.cursor, utf8_char);
+                inp.cursor += (int)utf8_char.length();
             }
             invalidateContent();
             return 0;
@@ -3497,9 +3531,9 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_COMMAND: {
         int id = LOWORD(wp);
         if (id == ID_GO) {
-            char b[2048] = {};
-            GetWindowTextA(g_addressBar, b, 2048);
-            navigateTo(b);
+            wchar_t b[2048] = {};
+            GetWindowTextW(g_addressBar, b, 2048);
+            navigateTo(wstring_to_utf8(b));
         }
         else if (id == ID_BACK) goBack();
         else if (id == ID_FWD) goFwd();
@@ -3545,7 +3579,7 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
         InvalidateRect(hw, nullptr, FALSE);
         return 0;
     }
-    return DefWindowProcA(hw, msg, wp, lp);
+    return DefWindowProcW(hw, msg, wp, lp);
 }
 int WINAPI WinMain(HINSTANCE hI, HINSTANCE, LPSTR cmd, int show) {
     INITCOMMONCONTROLSEX ic = { sizeof(ic),ICC_STANDARD_CLASSES };
@@ -3556,21 +3590,21 @@ int WINAPI WinMain(HINSTANCE hI, HINSTANCE, LPSTR cmd, int show) {
     GLLoader::load();
     Plugins::initHostAPI();
     Plugins::discoverPlugins();
-    WNDCLASSEXA wc = {};
+    WNDCLASSEXW wc = {};
     wc.cbSize = sizeof(wc);
     wc.style = CS_HREDRAW | CS_VREDRAW;
     wc.lpfnWndProc = WndProc;
     wc.hInstance = hI;
     wc.hCursor = LoadCursor(0, IDC_ARROW);
     wc.hbrBackground = 0;
-    wc.lpszClassName = "LumeClass";
+    wc.lpszClassName = L"LumeClass";
     wc.hIcon = LoadIcon(0, IDI_APPLICATION);
-    RegisterClassExA(&wc);
+    RegisterClassExW(&wc);
     GLCanvas::registerClass(hI);
-    g_mainWnd = CreateWindowExA(
+    g_mainWnd = CreateWindowExW(
         WS_EX_ACCEPTFILES,
-        "LumeClass",
-        "Lume",
+        L"LumeClass",
+        L"Lume",
         WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
         CW_USEDEFAULT, CW_USEDEFAULT, 1024, 768,
         0, 0, hI, 0);
