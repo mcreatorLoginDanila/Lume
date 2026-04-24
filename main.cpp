@@ -35,6 +35,7 @@ extern "C" {
 #pragma comment(lib, "shell32.lib")
 #pragma comment(lib, "opengl32.lib")
 #pragma comment(lib, "glu32.lib")
+#pragma comment(lib, "ole32.lib")
 #include <GL/gl.h>
 #include <GL/glu.h>
 typedef HGLRC(WINAPI* PFN_wglCreateContext)(HDC);
@@ -787,6 +788,65 @@ namespace AsyncNet {
             WinHttpCloseHandle(hConnect);
             WinHttpCloseHandle(hSession);
             }).detach();
+    }
+}
+namespace ImageCache {
+    std::map<std::string, std::shared_ptr<Gdiplus::Image>> cache;
+    std::map<std::string, bool> loading;
+    std::mutex mtx;
+    std::shared_ptr<Gdiplus::Image> get(const std::string& url) {
+        if (url.empty()) return nullptr;
+        {
+            std::lock_guard<std::mutex> lock(mtx);
+            auto it = cache.find(url);
+            if (it != cache.end()) return it->second;
+            if (loading[url]) return nullptr;
+            loading[url] = true;
+        }
+        std::thread([url]() {
+            std::shared_ptr<Gdiplus::Image> img;
+            if (url.substr(0, 4) == "http") {
+                auto r = Net::fetch(Net::URL::parse(url));
+                if (r.ok && !r.body.empty()) {
+                    HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, r.body.size());
+                    if (hMem) {
+                        void* pData = GlobalLock(hMem);
+                        memcpy(pData, r.body.data(), r.body.size());
+                        GlobalUnlock(hMem);
+                        IStream* pStream = nullptr;
+                        if (CreateStreamOnHGlobal(hMem, TRUE, &pStream) == S_OK) {
+                            img = std::shared_ptr<Gdiplus::Image>(Gdiplus::Image::FromStream(pStream));
+                            pStream->Release();
+                        }
+                    }
+                }
+            }
+            else {
+                std::string path = url;
+                if (path.length() > 7 && path.substr(0, 7) == "file://") path = path.substr(7);
+                int len = MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, NULL, 0);
+                std::wstring wpath(len, 0);
+                MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, &wpath[0], len);
+                img = std::shared_ptr<Gdiplus::Image>(Gdiplus::Image::FromFile(wpath.c_str()));
+            }
+            if (img && img->GetLastStatus() != Gdiplus::Ok) {
+                img = nullptr;
+            }
+            {
+                std::lock_guard<std::mutex> lock(mtx);
+                cache[url] = img;
+                loading[url] = false;
+            }
+            g_contentDirty = true;
+            InvalidateRect(g_mainWnd, nullptr, FALSE);
+            }).detach();
+
+        return nullptr;
+    }
+    void clear() {
+        std::lock_guard<std::mutex> lock(mtx);
+        cache.clear();
+        loading.clear();
     }
 }
 namespace Canvas {
@@ -1952,6 +2012,12 @@ void init() {
     luaL_requiref(g_L, "table", luaopen_table, 1); lua_pop(g_L, 1);
     luaL_requiref(g_L, "string", luaopen_string, 1); lua_pop(g_L, 1);
     luaL_requiref(g_L, "math", luaopen_math, 1); lua_pop(g_L, 1);
+    luaL_requiref(g_L, "os", luaopen_os, 1);
+    lua_pushnil(g_L); lua_setfield(g_L, -2, "execute");
+    lua_pushnil(g_L); lua_setfield(g_L, -2, "remove");
+    lua_pushnil(g_L); lua_setfield(g_L, -2, "rename");
+    lua_pushnil(g_L); lua_setfield(g_L, -2, "exit");
+    lua_pushnil(g_L); lua_setfield(g_L, -2, "getenv");
     lua_register(g_L, "set_prop", l_set_prop);
     lua_register(g_L, "set_inner_htp", l_set_inner_htp);
     lua_register(g_L, "set_text", l_set_text);
@@ -2070,6 +2136,7 @@ void reset() {
     g_keyDownRef = LUA_NOREF;
     Canvas::g_bufs.clear();
     GLCanvas::destroyAll();
+    ImageCache::clear();
     if (g_L) {
         lua_close(g_L);
         g_L = nullptr;
@@ -2580,27 +2647,44 @@ class Engine {
             int iw = e->props.getInt("width", 100);
             int ih = e->props.getInt("height", 100);
             std::string alt = e->props.get("alt", "[image]");
+            std::string src = e->props.get("src", "");
             auto bdr = e->props.getColor("border-color", { 80,80,100 });
             int z = e->props.getInt("z-index", 0);
+            std::string fullUrl = src.empty() ? "" : resolveUrl(src, g_curUrl);
             renderQueue.push_back({ z, [=]() {
-                HBRUSH b = CreateSolidBrush(RGB(50, 50, 70));
-                HPEN p = CreatePen(PS_SOLID, 1, bdr.cr());
-                auto ob = SelectObject(dc, b);
-                auto op = SelectObject(dc, p);
-                Rectangle(dc, x, y - scrollY, x + iw, y - scrollY + ih);
-                SelectObject(dc, ob);
-                SelectObject(dc, op);
-                DeleteObject(b);
-                DeleteObject(p);
-
-                HFONT f = FontCache::get(12);
-                auto of = SelectObject(dc, f);
-                SetTextColor(dc, RGB(150, 150, 170));
-                SetBkMode(dc, TRANSPARENT);
-                RECT rc = { x + 4, y - scrollY + 4, x + iw - 4, y - scrollY + ih - 4 };
-                DrawTextA(dc, alt.c_str(), -1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-                SelectObject(dc, of);
-            } });
+                auto img = ImageCache::get(fullUrl);
+                if (img) {
+                    Gdiplus::Graphics g(dc);
+                    g.DrawImage(img.get(), x, y - scrollY, iw, ih);
+                    HPEN p = CreatePen(PS_SOLID, 1, bdr.cr());
+                    auto op = SelectObject(dc, p);
+                    auto nb = (HBRUSH)GetStockObject(NULL_BRUSH);
+                    auto ob = SelectObject(dc, nb);
+                    Rectangle(dc, x, y - scrollY, x + iw, y - scrollY + ih);
+                    SelectObject(dc, ob);
+                    SelectObject(dc, op);
+                    DeleteObject(p);
+                }
+                else {
+                    HBRUSH b = CreateSolidBrush(RGB(50, 50, 70));
+                    HPEN p = CreatePen(PS_SOLID, 1, bdr.cr());
+                    auto ob = SelectObject(dc, b);
+                    auto op = SelectObject(dc, p);
+                    Rectangle(dc, x, y - scrollY, x + iw, y - scrollY + ih);
+                    SelectObject(dc, ob);
+                    SelectObject(dc, op);
+                    DeleteObject(b);
+                    DeleteObject(p);
+                    HFONT f = FontCache::get(12);
+                    auto of = SelectObject(dc, f);
+                    SetTextColor(dc, RGB(150, 150, 170));
+                    SetBkMode(dc, TRANSPARENT);
+                    RECT rc = {x + 4, y - scrollY + 4, x + iw - 4, y - scrollY + ih - 4};
+                    std::string drawAlt = src.empty() ? alt : "Loading...";
+                    DrawTextA(dc, drawAlt.c_str(), -1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                    SelectObject(dc, of);
+                }
+            }});
             curY = y + ih + 8;
             break;
         }
