@@ -3,6 +3,8 @@
   @text {content:"LUME STORE"; size:46; color:"#fafafa"; bold:"true";}
   @br {size:5;}
   @text {content:"Select a game to launch"; size:18; color:"#a1a1aa"; italic:"true";}
+  @br {size:20;}
+  @button {content:"Другие браузеры"; width:400; height:45; background:"#3f3f46"; color:"#ffffff"; border-radius:8; size:18; url:"download_browser.htp";}
 }
 @block { align:"center"; padding:20; margin:0; background:"#09090b";
     @row { gap:30;
@@ -20,7 +22,6 @@
             @br {size:25;}
             @button {content:"Play ULTRAKILL"; width:180; height:40; background:"#dc2626"; color:"#ffffff"; border-radius:6; size:16; url:"ultrakill.htp";}
         }
-        
     }
     @br { size:50; }
     @button {content:"Back to Home"; width:150; height:35; background:"#27272a"; color:"#fafafa"; border-radius:6; url:"about:home"; size:14;}
