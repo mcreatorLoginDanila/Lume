@@ -24,6 +24,11 @@ extern "C" {
 #include "lib/lua.h"
 #include "lib/lauxlib.h"
 #include "lib/lualib.h"
+#pragma warning(push)
+#pragma warning(disable: 4002 4003)
+#include "lib/wasm3/wasm3.h"
+#include "lib/wasm3/m3_env.h"
+#pragma warning(pop)
 }
 #include "lume_plugin.h"
 #include <objidl.h>
@@ -41,9 +46,14 @@ extern "C" {
 #include <GL/glu.h>
 std::wstring utf8_to_wstring(const std::string& str) {
     if (str.empty()) return L"";
-    int size_needed = MultiByteToWideChar(CP_UTF8, 0, &str[0], (int)str.size(), NULL, 0);
+    if (str.size() < 1024) {
+        wchar_t buf[1024];
+        int len = MultiByteToWideChar(CP_UTF8, 0, str.data(), (int)str.size(), buf, 1024);
+        return std::wstring(buf, len);
+    }
+    int size_needed = MultiByteToWideChar(CP_UTF8, 0, str.data(), (int)str.size(), NULL, 0);
     std::wstring wstrTo(size_needed, 0);
-    MultiByteToWideChar(CP_UTF8, 0, &str[0], (int)str.size(), &wstrTo[0], size_needed);
+    MultiByteToWideChar(CP_UTF8, 0, str.data(), (int)str.size(), &wstrTo[0], size_needed);
     return wstrTo;
 }
 std::string wstring_to_utf8(const std::wstring& wstr) {
@@ -395,17 +405,27 @@ struct Color {
     int r = 255, g = 255, b = 255, a = 255;
     static Color fromHex(const std::string& hex) {
         Color c;
-        std::string h = hex;
-        if (!h.empty() && h[0] == '#') h = h.substr(1);
-        try {
-            if (h.length() >= 6) {
-                c.r = std::stoi(h.substr(0, 2), 0, 16);
-                c.g = std::stoi(h.substr(2, 2), 0, 16);
-                c.b = std::stoi(h.substr(4, 2), 0, 16);
+        const char* str = hex.c_str();
+        if (*str == '#') str++;
+        int len = 0;
+        while (str[len]) len++;
+        auto parseHex = [](const char* s, int l) -> int {
+            int val = 0;
+            for (int i = 0; i < l; ++i) {
+                char ch = s[i];
+                val <<= 4;
+                if (ch >= '0' && ch <= '9') val |= (ch - '0');
+                else if (ch >= 'a' && ch <= 'f') val |= (ch - 'a' + 10);
+                else if (ch >= 'A' && ch <= 'F') val |= (ch - 'A' + 10);
             }
-            if (h.length() >= 8) c.a = std::stoi(h.substr(6, 2), 0, 16);
+            return val;
+            };
+        if (len >= 6) {
+            c.r = parseHex(str, 2);
+            c.g = parseHex(str + 2, 2);
+            c.b = parseHex(str + 4, 2);
         }
-        catch (...) {}
+        if (len >= 8) c.a = parseHex(str + 6, 2);
         return c;
     }
     COLORREF cr() const { return RGB(r, g, b); }
@@ -422,8 +442,8 @@ struct Props {
     int getInt(const std::string& k, int def = 0) const {
         auto i = d.find(k);
         if (i != d.end()) {
-            try { return std::stoi(i->second); }
-            catch (...) {}
+            int val = 0;
+            if (sscanf(i->second.c_str(), "%d", &val) == 1) return val;
         }
         return def;
     }
@@ -1372,26 +1392,31 @@ namespace GradientText {
         BitBlt(outDC, 0, 0, W, H, dc, x, y, SRCCOPY);
         GdiFlush();
         float span = 2.0f;
+        std::vector<HTP::Color> gradLine(W);
+        for (int px = 0; px < W; px++) {
+            float normX = (W > 1) ? (float)px / (float)(W - 1) : 0.0f;
+            float t = normX + shimmer_offset;
+            t = fmodf(t, span);
+            if (t < 0.f) t += span;
+            if (t > 1.0f) t = span - t;
+            if (t < 0.f) t = 0.f;
+            if (t > 1.f) t = 1.f;
+            gradLine[px] = lerpColor(c1, c2, t);
+        }
         for (int py = 0; py < H; py++) {
+            int rowIdx = py * W;
             for (int px = 0; px < W; px++) {
-                int idx = (py * W + px) * 4;
+                int idx = (rowIdx + px) * 4;
                 BYTE mask = maskBits[idx];
                 if (mask == 0) continue;
-                float normX = (W > 1) ? (float)px / (float)(W - 1) : 0.0f;
-                float t = normX + shimmer_offset;
-                t = fmodf(t, span);
-                if (t < 0.f) t += span;
-                if (t > 1.0f) t = span - t;
-                if (t < 0.f) t = 0.f;
-                if (t > 1.f) t = 1.f;
-                HTP::Color gc = lerpColor(c1, c2, t);
-                float alpha = mask / 255.0f;
+                HTP::Color& gc = gradLine[px];
+                int alpha = mask;
                 BYTE bgB = outBits[idx + 0];
                 BYTE bgG = outBits[idx + 1];
                 BYTE bgR = outBits[idx + 2];
-                outBits[idx + 0] = (BYTE)(bgB + (gc.b - bgB) * alpha);
-                outBits[idx + 1] = (BYTE)(bgG + (gc.g - bgG) * alpha);
-                outBits[idx + 2] = (BYTE)(bgR + (gc.r - bgR) * alpha);
+                outBits[idx + 0] = (BYTE)(bgB + ((gc.b - bgB) * alpha) / 255);
+                outBits[idx + 1] = (BYTE)(bgG + ((gc.g - bgG) * alpha) / 255);
+                outBits[idx + 2] = (BYTE)(bgR + ((gc.r - bgR) * alpha) / 255);
             }
         }
         BitBlt(dc, x, y, W, H, outDC, 0, 0, SRCCOPY);
@@ -1420,14 +1445,11 @@ static void gluLookAt_impl(double eyeX, double eyeY, double eyeZ,
     double upX, double upY, double upZ) {
     double fx = centerX - eyeX, fy = centerY - eyeY, fz = centerZ - eyeZ;
     double flen = sqrt(fx * fx + fy * fy + fz * fz);
-    if (flen > 0) { fx /= flen; fy /= flen; fz /= flen; }
-
+    if (flen > 0) { fx /= flen; fy /= flen; fz /= flen;}
     double sx = fy * upZ - fz * upY, sy = fz * upX - fx * upZ, sz = fx * upY - fy * upX;
     double slen = sqrt(sx * sx + sy * sy + sz * sz);
-    if (slen > 0) { sx /= slen; sy /= slen; sz /= slen; }
-
+    if (slen > 0) { sx /= slen; sy /= slen; sz /= slen;}
     double ux = sy * fz - sz * fy, uy = sz * fx - sx * fz, uz = sx * fy - sy * fx;
-
     double m[16] = {
         sx, ux, -fx, 0,
         sy, uy, -fy, 0,
@@ -1437,7 +1459,59 @@ static void gluLookAt_impl(double eyeX, double eyeY, double eyeZ,
     glMultMatrixd(m);
     glTranslated(-eyeX, -eyeY, -eyeZ);
 }
+std::string resolveUrl(const std::string& url, const std::string& baseUrl);
+extern std::string g_curUrl;
+namespace WasmEngine {
+    static IM3Environment env = nullptr;
+    struct Instance {
+        IM3Runtime runtime = nullptr;
+        IM3Module module = nullptr;
+        std::string bytes;
+    };
+    static std::map<int, Instance> instances;
+    static int nextId = 1;
+
+    void init() {
+        if (!env) env = m3_NewEnvironment();
+    }
+    int load(const std::string& wasmBytes) {
+        if (!env) init();
+        IM3Runtime runtime = m3_NewRuntime(env, 64 * 1024, nullptr);
+        if (!runtime) return -1;
+
+        int id = nextId++;
+        Instance& inst = instances[id];
+        inst.bytes = wasmBytes;
+        IM3Module module;
+        M3Result result = m3_ParseModule(env, &module, (const uint8_t*)inst.bytes.data(), inst.bytes.size());
+        if (result) {
+            m3_FreeRuntime(runtime);
+            instances.erase(id);
+            return -1;
+        }
+        result = m3_LoadModule(runtime, module);
+        if (result) {
+            m3_FreeRuntime(runtime);
+            instances.erase(id);
+            return -1;
+        }
+        inst.runtime = runtime;
+        inst.module = module;
+        return id;
+    }
+    void clear() {
+        for (auto& kv : instances) {
+            m3_FreeRuntime(kv.second.runtime);
+        }
+        instances.clear();
+    }
+}
 extern HTP::Doc g_doc;
+namespace GLBuffers {
+    std::map<int, std::vector<float>> buffers;
+    int nextId = 1;
+    void clear() { buffers.clear(); }
+}
 namespace Script {
 struct InputState {
     std::string text, placeholder;
@@ -1984,6 +2058,33 @@ static int l_gl_materialfv(lua_State* L) {
     glMaterialfv(face, pname, params);
     return 0;
 }
+static int l_gl_create_buffer(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    int len = (int)luaL_len(L, 1);
+    std::vector<float> buf;
+    buf.reserve(len);
+    for (int i = 1; i <= len; ++i) {
+        lua_rawgeti(L, 1, i);
+        buf.push_back((float)lua_tonumber(L, -1));
+        lua_pop(L, 1);
+    }
+    int id = GLBuffers::nextId++;
+    GLBuffers::buffers[id] = std::move(buf);
+    lua_pushinteger(L, id);
+    return 1;
+}
+static int l_gl_draw_buffer(lua_State* L) {
+    int id = (int)luaL_checkinteger(L, 1);
+    int mode = (int)luaL_checkinteger(L, 2);
+    auto it = GLBuffers::buffers.find(id);
+    if (it != GLBuffers::buffers.end() && !it->second.empty()) {
+        glEnableClientState(GL_VERTEX_ARRAY);
+        glVertexPointer(3, GL_FLOAT, 0, it->second.data());
+        glDrawArrays(mode, 0, (int)(it->second.size() / 3));
+        glDisableClientState(GL_VERTEX_ARRAY);
+    }
+    return 0;
+}
 static int l_download_async(lua_State* L) {
     std::string url = luaL_checkstring(L, 1);
     std::string fname = luaL_checkstring(L, 2);
@@ -2003,6 +2104,104 @@ static int l_download_status(lua_State* L) {
     }
     lua_pushinteger(L, -404);
     return 1;
+}
+static int l_wasm_load(lua_State* L) {
+    const char* url = luaL_checkstring(L, 1);
+    std::string fullUrl = resolveUrl(url, g_curUrl);
+    std::string wasmBytes;
+    if (fullUrl.substr(0, 7) == "file://") {
+        std::string path = fullUrl.substr(7);
+        int len = MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, NULL, 0);
+        std::wstring wpath(len, 0);
+        MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, &wpath[0], len);
+        std::ifstream f(wpath, std::ios::binary);
+        if (f) {
+            std::ostringstream ss;
+            ss << f.rdbuf();
+            wasmBytes = ss.str();
+        }
+    }
+    else {
+        auto r = Net::fetch(Net::URL::parse(fullUrl));
+        if (r.ok) wasmBytes = r.body;
+    }
+    if (wasmBytes.empty()) {
+        lua_pushnil(L);
+        lua_pushstring(L, "Failed to load WASM (not found or network error)");
+        return 2;
+    }
+    int id = WasmEngine::load(wasmBytes);
+    if (id < 0) {
+        lua_pushnil(L);
+        lua_pushstring(L, "Failed to parse WASM module (invalid binary format)");
+        return 2;
+    }
+    lua_pushinteger(L, id);
+    return 1;
+}
+static int l_wasm_load_raw(lua_State* L) {
+    size_t len;
+    const char* data = luaL_checklstring(L, 1, &len);
+    std::string bytes(data, len);
+    int id = WasmEngine::load(bytes);
+    if (id < 0) {
+        lua_pushnil(L);
+        lua_pushstring(L, "Failed to parse RAW WASM module");
+        return 2;
+    }
+    lua_pushinteger(L, id);
+    return 1;
+}
+static int l_wasm_call(lua_State* L) {
+    int id = (int)luaL_checkinteger(L, 1);
+    const char* funcName = luaL_checkstring(L, 2);
+    auto it = WasmEngine::instances.find(id);
+    if (it == WasmEngine::instances.end()) return 0;
+    IM3Function func;
+    M3Result res = m3_FindFunction(&func, it->second.runtime, funcName);
+    if (res) {
+        lua_pushstring(L, res);
+        lua_error(L);
+        return 0;
+    }
+    int numArgs = m3_GetArgCount(func);
+    std::vector<uint64_t> argValues(numArgs, 0);
+    std::vector<const void*> argPtrs(numArgs, nullptr);
+    for (int i = 0; i < numArgs; ++i) {
+        int luaArgIdx = 3 + i;
+        switch (m3_GetArgType(func, i)) {
+        case c_m3Type_i32: { int32_t v = (int32_t)luaL_optinteger(L, luaArgIdx, 0); memcpy(&argValues[i], &v, 4); break; }
+        case c_m3Type_i64: { int64_t v = (int64_t)luaL_optinteger(L, luaArgIdx, 0); memcpy(&argValues[i], &v, 8); break; }
+        case c_m3Type_f32: { float v = (float)luaL_optnumber(L, luaArgIdx, 0.0);    memcpy(&argValues[i], &v, 4); break; }
+        case c_m3Type_f64: { double v = (double)luaL_optnumber(L, luaArgIdx, 0.0);   memcpy(&argValues[i], &v, 8); break; }
+        default: break;
+        }
+        argPtrs[i] = &argValues[i];
+    }
+    res = m3_Call(func, numArgs, argPtrs.data());
+    if (res) {
+        lua_pushstring(L, res);
+        lua_error(L);
+        return 0;
+    }
+    int numRets = m3_GetRetCount(func);
+    if (numRets == 0) return 0;
+    std::vector<uint64_t> retValues(numRets, 0);
+    std::vector<const void*> retPtrs(numRets, nullptr);
+    for (int i = 0; i < numRets; ++i) retPtrs[i] = &retValues[i];
+    res = m3_GetResults(func, numRets, retPtrs.data());
+    if (res) return 0;
+    int pushed = 0;
+    for (int i = 0; i < numRets; ++i) {
+        switch (m3_GetRetType(func, i)) {
+        case c_m3Type_i32: lua_pushinteger(L, *(int32_t*)&retValues[i]); pushed++; break;
+        case c_m3Type_i64: lua_pushinteger(L, *(int64_t*)&retValues[i]); pushed++; break;
+        case c_m3Type_f32: lua_pushnumber(L, *(float*)&retValues[i]); pushed++; break;
+        case c_m3Type_f64: lua_pushnumber(L, *(double*)&retValues[i]); pushed++; break;
+        default: break;
+        }
+    }
+    return pushed;
 }
 void registerGLConstants(lua_State* L) {
     struct { const char* n; int v; } cs[] = {
@@ -2128,12 +2327,17 @@ void init() {
     lua_register(g_L, "gl_text_coord2f", l_gl_text_coord2f);
     lua_register(g_L, "gl_load_texture", l_gl_load_texture);
     lua_register(g_L, "gl_load_obj", l_gl_load_obj);
-    lua_register(g_L, "download_async", l_download_async);
-    lua_register(g_L, "download_status", l_download_status);
     lua_register(g_L, "gl_delete_texture", l_gl_delete_texture);
     lua_register(g_L, "gl_tex_parameteri", l_gl_tex_parameteri);
     lua_register(g_L, "gl_lightfv", l_gl_lightfv);
     lua_register(g_L, "gl_materialfv", l_gl_materialfv);
+    lua_register(g_L, "gl_create_buffer", l_gl_create_buffer);
+    lua_register(g_L, "gl_draw_buffer", l_gl_draw_buffer);
+    lua_register(g_L, "download_async", l_download_async);
+    lua_register(g_L, "download_status", l_download_status);
+    lua_register(g_L, "wasm_load", l_wasm_load);
+    lua_register(g_L, "wasm_load_raw", l_wasm_load_raw);
+    lua_register(g_L, "wasm_call", l_wasm_call);
     registerGLConstants(g_L);
     Plugins::initAllPlugins(g_L);
 }
@@ -2175,6 +2379,8 @@ void reset() {
     Canvas::g_bufs.clear();
     GLCanvas::destroyAll();
     ImageCache::clear();
+    WasmEngine::clear();
+    GLBuffers::clear();
     if (g_L) {
         lua_close(g_L);
         g_L = nullptr;
@@ -2202,7 +2408,7 @@ std::string resolveUrl(const std::string& url, const std::string& baseUrl) {
     if (baseUrl.find("://") != std::string::npos) {
         std::string proto = baseUrl.substr(0, baseUrl.find("://"));
         std::string rest = baseUrl.substr(baseUrl.find("://") + 3);
-        auto lastSlash = rest.rfind('/');
+        auto lastSlash = rest.find_last_of("\\/");
         if (lastSlash != std::string::npos) return proto + "://" + rest.substr(0, lastSlash + 1) + url;
         return proto + "://" + rest + "/" + url;
     }
@@ -2810,6 +3016,14 @@ namespace Pages {
             @button { content:"Read More"; width:140; height:35; background:"#3f3f46"; color:"#ffffff"; border-radius:6; url:"about:info"; }
             @br { size:30; }
         }
+        @column { background:"#18181b"; padding:25; border-radius:10; width:280;
+            @text { content:"WebAssembly"; size:20; color:"#fafafa"; bold:"true"; }
+            @divider { color:"#27272a"; thickness:1; margin:15; }
+            @text { content:"Run C/Rust/Zig binaries directly inside your pages at native speeds."; size:15; color:"#a1a1aa"; }
+            @br { size:20; }
+            @button { content:"WASM Demo"; width:140; height:35; background:"#3b82f6"; color:"#ffffff"; border-radius:6; url:"about:wasm"; }
+            @br { size:30; }
+        }
     }
 }
 @script {
@@ -3043,6 +3257,43 @@ namespace Pages {
 }
 )htp";
     }
+    std::string wasmDemo() {
+        return R"htp(
+@page { title:"Lume - WebAssembly"; background:"#09090b"; }
+@block { align:"center"; padding:40; background:"#09090b"; margin:0;
+  @text { content:"WebAssembly Engine"; size:36; color:"#fafafa"; bold:"true"; }
+  @br { size:5; }
+  @text { content:"Native C/Rust performance directly in your HTP pages."; size:15; color:"#71717a"; }
+}
+@block { align:"center"; padding:30; margin:10; background:"#18181b"; border-radius:12;
+  @text { content:"Calculate via WASM Module"; size:20; color:"#10b981"; bold:"true"; }
+  @divider { color:"#27272a"; thickness:1; margin:15; }
+  @row { gap:15;
+    @input { id:"num_a"; placeholder:"Number A"; width:100; height:35; }
+    @text { content:"+"; size:24; color:"#fafafa"; }
+    @input { id:"num_b"; placeholder:"Number B"; width:100; height:35; }
+    @button { id:"btn_calc"; content:"="; width:50; height:35; background:"#3b82f6"; color:"#ffffff"; border-radius:6; }
+    @text { id:"result"; content:"?"; size:24; color:"#f59e0b"; bold:"true"; }
+  }
+  @br { size:30; }
+  @button { content:"Back to Home"; width:180; height:40; background:"#27272a"; color:"#fafafa"; border-radius:6; url:"about:home"; size:15; }
+}
+@script {
+  local wasm_bytes = "\x00\x61\x73\x6d\x01\x00\x00\x00\x01\x07\x01\x60\x02\x7f\x7f\x01\x7f\x03\x02\x01\x00\x07\x07\x01\x03\x61\x64\x64\x00\x00\x0a\x09\x01\x07\x00\x20\x00\x20\x01\x6a\x0b"
+  local mod_id = wasm_load_raw(wasm_bytes)
+  on_click('btn_calc', function()
+    if not mod_id then
+      set_text('result', "ERR")
+      return
+    end
+    local val_a = tonumber(get_input('num_a')) or 0
+    local val_b = tonumber(get_input('num_b')) or 0
+    local res = wasm_call(mod_id, "add", val_a, val_b)
+    set_text('result', tostring(res))
+  end)
+}
+)htp";
+    }
     std::string error(const std::string& e, const std::string& u) {
         return "@page{title:\"Error\";background:#1a0000;}\n"
             "@block{align:center;padding:40;margin:30;background:#2a1010;border-radius:10;\n"
@@ -3104,6 +3355,10 @@ void loadContent(const std::string& content, const std::string& url, bool isInte
                 if (ext == ".txt" || ext == ".md" || ext == ".json" || ext == ".log" || ext == ".cpp" || ext == ".h") {
                     isText = true;
                 }
+                else if (ext == ".wasm") {
+                    finalContent = "@page{title:\"WASM Module\";background:\"#09090b\";}@block{align:\"center\";padding:50;@text{content:\"WebAssembly Binary Module\";size:30;color:\"#10b981\";bold:\"true\";}@br{size:10;}@text{content:\"Size: " + std::to_string(content.size()) + " bytes\";size:16;color:\"#a1a1aa\";}}";
+                    isText = false;
+                }
             }
         }
         if (isText) finalContent = buildTextHtp(content);
@@ -3152,6 +3407,7 @@ void navigateTo(const std::string& url) {
     if (u == "about:info") { nav(Pages::about(), u); return;}
     if (u == "about:gldemo") { nav(Pages::glDemo(), u); return;}
     if (u == "about:plugindemo") { nav(Pages::pluginDemo(), u); return;}
+    if (u == "about:wasm") { nav(Pages::wasmDemo(), u); return;}
     if (u.length() > 7 && u.substr(0, 7) == "file://") {
         g_hist.push_back(u);
         g_histPos = (int)g_hist.size() - 1;
@@ -3194,6 +3450,7 @@ void histNav(const std::string& u) {
     else if (u == "about:info") loadContent(Pages::about(), u, true);
     else if (u == "about:gldemo") loadContent(Pages::glDemo(), u, true);
     else if (u == "about:plugindemo") loadContent(Pages::pluginDemo(), u, true);
+    else if (u == "about:wasm") loadContent(Pages::wasmDemo(), u, true);
     else if (u.length() > 7 && u.substr(0, 7) == "file://") loadFile(u);
     else {
         auto r = Net::fetch(Net::URL::parse(u));
@@ -3556,7 +3813,7 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
         else {
             std::string ext = filename.substr(dot);
             for (char& c : ext) c = tolower(c);
-            if (ext == ".htp" || ext == ".txt" || ext == ".md" || ext == ".json" || ext == ".cpp" || ext == ".h" || ext == ".log") {
+            if (ext == ".htp" || ext == ".txt" || ext == ".md" || ext == ".json" || ext == ".cpp" || ext == ".h" || ext == ".log" || ext == ".wasm") {
                 loadFile(p);
             }
         }
