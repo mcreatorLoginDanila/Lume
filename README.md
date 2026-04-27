@@ -126,7 +126,7 @@ cl /EHsc /std:c++17 /O2 /I. main.cpp lib/lapi.c lib/lcode.c lib/lctype.c lib/lde
 ```
 with wasm
 ```VS2019DevCmd
-cl /EHsc /std:c++17 /O2 /utf-8 /I. main.cpp lib/*.c lib/wasm3/*.c /link ws2_32.lib gdi32.lib user32.lib comctl32.lib shell32.lib winhttp.lib ole32.lib
+cl /EHsc /std:c++17 /O2 /utf-8 /I. main.cpp lib/*.c lib/wasm3/*.c /link gdi32.lib user32.lib comctl32.lib shell32.lib winhttp.lib ole32.lib
 ```
 
 added gradient text on v3.1
