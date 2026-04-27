@@ -4,7 +4,7 @@
   @br {size:5;}
   @text {content:"Select a game to launch"; size:18; color:"#a1a1aa"; italic:"true";}
   @br {size:20;}
-  @button {content:"Другие браузеры"; width:400; height:45; background:"#3f3f46"; color:"#ffffff"; border-radius:8; size:18; url:"download_browser.htp";}
+  @button {content:"Other Browsers"; width:400; height:45; background:"#3f3f46"; color:"#ffffff"; border-radius:8; size:18; url:"download_browser.htp";}
 }
 @block { align:"center"; padding:20; margin:0; background:"#09090b";
     @row { gap:30;
