@@ -1,7 +1,7 @@
 A light web?-browser on C++ without using chromium\electron
 
 ### Why Lume?
-* **Insanely Small:** exe size is ~0.6 MB.
+* **Insanely Small:** exe size is ~0.8 MB.
 * **Zero Bloat:** Uses only **3 MB**(Idle) of RAM (compare that to 500MB+ for a single Chrome tab or even 20mb for explorer ╥_╥).
 * **Blazing Fast:** CPU usage is near **0%**(On Phenom II X6 1055T) in idle and ~10% under load(like in "doom" on 0.3).
 * **Programmable:** Built-in **Lua 5.4.7** engine for logic, animations, and interactivity.
