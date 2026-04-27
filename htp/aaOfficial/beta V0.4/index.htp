@@ -1,1 +1,27 @@
-
+@page { title:"Lume - Game Store"; background:"#09090b";}
+@block {align:"center"; padding:40; margin:0; background:"#09090b";
+  @text {content:"LUME STORE"; size:46; color:"#fafafa"; bold:"true";}
+  @br {size:5;}
+  @text {content:"Select a game to launch"; size:18; color:"#a1a1aa"; italic:"true";}
+}
+@block { align:"center"; padding:20; margin:0; background:"#09090b";
+    @row { gap:30;
+        @column {background:"#18181b"; padding:25; border-radius:10; width:300;
+            @text {content:"Celeste"; size:28; color:"#3b82f6"; bold:"true";}
+            @divider {color:"#27272a"; thickness:1; margin:15;}
+            @text {content:"A challenging platformer about climbing a mountain and facing your inner demons."; size:15; color:"#a1a1aa";}
+            @br {size:25;}
+            @button {content:"Play Celeste"; width:150; height:40; background:"#2563eb"; color:"#ffffff"; border-radius:6; size:16; url:"celeste.htp";}
+        }
+        @column {background:"#18181b"; padding:25; border-radius:10; width:300;
+            @text {content:"ULTRAKILL"; size:28; color:"#ef4444"; bold:"true";}
+            @divider {color:"#27272a"; thickness:1; margin:15;}
+            @text {content:"Mankind is dead. Blood is fuel. Hell is full. A fast-paced ultra-violent retro FPS."; size:15; color:"#a1a1aa";}
+            @br {size:25;}
+            @button {content:"Play ULTRAKILL"; width:180; height:40; background:"#dc2626"; color:"#ffffff"; border-radius:6; size:16; url:"ultrakill.htp";}
+        }
+        
+    }
+    @br { size:50; }
+    @button {content:"Back to Home"; width:150; height:35; background:"#27272a"; color:"#fafafa"; border-radius:6; url:"about:home"; size:14;}
+}
