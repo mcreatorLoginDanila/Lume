@@ -35,7 +35,7 @@
         }
     }
     @br { size:50; }
-    @button {content:"Back to store"; width:180; height:35; background:"#27272a"; color:"#fafafa"; border-radius:6; url:"store.htp"; size:14;}
+    @button {content:"Back to store"; width:180; height:35; background:"#27272a"; color:"#fafafa"; border-radius:6; url:"index.htp"; size:14;}
 }
 @script {
     local url_brave = "https://laptop-updates.brave.com/download/BRV090?bitness=64"
