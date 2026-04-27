@@ -1,0 +1,611 @@
+@page { title: "Celeste-like Platformer"; background: #000000; }
+@block { align: center; padding: 5; margin: 3;
+    @glcanvas { id: "game"; width: 640; height: 480; border-color: #333355; }
+}
+@block { align: center; padding: 4; margin: 3; background: #111122; border-radius: 8;
+    @text { id: "status"; content: "Arrows/WASD move, Z/SPACE jump, X/SHIFT dash. Click canvas first!"; size: 14; color: #aaaacc; }
+}
+@script {
+local W, H = 640, 480
+local TILE = 16
+local COLS = W / TILE
+local ROWS = H / TILE
+local pi = 3.14159265
+local frame = 0
+local GRAV = 0.55
+local MAX_FALL = 8
+local JUMP_VEL = -9.2
+local DJUMP_VEL = -8
+local MOVE_SPD = 3.2
+local ACCEL = 0.8
+local FRIC = 0.75
+local AIR_FRIC = 0.88
+local WALL_SLIDE = 1.5
+local WALL_JUMP_X = 6.5
+local WALL_JUMP_Y = -8.5
+local DASH_SPD = 10
+local DASH_LEN = 7
+local DASH_CD = 4
+local pl = {
+    x=48, y=400, vx=0, vy=0, w=10, h=14,
+    on_ground=false, jumps=2, max_jumps=2,
+    can_dash=true, dashing=false, dash_timer=0,
+    dash_cd=0, dash_dx=0, dash_dy=0,
+    facing=1, wall_dir=0,
+    dead=false, dead_timer=0,
+    trail={}, squash_x=1, squash_y=1,
+    coyote=0, jump_buffer=0,
+}
+local particles = {}
+local death_particles = {}
+local dash_sparks = {}
+local shake_x, shake_y = 0, 0
+local shake_amt = 0
+local level = {}
+local spikes = {}
+local coins = {}
+local springs = {}
+local checkpoints = {}
+local spawn_x, spawn_y = 48, 400
+local coins_collected = 0
+local total_coins = 0
+local cur_room = 1
+local deaths = 0
+local time_frames = 0
+local keys_prev = {}
+local keys_now = {}
+local function key_just(k)
+    return keys_now[k] and not keys_prev[k]
+end
+local function poll_keys()
+    keys_prev = {}
+    for k, v in pairs(keys_now) do keys_prev[k] = v end
+    keys_now = {}
+    keys_now["left"]  = key_down(VK_LEFT) or key_down(VK_A)
+    keys_now["right"] = key_down(VK_RIGHT) or key_down(VK_D)
+    keys_now["up"]    = key_down(VK_UP) or key_down(VK_W)
+    keys_now["down"]  = key_down(VK_DOWN) or key_down(VK_S)
+    keys_now["jump"]  = key_down(VK_SPACE) or key_down(0x5A)
+    keys_now["dash"]  = key_down(VK_SHIFT) or key_down(0x58)
+end
+local sfx_timers = {}
+local function timed_sfx(name, vol, cd)
+    cd = cd or 15
+    local last = sfx_timers[name] or -100
+    if frame - last < cd then return end
+    sfx_timers[name] = frame
+    if playSfx then playSfx(name, vol or 50) end
+end
+local function spike_on_row(x_tile, row)
+    local spike_h = 6
+    return {x=(x_tile-1)*TILE, y=(row-1)*TILE - spike_h, w=TILE, h=spike_h, dir="up"}
+end
+local function on_top(x_tile, row)
+    return {x=(x_tile-1)*TILE, y=(row-1)*TILE - TILE}
+end
+local function make_room(room_id)
+    local tiles = {}
+    for y = 1, ROWS do
+        tiles[y] = {}
+        for x = 1, COLS do tiles[y][x] = 0 end
+    end
+    for x = 1, COLS do tiles[ROWS][x] = 1 end
+    for y = 1, ROWS do tiles[y][1] = 1; tiles[y][COLS] = 1 end
+    local sp = {}
+    local cn = {}
+    local sr = {}
+    local cp = {}
+    if room_id == 1 then
+        for x = 5, 12 do tiles[26][x] = 1 end
+        for x = 16, 22 do tiles[23][x] = 1 end
+        for x = 8, 14 do tiles[20][x] = 1 end
+        for x = 20, 28 do tiles[18][x] = 1 end
+        for x = 3, 8 do tiles[16][x] = 1 end
+        for x = 12, 18 do tiles[14][x] = 1 end
+        for x = 24, 32 do tiles[12][x] = 1 end
+        for x = 6, 12 do tiles[10][x] = 1 end
+        for x = 18, 24 do tiles[8][x] = 1 end
+        for x = 30, 38 do tiles[6][x] = 1 end
+        for x = 25, 35 do tiles[28][x] = 1 end
+        for x = 13, 15 do table.insert(sp, spike_on_row(x, ROWS)) end
+        for x = 23, 25 do table.insert(sp, spike_on_row(x, 18)) end
+        table.insert(cn, {x=18*TILE, y=21*TILE, alive=true})
+        table.insert(cn, {x=25*TILE, y=16*TILE, alive=true})
+        table.insert(cn, {x=7*TILE, y=14*TILE, alive=true})
+        table.insert(cn, {x=15*TILE, y=12*TILE, alive=true})
+        table.insert(cn, {x=28*TILE, y=10*TILE, alive=true})
+        table.insert(cn, {x=9*TILE, y=8*TILE, alive=true})
+        table.insert(cn, {x=35*TILE, y=4*TILE, alive=true})
+        local s1 = on_top(10, 26)
+        table.insert(sr, {x=s1.x, y=s1.y, active=0})
+        local s2 = on_top(28, 28)
+        table.insert(sr, {x=s2.x, y=s2.y, active=0})
+        local c1 = on_top(20, 23)
+        table.insert(cp, {x=c1.x, y=c1.y, activated=false})
+        local c2 = on_top(15, 14)
+        table.insert(cp, {x=c2.x, y=c2.y, activated=false})
+    elseif room_id == 2 then
+        for x = 5, 15 do tiles[28][x] = 1 end
+        for x = 25, 35 do tiles[25][x] = 1 end
+        for x = 5, 15 do tiles[22][x] = 1 end
+        for x = 25, 35 do tiles[19][x] = 1 end
+        for x = 5, 15 do tiles[16][x] = 1 end
+        for x = 25, 35 do tiles[13][x] = 1 end
+        for x = 5, 15 do tiles[10][x] = 1 end
+        for x = 25, 35 do tiles[7][x] = 1 end
+        for x = 14, 26 do tiles[4][x] = 1 end
+        for y = 20, 27 do tiles[y][20] = 1 end
+        for y = 14, 21 do tiles[y][22] = 1 end
+        for x = 16, 24 do table.insert(sp, spike_on_row(x, ROWS)) end
+        for x = 16, 24 do
+            if x ~= 20 and x ~= 22 then
+                table.insert(sp, spike_on_row(x, 16))
+            end
+        end
+        table.insert(cn, {x=30*TILE, y=23*TILE, alive=true})
+        table.insert(cn, {x=10*TILE, y=20*TILE, alive=true})
+        table.insert(cn, {x=30*TILE, y=17*TILE, alive=true})
+        table.insert(cn, {x=10*TILE, y=14*TILE, alive=true})
+        table.insert(cn, {x=30*TILE, y=11*TILE, alive=true})
+        table.insert(cn, {x=20*TILE, y=2*TILE, alive=true})
+        local s1 = on_top(7, 28)
+        table.insert(sr, {x=s1.x, y=s1.y, active=0})
+        local s2 = on_top(32, 25)
+        table.insert(sr, {x=s2.x, y=s2.y, active=0})
+        local s3 = on_top(7, 22)
+        table.insert(sr, {x=s3.x, y=s3.y, active=0})
+        local c1 = on_top(10, 10)
+        table.insert(cp, {x=c1.x, y=c1.y, activated=false})
+    elseif room_id == 3 then
+        for x = 3, 8 do tiles[28][x] = 1 end
+        for x = 14, 18 do tiles[26][x] = 1 end
+        for x = 24, 28 do tiles[24][x] = 1 end
+        for x = 32, 38 do tiles[22][x] = 1 end
+        for x = 24, 28 do tiles[18][x] = 1 end
+        for x = 14, 18 do tiles[15][x] = 1 end
+        for x = 6, 10 do tiles[12][x] = 1 end
+        for x = 18, 24 do tiles[9][x] = 1 end
+        for x = 30, 38 do tiles[6][x] = 1 end
+        for x = 9, 13 do table.insert(sp, spike_on_row(x, ROWS)) end
+        for x = 19, 23 do table.insert(sp, spike_on_row(x, ROWS)) end
+        for x = 29, 31 do table.insert(sp, spike_on_row(x, ROWS)) end
+        for x = 29, 31 do table.insert(sp, spike_on_row(x, 22)) end
+        for x = 11, 13 do table.insert(sp, spike_on_row(x, 15)) end
+        table.insert(cn, {x=11*TILE, y=27*TILE, alive=true})
+        table.insert(cn, {x=21*TILE, y=27*TILE, alive=true})
+        table.insert(cn, {x=30*TILE, y=20*TILE, alive=true})
+        table.insert(cn, {x=12*TILE, y=13*TILE, alive=true})
+        table.insert(cn, {x=21*TILE, y=7*TILE, alive=true})
+        table.insert(cn, {x=35*TILE, y=4*TILE, alive=true})
+        local c1 = on_top(26, 24)
+        table.insert(cp, {x=c1.x, y=c1.y, activated=false})
+        local c2 = on_top(16, 15)
+        table.insert(cp, {x=c2.x, y=c2.y, activated=false})
+    end
+    return tiles, sp, cn, sr, cp
+end
+local function load_room(id)
+    if id < 1 then id = 1 end
+    if id > 3 then id = 3 end
+    cur_room = id
+    local t, sp, cn, sr, cp = make_room(id)
+    level = t; spikes = sp; coins = cn; springs = sr; checkpoints = cp
+    total_coins = #cn; coins_collected = 0
+    spawn_x = 48; spawn_y = (ROWS-3) * TILE
+    pl.x = spawn_x; pl.y = spawn_y
+    pl.vx = 0; pl.vy = 0
+    pl.dead = false; pl.dead_timer = 0
+    pl.jumps = pl.max_jumps; pl.can_dash = true
+    pl.dashing = false; pl.dash_timer = 0; pl.trail = {}
+    particles = {}; death_particles = {}; dash_sparks = {}
+end
+load_room(1)
+local function solid(px, py)
+    local tx = math.floor(px / TILE) + 1
+    local ty = math.floor(py / TILE) + 1
+    if tx < 1 or tx > COLS or ty < 1 or ty > ROWS then return true end
+    return level[ty][tx] == 1
+end
+local function solid_rect(x, y, w, h)
+    return solid(x, y) or solid(x+w-1, y) or solid(x, y+h-1) or solid(x+w-1, y+h-1)
+        or solid(x+w/2, y) or solid(x+w/2, y+h-1) or solid(x, y+h/2) or solid(x+w-1, y+h/2)
+end
+local function check_wall(p, dir)
+    local cx = p.x + (dir > 0 and p.w+1 or -2)
+    return solid(cx, p.y+2) or solid(cx, p.y+p.h-3)
+end
+local function spawn_particles(x, y, count, cr, cg, cb, spd_mult)
+    spd_mult = spd_mult or 1
+    for i = 1, count do
+        local a = math.random() * 2 * pi
+        local s = (0.5 + math.random() * 2) * spd_mult
+        table.insert(particles, {
+            x=x, y=y, vx=math.cos(a)*s, vy=math.sin(a)*s-1,
+            life=15+math.random(15), r=cr, g=cg, b=cb, size=1+math.random()*2,
+        })
+    end
+end
+local function kill_player()
+    if pl.dead then return end
+    pl.dead = true; pl.dead_timer = 40; deaths = deaths + 1; shake_amt = 6
+    for i = 1, 30 do
+        local a = math.random() * 2 * pi
+        local s = 1 + math.random() * 4
+        table.insert(death_particles, {
+            x=pl.x+pl.w/2, y=pl.y+pl.h/2,
+            vx=math.cos(a)*s, vy=math.sin(a)*s,
+            life=25+math.random(20), r=0.9, g=0.2, b=0.3, size=2+math.random()*2,
+        })
+    end
+    timed_sfx("hit", 60, 30)
+end
+local function respawn_player()
+    pl.x = spawn_x; pl.y = spawn_y; pl.vx = 0; pl.vy = 0
+    pl.dead = false; pl.dead_timer = 0
+    pl.jumps = pl.max_jumps; pl.can_dash = true
+    pl.dashing = false; pl.dash_timer = 0; pl.dash_cd = 0; pl.trail = {}
+    pl.squash_x = 1.3; pl.squash_y = 0.7
+end
+local function update_player()
+    if pl.dead then
+        pl.dead_timer = pl.dead_timer - 1
+        if pl.dead_timer <= 0 then respawn_player() end
+        return
+    end
+    local left = keys_now["left"]
+    local right = keys_now["right"]
+    local up = keys_now["up"]
+    local down = keys_now["down"]
+    local jump_pressed = keys_now["jump"]
+    local jump_just = key_just("jump")
+    local dash_just = key_just("dash")
+    if pl.dash_cd > 0 then pl.dash_cd = pl.dash_cd - 1 end
+    if dash_just and pl.can_dash and not pl.dashing then
+        pl.dashing = true; pl.dash_timer = DASH_LEN
+        pl.can_dash = false; pl.dash_cd = DASH_CD
+        local ddx, ddy = 0, 0
+        if right then ddx = 1 elseif left then ddx = -1 end
+        if up then ddy = -1 elseif down then ddy = 1 end
+        if ddx == 0 and ddy == 0 then ddx = pl.facing end
+        local len = math.sqrt(ddx*ddx + ddy*ddy)
+        pl.dash_dx = (ddx/len) * DASH_SPD; pl.dash_dy = (ddy/len) * DASH_SPD
+        pl.vy = 0; pl.vx = 0; shake_amt = 3
+        spawn_particles(pl.x+pl.w/2, pl.y+pl.h/2, 8, 0.3, 0.8, 1.0, 1.5)
+        timed_sfx("laser", 35, 12)
+    end
+    if pl.dashing then
+        pl.dash_timer = pl.dash_timer - 1
+        pl.vx = pl.dash_dx; pl.vy = pl.dash_dy
+        table.insert(pl.trail, {x=pl.x, y=pl.y, life=8, r=0.3, g=0.7, b=1.0})
+        if frame % 2 == 0 then
+            table.insert(dash_sparks, {
+                x=pl.x+pl.w/2-pl.dash_dx*0.5, y=pl.y+pl.h/2-pl.dash_dy*0.5,
+                vx=(math.random()-0.5)*2, vy=(math.random()-0.5)*2,
+                life=6+math.random(4), r=0.5, g=0.9, b=1.0,
+            })
+        end
+        if pl.dash_timer <= 0 then
+            pl.dashing = false
+            pl.vx = pl.dash_dx * 0.3; pl.vy = pl.dash_dy * 0.3
+            if pl.vy > 0 then pl.vy = 0 end
+        end
+    else
+        local target_vx = 0
+        if right then target_vx = MOVE_SPD; pl.facing = 1 end
+        if left then target_vx = -MOVE_SPD; pl.facing = -1 end
+        if pl.on_ground then
+            pl.vx = pl.vx + (target_vx - pl.vx) * ACCEL
+            if math.abs(target_vx) < 0.1 then pl.vx = pl.vx * FRIC end
+        else
+            pl.vx = pl.vx + (target_vx - pl.vx) * 0.3
+            pl.vx = pl.vx * AIR_FRIC
+        end
+        pl.vy = pl.vy + GRAV
+        pl.wall_dir = 0
+        if not pl.on_ground then
+            if check_wall(pl, 1) and right then pl.wall_dir = 1 end
+            if check_wall(pl, -1) and left then pl.wall_dir = -1 end
+            if pl.wall_dir ~= 0 and pl.vy > WALL_SLIDE then
+                pl.vy = WALL_SLIDE
+                if frame % 4 == 0 then
+                    spawn_particles(pl.x+(pl.wall_dir>0 and pl.w or 0), pl.y+pl.h*0.5, 1, 0.6, 0.6, 0.7, 0.3)
+                end
+            end
+        end
+        if pl.vy > MAX_FALL then pl.vy = MAX_FALL end
+        if pl.on_ground then pl.coyote = 6 else pl.coyote = pl.coyote - 1 end
+        if jump_just then pl.jump_buffer = 6 end
+        if pl.jump_buffer > 0 then pl.jump_buffer = pl.jump_buffer - 1 end
+        if pl.jump_buffer > 0 then
+            if pl.wall_dir ~= 0 and not pl.on_ground then
+                pl.vx = -pl.wall_dir * WALL_JUMP_X; pl.vy = WALL_JUMP_Y
+                pl.facing = -pl.wall_dir; pl.jump_buffer = 0
+                pl.jumps = pl.max_jumps - 1
+                pl.squash_x = 0.7; pl.squash_y = 1.3
+                spawn_particles(pl.x+(pl.wall_dir>0 and pl.w or 0), pl.y+pl.h*0.5, 6, 0.8, 0.8, 0.9, 1)
+                timed_sfx("beep_up", 25, 8)
+            elseif pl.coyote > 0 or pl.on_ground then
+                pl.vy = JUMP_VEL; pl.jump_buffer = 0; pl.coyote = 0
+                pl.jumps = pl.max_jumps - 1
+                pl.squash_x = 0.75; pl.squash_y = 1.3
+                spawn_particles(pl.x+pl.w/2, pl.y+pl.h, 5, 0.7, 0.7, 0.8, 0.8)
+            elseif pl.jumps > 0 then
+                pl.vy = DJUMP_VEL; pl.jump_buffer = 0; pl.jumps = pl.jumps - 1
+                pl.squash_x = 0.7; pl.squash_y = 1.35
+                spawn_particles(pl.x+pl.w/2, pl.y+pl.h, 8, 0.4, 0.7, 1.0, 1.2)
+                timed_sfx("beep_up", 25, 8)
+            end
+        end
+        if not jump_pressed and pl.vy < -2 then pl.vy = pl.vy * 0.65 end
+    end
+    local sx = (pl.vx > 0) and 1 or -1
+    local steps_x = math.ceil(math.abs(pl.vx))
+    for i = 1, steps_x do
+        local step = (math.abs(pl.vx) >= 1) and sx or pl.vx
+        if math.abs(pl.vx) < 1 then step = pl.vx end
+        if not solid_rect(pl.x + step, pl.y, pl.w, pl.h) then
+            pl.x = pl.x + step
+        else
+            pl.vx = 0; break
+        end
+    end
+    local was_on_ground = pl.on_ground
+    local syy = (pl.vy > 0) and 1 or -1
+    pl.on_ground = false
+    local steps_y = math.ceil(math.abs(pl.vy))
+    for i = 1, steps_y do
+        local step = (math.abs(pl.vy) >= 1) and syy or pl.vy
+        if math.abs(pl.vy) < 1 then step = pl.vy end
+        if not solid_rect(pl.x, pl.y + step, pl.w, pl.h) then
+            pl.y = pl.y + step
+        else
+            if pl.vy > 0 then
+                pl.on_ground = true; pl.jumps = pl.max_jumps; pl.can_dash = true
+                if not was_on_ground then
+                    pl.squash_x = 1.3; pl.squash_y = 0.7
+                    spawn_particles(pl.x+pl.w/2, pl.y+pl.h, 4, 0.7, 0.7, 0.8, 0.5)
+                end
+            end
+            pl.vy = 0; break
+        end
+    end
+    if pl.on_ground then pl.can_dash = true end
+    for _, s in ipairs(spikes) do
+        local sy = s.y
+        if pl.x+pl.w > s.x+2 and pl.x < s.x+s.w-2 and pl.y+pl.h > sy+2 and pl.y < sy+s.h-2 then
+            kill_player(); return
+        end
+    end
+    for _, c in ipairs(coins) do
+        if c.alive then
+            local dx = (pl.x+pl.w/2)-(c.x+TILE/2)
+            local dy = (pl.y+pl.h/2)-(c.y+TILE/2)
+            if math.abs(dx) < 12 and math.abs(dy) < 12 then
+                c.alive = false; coins_collected = coins_collected + 1
+                spawn_particles(c.x+TILE/2, c.y+TILE/2, 10, 1.0, 0.85, 0.2, 1.5)
+                timed_sfx("coin", 50, 8)
+            end
+        end
+    end
+    for _, s in ipairs(springs) do
+        local dx = math.abs((pl.x+pl.w/2) - (s.x+TILE/2))
+        if dx < 12 and pl.y+pl.h > s.y and pl.y+pl.h < s.y+12 and pl.vy >= 0 then
+            pl.vy = -12; pl.jumps = pl.max_jumps; pl.can_dash = true; s.active = 10
+            pl.squash_x = 0.6; pl.squash_y = 1.5
+            spawn_particles(s.x+TILE/2, s.y, 8, 0.2, 1.0, 0.3, 1.5)
+            timed_sfx("jump", 40, 10)
+        end
+    end
+    for _, cp in ipairs(checkpoints) do
+        local dx = math.abs((pl.x+pl.w/2) - (cp.x+4))
+        local dy = math.abs((pl.y+pl.h/2) - (cp.y+8))
+        if dx < 12 and dy < 16 and not cp.activated then
+            cp.activated = true; spawn_x = cp.x; spawn_y = cp.y - 2
+            spawn_particles(cp.x+4, cp.y+8, 12, 0.2, 1.0, 0.5, 1)
+            timed_sfx("powerup", 40, 30)
+        end
+    end
+    if pl.y < -pl.h then
+        if cur_room < 3 then load_room(cur_room + 1); pl.y = (ROWS-3)*TILE
+        else pl.y = 0 end
+    end
+    if pl.y > H + 20 then kill_player() end
+    pl.squash_x = pl.squash_x + (1 - pl.squash_x) * 0.2
+    pl.squash_y = pl.squash_y + (1 - pl.squash_y) * 0.2
+end
+local function update_particles_all()
+    for i = #particles, 1, -1 do
+        local p = particles[i]
+        p.x = p.x + p.vx; p.y = p.y + p.vy; p.vy = p.vy + 0.1; p.life = p.life - 1
+        if p.life <= 0 then table.remove(particles, i) end
+    end
+    if #particles > 80 then
+        for i = 1, #particles - 80 do table.remove(particles, 1) end
+    end
+    for i = #death_particles, 1, -1 do
+        local p = death_particles[i]
+        p.x = p.x + p.vx; p.y = p.y + p.vy; p.vy = p.vy + 0.15; p.vx = p.vx * 0.97; p.life = p.life - 1
+        if p.life <= 0 then table.remove(death_particles, i) end
+    end
+    for i = #dash_sparks, 1, -1 do
+        local p = dash_sparks[i]
+        p.x = p.x + p.vx; p.y = p.y + p.vy; p.life = p.life - 1
+        if p.life <= 0 then table.remove(dash_sparks, i) end
+    end
+    for i = #pl.trail, 1, -1 do
+        pl.trail[i].life = pl.trail[i].life - 1
+        if pl.trail[i].life <= 0 then table.remove(pl.trail, i) end
+    end
+    for _, s in ipairs(springs) do if s.active > 0 then s.active = s.active - 1 end end
+    if shake_amt > 0 then
+        shake_x = (math.random()-0.5)*shake_amt*2; shake_y = (math.random()-0.5)*shake_amt*2
+        shake_amt = shake_amt * 0.8
+        if shake_amt < 0.3 then shake_amt = 0; shake_x = 0; shake_y = 0 end
+    end
+end
+local function render()
+    if not gl_available() then return end
+    if not gl_begin_render("game", W, H) then return end
+    gl_viewport(0, 0, W, H)
+    gl_matrix_mode(GL_PROJECTION) gl_load_identity()
+    gl_ortho(0+shake_x, W+shake_x, H+shake_y, 0+shake_y, -1, 1)
+    gl_matrix_mode(GL_MODELVIEW) gl_load_identity()
+    gl_begin(GL_QUADS)
+    gl_color(0.06, 0.04, 0.12) gl_vertex2f(0,0) gl_vertex2f(W,0)
+    gl_color(0.12, 0.08, 0.2) gl_vertex2f(W,H) gl_vertex2f(0,H)
+    gl_end()
+    gl_point_size(1) gl_begin(GL_POINTS)
+    math.randomseed(42)
+    for i = 1, 60 do
+        local b = 0.15 + math.sin(frame*0.02 + i) * 0.1
+        gl_color(b, b, b+0.1)
+        gl_vertex2f(math.random()*W, math.random()*H)
+    end
+    gl_end()
+    math.randomseed(math.floor(os.clock()*1000))
+    gl_begin(GL_QUADS)
+    for ty = 1, ROWS do
+        for tx = 1, COLS do
+            if level[ty][tx] == 1 then
+                local x = (tx-1)*TILE; local y = (ty-1)*TILE
+                local shade = 0.28 + ((tx+ty)%3)*0.03
+                gl_color(shade, shade*0.9, shade*1.2)
+                gl_vertex2f(x,y) gl_vertex2f(x+TILE,y) gl_vertex2f(x+TILE,y+TILE) gl_vertex2f(x,y+TILE)
+                if ty == 1 or level[ty-1][tx] ~= 1 then
+                    gl_color(shade+0.1, shade+0.08, shade+0.15)
+                    gl_vertex2f(x,y) gl_vertex2f(x+TILE,y) gl_vertex2f(x+TILE,y+2) gl_vertex2f(x,y+2)
+                end
+            end
+        end
+    end
+    gl_end()
+    gl_begin(GL_TRIANGLES)
+    gl_color(0.9, 0.2, 0.2)
+    for _, s in ipairs(spikes) do
+        local count = math.floor(s.w / 6)
+        for i = 0, count-1 do
+            local bx = s.x + i*6
+            local by = s.y + s.h
+            gl_vertex2f(bx, by) gl_vertex2f(bx+6, by) gl_vertex2f(bx+3, by-8)
+        end
+    end
+    gl_end()
+    for _, s in ipairs(springs) do
+        local ext = s.active > 0 and (s.active/10*6) or 0
+        gl_begin(GL_QUADS)
+        gl_color(0.2, 0.8, 0.2)
+        gl_vertex2f(s.x+2, s.y+TILE-4-ext) gl_vertex2f(s.x+TILE-2, s.y+TILE-4-ext)
+        gl_vertex2f(s.x+TILE-2, s.y+TILE) gl_vertex2f(s.x+2, s.y+TILE)
+        gl_color(0.6, 0.6, 0.6)
+        gl_vertex2f(s.x+4, s.y+TILE) gl_vertex2f(s.x+TILE-4, s.y+TILE)
+        gl_vertex2f(s.x+TILE-4, s.y+TILE+3) gl_vertex2f(s.x+4, s.y+TILE+3)
+        gl_end()
+    end
+    for _, cp in ipairs(checkpoints) do
+        gl_begin(GL_QUADS)
+        if cp.activated then gl_color(0.2,1.0,0.5) else gl_color(0.5,0.5,0.6) end
+        gl_vertex2f(cp.x+2,cp.y) gl_vertex2f(cp.x+6,cp.y) gl_vertex2f(cp.x+6,cp.y+16) gl_vertex2f(cp.x+2,cp.y+16)
+        gl_end()
+        gl_begin(GL_TRIANGLES)
+        if cp.activated then gl_color(0.3,1.0,0.6) else gl_color(0.6,0.3,0.3) end
+        gl_vertex2f(cp.x+6,cp.y) gl_vertex2f(cp.x+14,cp.y+4) gl_vertex2f(cp.x+6,cp.y+8)
+        gl_end()
+    end
+    for _, c in ipairs(coins) do
+        if c.alive then
+            local cx = c.x+TILE/2; local cy = c.y+TILE/2+math.sin(frame*0.08)*3
+            local r = 5+math.sin(frame*0.1)*0.5; local segs = 8
+            gl_begin(GL_TRIANGLE_FAN) gl_color(1.0,0.85,0.2) gl_vertex2f(cx,cy)
+            gl_color(0.9,0.7,0.1)
+            for i = 0, segs do gl_vertex2f(cx+math.cos(i/segs*2*pi)*r, cy+math.sin(i/segs*2*pi)*r) end
+            gl_end()
+            gl_begin(GL_QUADS) gl_color(1,1,0.8)
+            gl_vertex2f(cx-1,cy-2) gl_vertex2f(cx+1,cy-2) gl_vertex2f(cx+1,cy+2) gl_vertex2f(cx-1,cy+2)
+            gl_end()
+        end
+    end
+    gl_begin(GL_QUADS)
+    for _, t in ipairs(pl.trail) do
+        local a = t.life/8
+        gl_color(t.r*a, t.g*a, t.b*a)
+        gl_vertex2f(t.x,t.y) gl_vertex2f(t.x+pl.w,t.y) gl_vertex2f(t.x+pl.w,t.y+pl.h) gl_vertex2f(t.x,t.y+pl.h)
+    end
+    gl_end()
+    if not pl.dead then
+        local cx = pl.x+pl.w/2; local cy = pl.y+pl.h/2
+        local hw = (pl.w/2)*pl.squash_x; local hh = (pl.h/2)*pl.squash_y
+        local ax = cx-hw; local ay = cy-hh+(pl.h-pl.h*pl.squash_y)*0.5
+        local bx = cx+hw; local by = cy+hh+(pl.h-pl.h*pl.squash_y)*0.5
+        gl_begin(GL_QUADS)
+        if pl.dashing then gl_color(0.3,0.8,1.0)
+        elseif not pl.can_dash then gl_color(0.6,0.35,0.4)
+        else gl_color(0.85,0.25,0.35) end
+        gl_vertex2f(ax,ay) gl_vertex2f(bx,ay) gl_vertex2f(bx,by) gl_vertex2f(ax,by)
+        if pl.dashing then gl_color(0.5,0.9,1.0)
+        elseif not pl.can_dash then gl_color(0.5,0.3,0.5)
+        else gl_color(0.9,0.3,0.45) end
+        local hy = ay-4*pl.squash_y
+        gl_vertex2f(cx-hw*0.8,hy) gl_vertex2f(cx+hw*0.8,hy) gl_vertex2f(cx+hw*0.6,ay+2) gl_vertex2f(cx-hw*0.6,ay+2)
+        gl_end()
+        gl_begin(GL_QUADS) gl_color(1,1,1)
+        local ex = cx+pl.facing*2
+        gl_vertex2f(ex-1.5,ay+5) gl_vertex2f(ex+1.5,ay+5) gl_vertex2f(ex+1.5,ay+8) gl_vertex2f(ex-1.5,ay+8)
+        gl_end()
+    end
+    gl_begin(GL_QUADS)
+    for _, p in ipairs(particles) do
+        local a = p.life/30
+        gl_color(p.r*a, p.g*a, p.b*a)
+        gl_vertex2f(p.x-p.size,p.y-p.size) gl_vertex2f(p.x+p.size,p.y-p.size)
+        gl_vertex2f(p.x+p.size,p.y+p.size) gl_vertex2f(p.x-p.size,p.y+p.size)
+    end
+    for _, p in ipairs(death_particles) do
+        local a = p.life/40
+        gl_color(p.r*a, p.g*a, p.b*a)
+        gl_vertex2f(p.x-p.size,p.y-p.size) gl_vertex2f(p.x+p.size,p.y-p.size)
+        gl_vertex2f(p.x+p.size,p.y+p.size) gl_vertex2f(p.x-p.size,p.y+p.size)
+    end
+    for _, p in ipairs(dash_sparks) do
+        local a = p.life/10
+        gl_color(p.r*a, p.g*a, p.b*a)
+        gl_vertex2f(p.x-1,p.y-1) gl_vertex2f(p.x+1,p.y-1) gl_vertex2f(p.x+1,p.y+1) gl_vertex2f(p.x-1,p.y+1)
+    end
+    gl_end()
+    gl_begin(GL_QUADS)
+    gl_color(0,0,0,0.5) gl_vertex2f(4,4) gl_vertex2f(130,4) gl_vertex2f(130,22) gl_vertex2f(4,22)
+    gl_color(1,0.85,0.2) gl_vertex2f(8,8) gl_vertex2f(16,8) gl_vertex2f(16,18) gl_vertex2f(8,18)
+    if pl.can_dash then gl_color(0.3,0.8,1.0) else gl_color(0.3,0.3,0.4) end
+    gl_vertex2f(W-30,8) gl_vertex2f(W-8,8) gl_vertex2f(W-8,18) gl_vertex2f(W-30,18)
+    gl_end()
+    for i = 1, pl.max_jumps do
+        gl_begin(GL_QUADS)
+        if i <= pl.jumps then gl_color(0.9,0.3,0.4) else gl_color(0.3,0.3,0.4) end
+        local jx = W-30-i*14
+        gl_vertex2f(jx,8) gl_vertex2f(jx+10,8) gl_vertex2f(jx+10,18) gl_vertex2f(jx,18)
+        gl_end()
+    end
+    gl_begin(GL_QUADS) gl_color(0,0,0,0.5)
+    gl_vertex2f(W/2-40,4) gl_vertex2f(W/2+40,4) gl_vertex2f(W/2+40,20) gl_vertex2f(W/2-40,20) gl_end()
+    if pl.dead then
+        gl_begin(GL_QUADS) gl_color(0.2,0,0.05,0.3)
+        gl_vertex2f(0,0) gl_vertex2f(W,0) gl_vertex2f(W,H) gl_vertex2f(0,H) gl_end()
+    end
+    gl_end_render("game")
+    gl_refresh("game")
+end
+local function update()
+    frame = frame + 1
+    if not pl.dead then time_frames = time_frames + 1 end
+    poll_keys()
+    update_player()
+    update_particles_all()
+    render()
+    if frame % 20 == 0 then
+        local secs = math.floor(time_frames/30); local mins = math.floor(secs/60); secs = secs%60
+        set_text("status", string.format("Room %d | Coins: %d/%d | Deaths: %d | Time: %d:%02d",
+            cur_room, coins_collected, total_coins, deaths, mins, secs))
+    end
+end
+set_timer(33, update)
+render()
+}
