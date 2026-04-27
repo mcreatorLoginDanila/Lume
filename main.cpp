@@ -2935,7 +2935,7 @@ class Engine {
         default:
             break;
         }
-        if (curY > contentH + scrollY) contentH = curY - scrollY;
+        if (curY > contentH) contentH = curY;
     }
 public:
     int totalH() const { return contentH; }
