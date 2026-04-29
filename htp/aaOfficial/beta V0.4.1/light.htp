@@ -1,0 +1,131 @@
+@page {title:"Lume - Materials & Lighting"; background:"#09090b";}
+@block {align:"center"; padding:20; margin:0; background:"#09090b";
+  @text {content:"MATERIALS & LIGHTING LAB"; size:32; color:"#3b82f6"; bold:"true";}
+  @br {size:2;}
+  @text {content:"Dynamic Lights, Specular Materials & Sphere Mapping"; size:15; color:"#a1a1aa";}
+}
+@block {align:"center"; padding:10; margin:0; background:"#09090b";
+  @row {gap:20;
+    @column { background:"#000000"; padding:5; border-radius:8; width:610;
+        @glcanvas {id:"orb_view"; width:600; height:450; border-color:"#3f3f46";}
+    }
+    @column {background:"#18181b"; padding:20; border-radius:8; width:280;
+        @text {content:"Controls"; size:20; color:"#fafafa"; bold:"true";}
+        @divider {color:"#27272a"; thickness:1; margin:15;}
+        @text {id:"load_status"; content:"Using procedural default"; size:12; color:"#10b981";}
+        @br {size:20;}
+        @button {id:"btn_chrome"; content:"Toggle Chrome Map"; width:240; height:35; background:"#f59e0b"; color:"#ffffff"; border-radius:4; size:13;}
+        @br {size:10;}
+        @button { id:"btn_lights"; content:"Toggle Dynamic Lights"; width:240; height:35; background:"#ef4444"; color:"#ffffff"; border-radius:4; size:13;}
+        @br {size:40;}
+        @button {content:"Back to Home"; width:240; height:35; background:"#27272a"; color:"#fafafa"; border-radius:4; url:"about:home"; size:13;}
+    }
+  }
+}
+@script {
+    local GL_LIGHTING = 0x0B50
+    local GL_LIGHT0 = 0x4000
+    local GL_LIGHT1 = 0x4001
+    local GL_LIGHT2 = 0x4002
+    local GL_POSITION = 0x1203
+    local GL_DIFFUSE = 0x1201
+    local GL_SPECULAR = 0x1202
+    local GL_AMBIENT = 0x1200
+    local GL_SHININESS = 0x1601
+    local GL_FRONT = 0x0404
+    local GL_S = 0x2000
+    local GL_T = 0x2001
+    local GL_TEXTURE_GEN_S = 0x0C60
+    local GL_TEXTURE_GEN_T = 0x0C61
+    local GL_TEXTURE_GEN_MODE = 0x2500
+    local GL_SPHERE_MAP = 0x2402
+    local use_chrome = true
+    local use_lights = true
+    local custom_tex = nil
+    local proc_tex_generated = false
+    local function generate_default_texture()
+        local tex_size = 128
+        local tex_data = {}
+        for y = 1, tex_size do
+            for x = 1, tex_size do
+                local cx = math.floor(x / 16) % 2
+                local cy = math.floor(y / 16) % 2
+                if cx == cy then
+                    table.insert(tex_data, string.char(200, 200, 200, 255)) -- Белый
+                else
+                    table.insert(tex_data, string.char(50, 50, 50, 255)) -- Серый
+                end
+            end
+        end
+        gl_bind_texture(GL_TEXTURE_2D, 2001)
+        gl_tex_parameteri(GL_TEXTURE_2D, 0x2801, 0x2703)
+        gl_tex_parameteri(GL_TEXTURE_2D, 0x2800, 0x2601)
+        glu_build2d_mipmaps(GL_TEXTURE_2D, 4, tex_size, tex_size, 0x1908, 0x1401, table.concat(tex_data))
+        proc_tex_generated = true
+    end
+    on_click("btn_chrome", function() use_chrome = not use_chrome end)
+    on_click("btn_lights", function() use_lights = not use_lights end)
+    local function render_frame()
+        if not gl_available() or not gl_begin_render('orb_view', 600, 450) then return end
+        if not proc_tex_generated then generate_default_texture() end
+        local t = get_time()
+        gl_viewport(0, 0, 600, 450)
+        gl_clear(0.05, 0.05, 0.08, 1)
+        gl_enable(GL_DEPTH_TEST)
+        gl_matrix_mode(GL_PROJECTION)
+        gl_load_identity()
+        glu_perspective(45, 600 / 450, 0.1, 100)
+        gl_matrix_mode(GL_MODELVIEW)
+        gl_load_identity()
+        local mx, my = get_mouse_pos()
+        glu_look_at(0, 0, 5, 0, 0, 0, 0, 1, 0)
+        gl_rotatef(my * 0.5, 1, 0, 0)
+        gl_rotatef(mx * 0.5, 0, 1, 0)
+        if use_lights then
+            gl_enable(GL_LIGHTING)
+            gl_enable(GL_LIGHT0)
+            gl_enable(GL_LIGHT1)
+            gl_enable(GL_LIGHT2)
+            local lx0, ly0, lz0 = math.sin(t)*2.5, math.sin(t*1.5)*2, math.cos(t)*2.5
+            gl_lightfv(GL_LIGHT0, GL_DIFFUSE, 1.0, 0.2, 0.2, 1.0)
+            gl_lightfv(GL_LIGHT0, GL_POSITION, lx0, ly0, lz0, 1.0)
+            local lx1, ly1, lz1 = math.sin(t+2.1)*2.5, math.cos(t*1.2)*2, math.cos(t+2.1)*2.5
+            gl_lightfv(GL_LIGHT1, GL_DIFFUSE, 0.2, 1.0, 0.2, 1.0)
+            gl_lightfv(GL_LIGHT1, GL_POSITION, lx1, ly1, lz1, 1.0)
+            local lx2, ly2, lz2 = math.sin(t+4.2)*2.5, math.sin(t*0.8)*2, math.cos(t+4.2)*2.5
+            gl_lightfv(GL_LIGHT2, GL_DIFFUSE, 0.2, 0.5, 1.0, 1.0)
+            gl_lightfv(GL_LIGHT2, GL_POSITION, lx2, ly2, lz2, 1.0)
+            gl_disable(GL_LIGHTING)
+            gl_push_matrix() gl_translatef(lx0, ly0, lz0) gl_color(1, 0.2, 0.2, 1) glu_sphere(0.1, 10, 10) gl_pop_matrix()
+            gl_push_matrix() gl_translatef(lx1, ly1, lz1) gl_color(0.2, 1, 0.2, 1) glu_sphere(0.1, 10, 10) gl_pop_matrix()
+            gl_push_matrix() gl_translatef(lx2, ly2, lz2) gl_color(0.2, 0.5, 1, 1) glu_sphere(0.1, 10, 10) gl_pop_matrix()
+            gl_enable(GL_LIGHTING)
+        else
+            gl_disable(GL_LIGHTING)
+        end
+        gl_materialfv(GL_FRONT, GL_AMBIENT, 0.2, 0.2, 0.2, 1.0)
+        gl_materialfv(GL_FRONT, GL_DIFFUSE, 0.8, 0.8, 0.8, 1.0)
+        gl_materialfv(GL_FRONT, GL_SPECULAR, 1.0, 1.0, 1.0, 1.0)
+        gl_materialfv(GL_FRONT, GL_SHININESS, 80.0, 0, 0, 0)
+        gl_enable(0x0DE1)
+        if custom_tex then
+            gl_bind_texture(0x0DE1, custom_tex)
+        else
+            gl_bind_texture(0x0DE1, 2001)
+        end
+        if use_chrome then
+            gl_enable(GL_TEXTURE_GEN_S)
+            gl_enable(GL_TEXTURE_GEN_T)
+            gl_tex_geni(GL_S, GL_TEXTURE_GEN_MODE, GL_SPHERE_MAP)
+            gl_tex_geni(GL_T, GL_TEXTURE_GEN_MODE, GL_SPHERE_MAP)
+        end
+        gl_push_matrix()
+        gl_rotatef(t * 15, 0, 1, 0)
+        glu_sphere(1.5, 64, 64)
+        gl_pop_matrix()
+        gl_disable(GL_TEXTURE_GEN_S)
+        gl_disable(GL_TEXTURE_GEN_T)
+        gl_end_render('orb_view') 
+    end
+    set_timer(16, render_frame)
+}

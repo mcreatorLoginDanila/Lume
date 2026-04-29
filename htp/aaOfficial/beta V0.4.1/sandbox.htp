@@ -1,0 +1,67 @@
+@page {title:"Lume - Multi-line Sandbox"; background:"#09090b";}
+@block {align:"center"; padding:30; margin:0; background:"#09090b";
+  @text {content:"LUME MULTI-LINE SANDBOX"; size:36; color:"#fafafa"; bold:"true";}
+  @br {size:5;}
+  @text {content:"Write HTP code line by line. Use '+' to add new lines."; size:15; color:"#a1a1aa"; italic:"true";}
+}
+@block {align:"center"; padding:20; margin:10; background:"#18181b"; border-radius:10;
+  @row {gap:15;
+    @button {id:"btn_render"; content:"Render Code"; width:150; height:40; background:"#3b82f6"; color:"#ffffff"; border-radius:6; size:14;}
+    @button {id:"btn_add"; content:"+ Add Line"; width:120; height:40; background:"#10b981"; color:"#ffffff"; border-radius:6; size:14;}
+    @button {id:"btn_remove"; content:"- Remove"; width:120; height:40; background:"#ef4444"; color:"#ffffff"; border-radius:6; size:14;}
+  }
+  @br {size:15;}
+  @block {id:"input_container"; align:"center"; padding:10; background:"#09090b"; border-radius:6;
+    @row {gap:10; 
+      @text {content:"1"; size:14; color:"#52525b";}
+      @input {id:"line_1"; placeholder:"e.g. @button{content:\"Test\";}"; width:600; height:35;}
+    }
+  }
+}
+@block {align:"center"; padding:20; margin:10; background:"#09090b";
+  @text {content:"LIVE PREVIEW"; size:14; color:"#71717a"; bold:"true";}
+  @divider {color:"#27272a"; thickness:1; margin:10;}
+  @block {id:"preview_box"; align:"center"; padding:40; margin:0; background:"#18181b"; border-radius:8;
+    @text {content:"Your rendered elements will appear here."; size:14; color:"#52525b"; italic:"true";}
+  }
+  @br { size:40; }
+  @button {content:"Back to Home"; width:150; height:35; background:"#27272a"; color:"#fafafa"; border-radius:6; url:"about:home"; size:14;}
+}
+@script {
+  local lines_count = 1
+  local function update_inputs()
+    local htp_ui = ""
+    for i = 1, lines_count do
+      htp_ui = htp_ui .. '@row{ gap:10; '
+      htp_ui = htp_ui .. '@text{content:"' .. tostring(i) .. '"; size:14; color:"#52525b";} '
+      htp_ui = htp_ui .. '@input{id:"line_' .. tostring(i) .. '"; placeholder:"Line ' .. tostring(i) .. '"; width:600; height:35;} '
+      htp_ui = htp_ui .. '} @br{size:5;} '
+    end
+    set_inner_htp("input_container", htp_ui)
+  end
+  on_click("btn_add", function()
+    lines_count = lines_count + 1
+    update_inputs()
+  end)
+  on_click("btn_remove", function()
+    if lines_count > 1 then
+      set_input("line_" .. tostring(lines_count), "")
+      lines_count = lines_count - 1
+      update_inputs()
+    end
+  end)
+  on_click("btn_render", function()
+    local full_code = ""
+    for i = 1, lines_count do
+      local text = get_input("line_" .. tostring(i))
+      if text then
+        full_code = full_code .. text .. " "
+      end
+    end
+    if full_code:match("%S") then
+      set_inner_htp("preview_box", full_code)
+    else
+      set_inner_htp("preview_box", '@text{content:"Error: Code is empty!"; color:"#ef4444"; size:15;}')
+    end
+  end)
+}
