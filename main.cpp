@@ -1154,19 +1154,9 @@ namespace GLCanvas {
             auto v = it->second;
             if (v && v->valid) {
                 if (v->w != w || v->h != h) {
-                    int oldX = v->x, oldY = v->y;
-                    bool oldVis = v->visible;
-                    destroyView(v);
-                    auto nv = createView(id, w, h);
-                    if (!nv) return nullptr;
-                    nv->x = oldX;
-                    nv->y = oldY;
-                    nv->visible = oldVis;
-                    MoveWindow(nv->hwnd, nv->x, nv->y, w, h, TRUE);
-                    if (oldVis) ShowWindow(nv->hwnd, SW_SHOW);
-                    else ShowWindow(nv->hwnd, SW_HIDE);
-                    g_views[id] = nv;
-                    return nv;
+                    v->w = w;
+                    v->h = h;
+                    MoveWindow(v->hwnd, v->x, v->y, w, h, TRUE);
                 }
                 return v;
             }
@@ -2085,6 +2075,85 @@ static int l_gl_draw_buffer(lua_State* L) {
     }
     return 0;
 }
+static int l_gl_fogf(lua_State* L) {glFogf((GLenum)luaL_checkinteger(L, 1), (GLfloat)luaL_checknumber(L, 2)); return 0;}
+static int l_gl_fogi(lua_State* L) {glFogi((GLenum)luaL_checkinteger(L, 1), (GLint)luaL_checkinteger(L, 2)); return 0;}
+static int l_gl_fogfv(lua_State* L) {
+    GLenum pname = (GLenum)luaL_checkinteger(L, 1);
+    GLfloat params[4] = {
+        (GLfloat)luaL_checknumber(L, 2),
+        (GLfloat)luaL_checknumber(L, 3),
+        (GLfloat)luaL_checknumber(L, 4),
+        (GLfloat)luaL_optnumber(L, 5, 1.0f)
+    };
+    glFogfv(pname, params);
+    return 0;
+}
+static int l_gl_render_mode(lua_State* L) {
+    lua_pushinteger(L, glRenderMode((GLenum)luaL_checkinteger(L, 1)));
+    return 1;
+}
+static int l_gl_tex_genf(lua_State* L) {glTexGenf((GLenum)luaL_checkinteger(L, 1), (GLenum)luaL_checkinteger(L, 2), (GLfloat)luaL_checknumber(L, 3)); return 0;}
+static int l_gl_tex_geni(lua_State* L) {glTexGeni((GLenum)luaL_checkinteger(L, 1), (GLenum)luaL_checkinteger(L, 2), (GLint)luaL_checkinteger(L, 3)); return 0;}
+static int l_gl_tex_genfv(lua_State* L) {
+    GLenum coord = (GLenum)luaL_checkinteger(L, 1);
+    GLenum pname = (GLenum)luaL_checkinteger(L, 2);
+    GLfloat params[4] = {
+        (GLfloat)luaL_checknumber(L, 3),
+        (GLfloat)luaL_checknumber(L, 4),
+        (GLfloat)luaL_checknumber(L, 5),
+        (GLfloat)luaL_checknumber(L, 6)
+    };
+    glTexGenfv(coord, pname, params);
+    return 0;
+}
+static int l_glu_build2d_mipmaps(lua_State* L) {
+    GLenum target = (GLenum)luaL_checkinteger(L, 1);
+    GLint components = (GLint)luaL_checkinteger(L, 2);
+    GLsizei width = (GLsizei)luaL_checkinteger(L, 3);
+    GLsizei height = (GLsizei)luaL_checkinteger(L, 4);
+    GLenum format = (GLenum)luaL_checkinteger(L, 5);
+    GLenum type = (GLenum)luaL_checkinteger(L, 6);
+    size_t len;
+    const char* data = luaL_checklstring(L, 7, &len);
+    int res = gluBuild2DMipmaps(target, components, width, height, format, type, data);
+    lua_pushinteger(L, res);
+    return 1;
+}
+static int l_gl_load_texture_mipmapped(lua_State* L) {
+    const char* path = luaL_checkstring(L, 1);
+    int len = MultiByteToWideChar(CP_UTF8, 0, path, -1, NULL, 0);
+    std::wstring wpath(len, 0);
+    MultiByteToWideChar(CP_UTF8, 0, path, -1, &wpath[0], len);
+    Gdiplus::Bitmap bmp(wpath.c_str());
+    if (bmp.GetLastStatus() != Gdiplus::Ok) { lua_pushnil(L); return 1; }
+    int w = bmp.GetWidth();
+    int h = bmp.GetHeight();
+    std::vector<unsigned char> pixels(w * h * 4);
+    Gdiplus::Rect rect(0, 0, w, h);
+    Gdiplus::BitmapData bmpData;
+    bmp.LockBits(&rect, Gdiplus::ImageLockModeRead, PixelFormat32bppARGB, &bmpData);
+    const unsigned char* src = (const unsigned char*)bmpData.Scan0;
+    int stride = bmpData.Stride;
+    for (int y = 0; y < h; y++) {
+        for (int x = 0; x < w; x++) {
+            int i = y * stride + x * 4;
+            int p = (y * w + x) * 4;
+            pixels[p + 0] = src[i + 2];
+            pixels[p + 1] = src[i + 1];
+            pixels[p + 2] = src[i + 0];
+            pixels[p + 3] = src[i + 3];
+        }
+    }
+    bmp.UnlockBits(&bmpData);
+    GLuint texID;
+    glGenTextures(1, &texID);
+    glBindTexture(GL_TEXTURE_2D, texID);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    gluBuild2DMipmaps(GL_TEXTURE_2D, 4, w, h, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+    lua_pushinteger(L, texID);
+    return 1;
+}
 static int l_download_async(lua_State* L) {
     std::string url = luaL_checkstring(L, 1);
     std::string fname = luaL_checkstring(L, 2);
@@ -2235,6 +2304,24 @@ void registerGLConstants(lua_State* L) {
         {"GL_FRONT_AND_BACK", 0x0408},
         {"GL_LIGHT1", 0x4001},
         {"GL_LIGHT2", 0x4002},
+        {"GL_FOG", 0x0B60},
+        {"GL_FOG_COLOR", 0x0B66},
+        {"GL_FOG_DENSITY", 0x0B62},
+        {"GL_FOG_START", 0x0B63},
+        {"GL_FOG_END", 0x0B64},
+        {"GL_FOG_MODE", 0x0B65},
+        {"GL_EXP", 0x0800},
+        {"GL_EXP2", 0x0801},
+        {"GL_S", 0x2000},
+        {"GL_T", 0x2001},
+        {"GL_R", 0x2002},
+        {"GL_Q", 0x2003},
+        {"GL_TEXTURE_GEN_MODE", 0x2500},
+        {"GL_OBJECT_LINEAR", 0x2401},
+        {"GL_SPHERE_MAP", 0x2402},
+        {"GL_RENDER", 0x1C00},
+        {"GL_SELECT", 0x1C01},
+        {"GL_FEEDBACK", 0x1C02},
         {nullptr,0}
     };
     for (int i = 0; cs[i].n; i++) {
@@ -2333,6 +2420,15 @@ void init() {
     lua_register(g_L, "gl_materialfv", l_gl_materialfv);
     lua_register(g_L, "gl_create_buffer", l_gl_create_buffer);
     lua_register(g_L, "gl_draw_buffer", l_gl_draw_buffer);
+    lua_register(g_L, "gl_fogf", l_gl_fogf);
+    lua_register(g_L, "gl_fogi", l_gl_fogi);
+    lua_register(g_L, "gl_fogfv", l_gl_fogfv);
+    lua_register(g_L, "gl_render_mode", l_gl_render_mode);
+    lua_register(g_L, "gl_tex_genf", l_gl_tex_genf);
+    lua_register(g_L, "gl_tex_geni", l_gl_tex_geni);
+    lua_register(g_L, "gl_tex_genfv", l_gl_tex_genfv);
+    lua_register(g_L, "glu_build2d_mipmaps", l_glu_build2d_mipmaps);
+    lua_register(g_L, "gl_load_texture_mipmapped", l_gl_load_texture_mipmapped);
     lua_register(g_L, "download_async", l_download_async);
     lua_register(g_L, "download_status", l_download_status);
     lua_register(g_L, "wasm_load", l_wasm_load);
