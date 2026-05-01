@@ -1,0 +1,88 @@
+@page { title:"Lume - Binary Store"; background:"#09090b";}
+@block {align:"center"; padding:40; margin:0; background:"#09090b";
+  @text {content:"BINARY STORE"; size:36; color:"#fafafa"; bold:"true";}
+  @br {size:5;}
+  @text {content:"Download standalone games directly from the Lume engine"; size:16; color:"#a1a1aa"; italic:"true";}
+}
+@block { align:"center"; padding:20; margin:0; background:"#09090b";
+    @row { gap:25;
+        @column {background:"#18181b"; padding:25; border-radius:10; width:280;
+            @text {content:"2D Shooter"; size:26; color:"#eab308"; bold:"true";}
+            @divider {color:"#27272a"; thickness:1; margin:15;}
+            @text {content:"A classic fast-paced 2D shooting experience. Lock and load."; size:14; color:"#a1a1aa";}
+            @br {size:25;}
+            @button {id:"btn_shooter"; content:"Download"; width:200; height:40; background:"#ca8a04"; color:"#ffffff"; border-radius:6; size:15;}
+            @br {size:10;}
+            @text {id:"stat_shooter"; content:""; size:13; color:"#10b981";}
+        }
+        @column {background:"#18181b"; padding:25; border-radius:10; width:280;
+            @text {content:"Snake"; size:26; color:"#22c55e"; bold:"true";}
+            @divider {color:"#27272a"; thickness:1; margin:15;}
+            @text {content:"The legendary arcade classic. Eat apples and grow longer."; size:14; color:"#a1a1aa";}
+            @br {size:25;}
+            @button {id:"btn_snake"; content:"Download"; width:200; height:40; background:"#16a34a"; color:"#ffffff"; border-radius:6; size:15;}
+            @br {size:10;}
+            @text {id:"stat_snake"; content:""; size:13; color:"#10b981";}
+        }
+    }
+    @br { size:25; }
+    @row { gap:25;
+        @column {background:"#18181b"; padding:25; border-radius:10; width:280;
+            @text {content:"Tetris"; size:26; color:"#a855f7"; bold:"true";}
+            @divider {color:"#27272a"; thickness:1; margin:15;}
+            @text {content:"Drop the blocks and clear the lines in this timeless puzzle game."; size:14; color:"#a1a1aa";}
+            @br {size:25;}
+            @button {id:"btn_tetris"; content:"Download"; width:200; height:40; background:"#9333ea"; color:"#ffffff"; border-radius:6; size:15;}
+            @br {size:10;}
+            @text {id:"stat_tetris"; content:""; size:13; color:"#10b981";}
+        }
+        @column {background:"#18181b"; padding:25; border-radius:10; width:280;
+            @text {content:"3D Arena"; size:26; color:"#ef4444"; bold:"true";}
+            @divider {color:"#27272a"; thickness:1; margin:15;}
+            @text {content:"Fast-paced retro arena shooter. Survive and destroy everything."; size:14; color:"#a1a1aa";}
+            @br {size:25;}
+            @button {id:"btn_arena"; content:"Download"; width:200; height:40; background:"#dc2626"; color:"#ffffff"; border-radius:6; size:15;}
+            @br {size:10;}
+            @text {id:"stat_arena"; content:""; size:13; color:"#10b981";}
+        }
+    }
+    @br { size:50; }
+    @button {content:"Back to Store"; width:180; height:35; background:"#27272a"; color:"#fafafa"; border-radius:6; url:"index.htp"; size:14;}
+}
+@script {
+    local url_shooter = "https://github.com/Lume-corp/Lume-PlansAndGames/releases/download/download-link-0001/shooter.exe"
+    local url_snake = "https://github.com/Lume-corp/Lume-PlansAndGames/releases/download/download-link-0001/snake.exe"
+    local url_tetris = "https://github.com/Lume-corp/Lume-PlansAndGames/releases/download/download-link-0001/tetris.exe"
+    local url_arena = "https://github.com/Lume-corp/Lume-PlansAndGames/releases/download/download-link-0001/ultrakill_noCRT.exe"
+    local timers = {}
+    local function start_download(id, url, filename, stat_id)
+        download_async(url, filename)
+        set_text(stat_id, "Starting download...")
+        if timers[id] then kill_timer(timers[id]) end
+        timers[id] = set_timer(500, function()
+            local status, path, dl_bytes, total = download_status(url)
+            if status == 1 then
+                set_text(stat_id, "Done! Saved in temp/")
+                kill_timer(timers[id])
+                timers[id] = nil
+                alert("Downloading ended!\nFile: " .. filename)
+            elseif status == -1 then
+                set_text(stat_id, "Download error!")
+                kill_timer(timers[id])
+                timers[id] = nil
+            elseif status == 0 then
+                local mb_dl = math.floor(dl_bytes / 1048576)
+                local mb_total = math.floor(total / 1048576)
+                if total > 0 then
+                    set_text(stat_id, "Downloading: " .. mb_dl .. " MB / " .. mb_total .. " MB")
+                else
+                    set_text(stat_id, "Downloading: " .. mb_dl .. " MB")
+                end
+            end
+        end)
+    end
+    on_click("btn_shooter", function() start_download("shooter", url_shooter, "shooter.exe", "stat_shooter") end)
+    on_click("btn_snake", function() start_download("snake", url_snake, "snake.exe", "stat_snake") end)
+    on_click("btn_tetris", function() start_download("tetris", url_tetris, "tetris.exe", "stat_tetris") end)
+    on_click("btn_arena", function() start_download("arena", url_arena, "arena_shooter.exe", "stat_arena") end)
+}
