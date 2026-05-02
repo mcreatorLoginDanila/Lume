@@ -1,11 +1,12 @@
-@page { title:"Lume - Game Store"; background:"#09090b";}
+@page {title:"Lume - Game Store"; background:"#09090b";}
 @block {align:"center"; padding:40; margin:0; background:"#09090b";
   @text {content:"LUME STORE"; size:46; color:"#fafafa"; bold:"true";}
   @br {size:5;}
   @text {content:"Select a game to launch"; size:18; color:"#a1a1aa"; italic:"true";}
   @br {size:20;}
-  @row { gap:20;
+  @row {gap:20;
       @button {content:"Binary Store"; width:190; height:45; background:"#2563eb"; color:"#ffffff"; border-radius:8; size:18; url:"binary_store.htp";}
+      @button {content:"App Store"; width:190; height:45; background:"#7c3aed"; color:"#ffffff"; border-radius:8; size:18; url:"app_store.htp";}
       @button {content:"Other Browsers"; width:190; height:45; background:"#3f3f46"; color:"#ffffff"; border-radius:8; size:18; url:"download_browser.htp";}
   }
 }
@@ -26,6 +27,6 @@
             @button {content:"Play ULTRAKILL"; width:180; height:40; background:"#dc2626"; color:"#ffffff"; border-radius:6; size:16; url:"ultrakill.htp";}
         }
     }
-    @br { size:50; }
+    @br {size:50;}
     @button {content:"Back to Home"; width:150; height:35; background:"#27272a"; color:"#fafafa"; border-radius:6; url:"about:home"; size:14;}
 }
