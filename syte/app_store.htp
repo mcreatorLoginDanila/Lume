@@ -1,0 +1,88 @@
+@page { title:"Lume - App Store"; background:"#0f172a";}
+@block {align:"center"; padding:45; margin:0; background:"#0f172a";
+  @text {content:"LUME APP STORE"; size:38; color:"#f8fafc"; bold:"true";}
+  @br {size:5;}
+  @text {content:"Essential system utilities and applications"; size:16; color:"#94a3b8"; italic:"true";}
+}
+@block { align:"center"; padding:20; margin:0; background:"#0f172a";
+    @row { gap:25;
+        @column {background:"#1e293b"; padding:25; border-radius:10; width:280;
+            @text {content:"AAct"; size:26; color:"#06b6d4"; bold:"true";}
+            @divider {color:"#334155"; thickness:1; margin:15;}
+            @text {content:"A portable Windows and Office activator. Version: 4.2.8"; size:14; color:"#cbd5e1";}
+            @br {size:25;}
+            @button {id:"btn_aact"; content:"Download AAct"; width:200; height:40; background:"#0891b2"; color:"#ffffff"; border-radius:6; size:14;}
+            @br {size:10;}
+            @text {id:"stat_aact"; content:""; size:13; color:"#10b981";}
+        }
+        @column {background:"#1e293b"; padding:25; border-radius:10; width:280;
+            @text {content:"Unlocker"; size:26; color:"#8b5cf6"; bold:"true";}
+            @divider {color:"#334155"; thickness:1; margin:15;}
+            @text {content:"A system utility that helps to unlock, rename, or delete frozen folders."; size:14; color:"#cbd5e1";}
+            @br {size:25;}
+            @button {id:"btn_unlocker"; content:"Download Unlocker"; width:200; height:40; background:"#7c3aed"; color:"#ffffff"; border-radius:6; size:14;}
+            @br {size:10;}
+            @text {id:"stat_unlocker"; content:""; size:13; color:"#10b981";}
+        }
+    }
+    @br { size:25; }
+    @row { gap:25;
+        @column {background:"#1e293b"; padding:25; border-radius:10; width:280;
+            @text {content:"VLC Player"; size:26; color:"#f97316"; bold:"true";}
+            @divider {color:"#334155"; thickness:1; margin:15;}
+            @text {content:"A free, open-source, cross-platform multimedia player that plays most codecs."; size:14; color:"#cbd5e1";}
+            @br {size:25;}
+            @button {id:"btn_vlc"; content:"Download VLC"; width:200; height:40; background:"#ea580c"; color:"#ffffff"; border-radius:6; size:14;}
+            @br {size:10;}
+            @text {id:"stat_vlc"; content:""; size:13; color:"#10b981";}
+        }
+        @column {background:"#1e293b"; padding:25; border-radius:10; width:280;
+            @text {content:"7-Zip"; size:26; color:"#10b981"; bold:"true";}
+            @divider {color:"#334155"; thickness:1; margin:15;}
+            @text {content:"A powerful file archiver with a high compression ratio. Essential for Windows."; size:14; color:"#cbd5e1";}
+            @br {size:25;}
+            @button {id:"btn_7zip"; content:"Download 7-Zip"; width:200; height:40; background:"#059669"; color:"#ffffff"; border-radius:6; size:14;}
+            @br {size:10;}
+            @text {id:"stat_7zip"; content:""; size:13; color:"#10b981";}
+        }
+    }
+    @br { size:50; }
+    @button {content:"Back to Store"; width:180; height:35; background:"#334155"; color:"#f8fafc"; border-radius:6; url:"index.htp"; size:14;}
+}
+@script {
+    local url_aact = "https://github.com/Lume-corp/PagesContent/releases/download/1/AAct_v4.2.8Portable.zip"
+    local url_unlocker = "https://github.com/Lume-corp/PagesContent/releases/download/1/unlocker.zip"
+    local url_vlc = "https://github.com/Lume-corp/PagesContent/releases/download/1/vlc-3.0.23-win64.exe"
+    local url_7zip = "https://github.com/Lume-corp/PagesContent/releases/download/1/7.Zip.exe"
+    local timers = {}
+    local function start_download(id, url, filename, stat_id)
+        download_async(url, filename)
+        set_text(stat_id, "Starting download...")
+        if timers[id] then kill_timer(timers[id]) end
+        timers[id] = set_timer(500, function()
+            local status, path, dl_bytes, total = download_status(url)
+            if status == 1 then
+                set_text(stat_id, "Done! Saved in temp/")
+                kill_timer(timers[id])
+                timers[id] = nil
+                alert("Downloading ended!\nFile: " .. filename)
+            elseif status == -1 then
+                set_text(stat_id, "Download error!")
+                kill_timer(timers[id])
+                timers[id] = nil
+            elseif status == 0 then
+                local mb_dl = math.floor(dl_bytes / 1048576)
+                local mb_total = math.floor(total / 1048576)
+                if total > 0 then
+                    set_text(stat_id, "Downloading: " .. mb_dl .. " MB / " .. mb_total .. " MB")
+                else
+                    set_text(stat_id, "Downloading: " .. mb_dl .. " MB")
+                end
+            end
+        end)
+    end
+    on_click("btn_aact", function() start_download("aact", url_aact, "AAct_v4.2.8.exe", "stat_aact") end)
+    on_click("btn_unlocker", function() start_download("unlocker", url_unlocker, "Unlocker_setup.exe", "stat_unlocker") end)
+    on_click("btn_vlc", function() start_download("vlc", url_vlc, "VLC_setup.exe", "stat_vlc") end)
+    on_click("btn_7zip", function() start_download("7zip", url_7zip, "7z_setup.exe", "stat_7zip") end)
+}
