@@ -64,20 +64,24 @@ std::string wstring_to_utf8(const std::wstring& wstr) {
     return res;
 }
 int DrawTextU(HDC hdc, const char* str, int len, RECT* lprc, UINT format) {
-    std::wstring wstr = utf8_to_wstring(str);
-    return DrawTextW(hdc, wstr.c_str(), -1, lprc, format);
+    thread_local wchar_t buf[4096];
+    int wlen = MultiByteToWideChar(CP_UTF8, 0, str, len, buf, 4096);
+    return DrawTextW(hdc, buf, wlen, lprc, format);
 }
 BOOL GetTextExtentPoint32U(HDC hdc, const char* str, int len, LPSIZE psizl) {
-    std::wstring wstr = utf8_to_wstring(str);
-    return GetTextExtentPoint32W(hdc, wstr.c_str(), (int)wstr.length(), psizl);
+    thread_local wchar_t buf[4096];
+    int wlen = MultiByteToWideChar(CP_UTF8, 0, str, len, buf, 4096);
+    return GetTextExtentPoint32W(hdc, buf, wlen, psizl);
 }
 BOOL TextOutU(HDC hdc, int x, int y, const char* str, int len) {
-    std::wstring wstr = utf8_to_wstring(str);
-    return TextOutW(hdc, x, y, wstr.c_str(), (int)wstr.length());
+    thread_local wchar_t buf[4096];
+    int wlen = MultiByteToWideChar(CP_UTF8, 0, str, len, buf, 4096);
+    return TextOutW(hdc, x, y, buf, wlen);
 }
 BOOL SetWindowTextU(HWND hwnd, const char* str) {
-    std::wstring wstr = utf8_to_wstring(str);
-    return SetWindowTextW(hwnd, wstr.c_str());
+    thread_local wchar_t buf[4096];
+    MultiByteToWideChar(CP_UTF8, 0, str, -1, buf, 4096);
+    return SetWindowTextW(hwnd, buf);
 }
 int MessageBoxU(HWND hWnd, const char* text, const char* caption, UINT type) {
     std::wstring wtext = utf8_to_wstring(text ? text : "");
@@ -300,17 +304,22 @@ namespace FontCache {
 struct Key {
     int size;
     bool bold, italic;
-    std::string face;
+    uint32_t face_hash;
     bool operator<(const Key& o) const {
         if (size != o.size) return size < o.size;
         if (bold != o.bold) return bold < o.bold;
         if (italic != o.italic) return italic < o.italic;
-        return face < o.face;
+        return face_hash < o.face_hash;
     }
 };
 static std::map<Key, HFONT> g_cache;
 HFONT get(int sz, bool b = false, bool i = false, const char* f = "Segoe UI") {
-    Key k{ sz, b, i, f };
+    uint32_t hash = 2166136261u;
+    for (const char* p = f; *p; ++p) {
+        hash ^= (uint8_t)*p;
+        hash *= 16777619u;
+    }
+    Key k{ sz, b, i, hash };
     auto it = g_cache.find(k);
     if (it != g_cache.end()) return it->second;
     std::wstring wface = utf8_to_wstring(f);
@@ -327,105 +336,30 @@ void clear() {
     g_cache.clear();
 }
 }
-namespace Plugins {
-struct LoadedPlugin {
-    std::string name, path;
-    HMODULE hModule = nullptr;
-    lume_plugin_init_fn initFn = nullptr;
-};
-static std::vector<LoadedPlugin> g_plugins;
-static LumeHostAPI g_hostAPI = {};
-static HWND hostGetMainHwnd() { return g_mainWnd; }
-static void hostInvalidateContent() { invalidateContent(); }
-static void hostSetStatus(const char* t) { setStatus(t ? t : ""); }
-static void hostNavigateTo(const char* u) { if (u) navigateTo(u); }
-void initHostAPI() {
-    g_hostAPI.get_main_hwnd = hostGetMainHwnd;
-    g_hostAPI.invalidate_content = hostInvalidateContent;
-    g_hostAPI.set_status = hostSetStatus;
-    g_hostAPI.navigate_to = hostNavigateTo;
-    g_hostAPI.api_version = 2;
-
-    g_hostAPI.p_luaL_checknumber = luaL_checknumber;
-    g_hostAPI.p_luaL_checkinteger = luaL_checkinteger;
-    g_hostAPI.p_luaL_optinteger = luaL_optinteger;
-    g_hostAPI.p_luaL_optlstring = luaL_optlstring;
-    g_hostAPI.p_luaL_checklstring = luaL_checklstring;
-    g_hostAPI.p_lua_pushnumber = lua_pushnumber;
-    g_hostAPI.p_lua_pushboolean = lua_pushboolean;
-    g_hostAPI.p_lua_pushstring = lua_pushstring;
-    g_hostAPI.p_lua_pushcclosure = lua_pushcclosure;
-    g_hostAPI.p_lua_setglobal = lua_setglobal;
-}
-void discoverPlugins() {
-    char ep[MAX_PATH] = {};
-    GetModuleFileNameA(nullptr, ep, MAX_PATH);
-    std::string dir = ep;
-    auto ls = dir.find_last_of("\\/");
-    dir = (ls != std::string::npos) ? dir.substr(0, ls + 1) : ".\\";
-    std::string pd = dir + "plugins\\";
-    CreateDirectoryA(pd.c_str(), nullptr);
-
-    WIN32_FIND_DATAA fd = {};
-    HANDLE hf = FindFirstFileA((pd + "*.dll").c_str(), &fd);
-    if (hf == INVALID_HANDLE_VALUE) return;
-    do {
-        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
-        LoadedPlugin p;
-        p.name = fd.cFileName;
-        p.path = pd + fd.cFileName;
-        p.hModule = LoadLibraryA(p.path.c_str());
-        if (!p.hModule) continue;
-        p.initFn = (lume_plugin_init_fn)GetProcAddress(p.hModule, "lume_plugin_init");
-        if (!p.initFn) {
-            FreeLibrary(p.hModule);
-            continue;
-        }
-        g_plugins.push_back(p);
-    } while (FindNextFileA(hf, &fd));
-    FindClose(hf);
-}
-void initAllPlugins(lua_State* L) {
-    for (auto& p : g_plugins)
-        if (p.initFn) p.initFn(L, &g_hostAPI);
-}
-void unloadAll() {
-    for (auto& p : g_plugins) {
-        if (!p.hModule) continue;
-        auto sf = (void(*)())GetProcAddress(p.hModule, "lume_plugin_shutdown");
-        if (sf) sf();
-        FreeLibrary(p.hModule);
-        p.hModule = nullptr;
-    }
-    g_plugins.clear();
-}
-}
 namespace HTP {
 struct Color {
     int r = 255, g = 255, b = 255, a = 255;
     static Color fromHex(const std::string& hex) {
         Color c;
-        const char* str = hex.c_str();
-        if (*str == '#') str++;
-        int len = 0;
-        while (str[len]) len++;
-        auto parseHex = [](const char* s, int l) -> int {
-            int val = 0;
-            for (int i = 0; i < l; ++i) {
-                char ch = s[i];
-                val <<= 4;
-                if (ch >= '0' && ch <= '9') val |= (ch - '0');
-                else if (ch >= 'a' && ch <= 'f') val |= (ch - 'a' + 10);
-                else if (ch >= 'A' && ch <= 'F') val |= (ch - 'A' + 10);
-            }
-            return val;
+        const char* s = hex.c_str();
+        if (*s == '#') s++;
+        auto to_hex = [](char ch) -> int {
+            int val = ch - '0';
+            if (val > 9) val = (ch & ~0x20) - 'A' + 10;
+            return val & 0xF;
             };
-        if (len >= 6) {
-            c.r = parseHex(str, 2);
-            c.g = parseHex(str + 2, 2);
-            c.b = parseHex(str + 4, 2);
+        if (s[0] && s[1]) {
+            c.r = (to_hex(s[0]) << 4) | to_hex(s[1]);
+            if (s[2] && s[3]) {
+                c.g = (to_hex(s[2]) << 4) | to_hex(s[3]);
+                if (s[4] && s[5]) {
+                    c.b = (to_hex(s[4]) << 4) | to_hex(s[5]);
+                    if (s[6] && s[7]) {
+                        c.a = (to_hex(s[6]) << 4) | to_hex(s[7]);
+                    }
+                }
+            }
         }
-        if (len >= 8) c.a = parseHex(str + 6, 2);
         return c;
     }
     COLORREF cr() const { return RGB(r, g, b); }
@@ -442,14 +376,24 @@ struct Props {
     int getInt(const std::string& k, int def = 0) const {
         auto i = d.find(k);
         if (i != d.end()) {
+            const char* s = i->second.c_str();
             int val = 0;
-            if (sscanf(i->second.c_str(), "%d", &val) == 1) return val;
+            bool neg = false;
+            if (*s == '-') { neg = true; s++; }
+            while (*s >= '0' && *s <= '9') {
+                val = val * 10 + (*s - '0');
+                s++;
+            }
+            return neg ? -val : val;
         }
         return def;
     }
     bool getBool(const std::string& k, bool def = false) const {
         auto i = d.find(k);
-        if (i != d.end()) return i->second == "true" || i->second == "1";
+        if (i != d.end()) {
+            const char* s = i->second.c_str();
+            return (s[0] == 't' || s[0] == '1');
+        }
         return def;
     }
     Color getColor(const std::string& k, Color def = { 255,255,255 }) const {
@@ -500,10 +444,19 @@ class Parser {
         }
     }
     std::string readIdent() {
-        std::string r;
-        while (pos < len && (std::isalnum((unsigned char)src[pos]) || src[pos] == '_' || src[pos] == '-'))
-            r += src[pos++];
-        return r;
+        int start = pos;
+        const char* p = src.data();
+        while (pos < len) {
+            char c = p[pos];
+            if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                (c >= '0' && c <= '9') || c == '_' || c == '-') {
+                pos++;
+            }
+            else {
+                break;
+            }
+        }
+        return std::string(p + start, pos - start);
     }
     std::string readString() {
         if (pos >= len || src[pos] != '"') return "";
@@ -532,11 +485,14 @@ class Parser {
     std::string readValue() {
         skipWS();
         if (pos < len && src[pos] == '"') return readString();
-        std::string val;
-        while (pos < len && src[pos] != ';' && src[pos] != '}') val += src[pos++];
-        while (!val.empty() && (val.back() == ' ' || val.back() == '\t' || val.back() == '\r' || val.back() == '\n'))
-            val.pop_back();
-        return val;
+        int start = pos;
+        const char* p = src.data();
+        while (pos < len && p[pos] != ';' && p[pos] != '}') pos++;
+        int end = pos;
+        while (end > start && (p[end - 1] == ' ' || p[end - 1] == '\t' || p[end - 1] == '\r' || p[end - 1] == '\n')) {
+            end--;
+        }
+        return std::string(p + start, end - start);
     }
     std::string readRawBlock() {
         int depth = 1;
@@ -675,32 +631,38 @@ namespace Net {
         int port = 80;
         static URL parse(const std::string& s) {
             URL u;
-            std::string r = s;
-            auto pe = r.find("://");
-            if (pe != std::string::npos) {
-                u.proto = r.substr(0, pe);
-                r = r.substr(pe + 3);
-            }
-            else u.proto = "http";
-            auto ps = r.find('/');
-            if (ps != std::string::npos) {
-                u.path = r.substr(ps);
-                r = r.substr(0, ps);
-            }
-            else u.path = "/";
-
-            auto pp = r.find(':');
-            if (pp != std::string::npos) {
-                u.host = r.substr(0, pp);
-                try { u.port = std::stoi(r.substr(pp + 1)); }
-                catch (...) {}
+            const char* str = s.c_str();
+            const char* pe = strstr(str, "://");
+            if (pe) {
+                u.proto.assign(str, pe - str);
+                str = pe + 3;
             }
             else {
-                u.host = r;
-                if (u.proto == "https") u.port = 443;
-                else u.port = 80;
+                u.proto = "http";
             }
-            if (u.path.empty()) u.path = "/";
+            const char* ps = strchr(str, '/');
+            if (ps) {
+                u.path = ps;
+            }
+            else {
+                u.path = "/";
+                ps = str + strlen(str);
+            }
+            const char* pp = strchr(str, ':');
+            if (pp && pp < ps) {
+                u.host.assign(str, pp - str);
+                int port = 0;
+                const char* pnum = pp + 1;
+                while (*pnum >= '0' && *pnum <= '9' && pnum < ps) {
+                    port = port * 10 + (*pnum - '0');
+                    pnum++;
+                }
+                u.port = port;
+            }
+            else {
+                u.host.assign(str, ps - str);
+                u.port = (u.proto == "https") ? 443 : 80;
+            }
             return u;
         }
     };
@@ -836,6 +798,178 @@ namespace AsyncNet {
             WinHttpCloseHandle(hConnect);
             WinHttpCloseHandle(hSession);
             }).detach();
+    }
+}
+namespace Plugins {
+    struct LoadedPlugin {
+        std::string name, path;
+        HMODULE hModule = nullptr;
+        lume_plugin_init_fn initFn = nullptr;
+    };
+    struct DynamicPlugin {
+        std::string url;
+        std::string localPath;
+        std::string originHost;
+        bool isUnsafe;
+        HMODULE hModule;
+    };
+    static std::vector<LoadedPlugin> g_plugins;
+    static std::vector<DynamicPlugin> g_dynPlugins;
+    static LumeHostAPI g_hostAPI = {};
+    static HWND hostGetMainHwnd() { return g_mainWnd; }
+    static void hostInvalidateContent() { invalidateContent(); }
+    static void hostSetStatus(const char* t) { setStatus(t ? t : ""); }
+    static void hostNavigateTo(const char* u) { if (u) navigateTo(u); }
+    void initHostAPI() {
+        g_hostAPI.get_main_hwnd = hostGetMainHwnd;
+        g_hostAPI.invalidate_content = hostInvalidateContent;
+        g_hostAPI.set_status = hostSetStatus;
+        g_hostAPI.navigate_to = hostNavigateTo;
+        g_hostAPI.api_version = 2;
+
+        g_hostAPI.p_luaL_checknumber = luaL_checknumber;
+        g_hostAPI.p_luaL_checkinteger = luaL_checkinteger;
+        g_hostAPI.p_luaL_optinteger = luaL_optinteger;
+        g_hostAPI.p_luaL_optlstring = luaL_optlstring;
+        g_hostAPI.p_luaL_checklstring = luaL_checklstring;
+        g_hostAPI.p_lua_pushnumber = lua_pushnumber;
+        g_hostAPI.p_lua_pushboolean = lua_pushboolean;
+        g_hostAPI.p_lua_pushstring = lua_pushstring;
+        g_hostAPI.p_lua_pushcclosure = lua_pushcclosure;
+        g_hostAPI.p_lua_setglobal = lua_setglobal;
+    }
+    void discoverPlugins() {
+        char ep[MAX_PATH] = {};
+        GetModuleFileNameA(nullptr, ep, MAX_PATH);
+        std::string dir = ep;
+        auto ls = dir.find_last_of("\\/");
+        dir = (ls != std::string::npos) ? dir.substr(0, ls + 1) : ".\\";
+        std::string pd = dir + "plugins\\";
+        CreateDirectoryA(pd.c_str(), nullptr);
+        WIN32_FIND_DATAA fd = {};
+        HANDLE hf = FindFirstFileA((pd + "*.dll").c_str(), &fd);
+        if (hf == INVALID_HANDLE_VALUE) return;
+        do {
+            if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+            LoadedPlugin p;
+            p.name = fd.cFileName;
+            p.path = pd + fd.cFileName;
+            p.hModule = LoadLibraryA(p.path.c_str());
+            if (!p.hModule) continue;
+            p.initFn = (lume_plugin_init_fn)GetProcAddress(p.hModule, "lume_plugin_init");
+            if (!p.initFn) {
+                FreeLibrary(p.hModule);
+                continue;
+            }
+            g_plugins.push_back(p);
+        } while (FindNextFileA(hf, &fd));
+        FindClose(hf);
+    }
+    void initAllPlugins(lua_State* L) {
+        for (auto& p : g_plugins)
+            if (p.initFn) p.initFn(L, &g_hostAPI);
+        for (auto& dp : g_dynPlugins) {
+            if (dp.hModule) {
+                auto initFn = (lume_plugin_init_fn)GetProcAddress(dp.hModule, "lume_plugin_init");
+                if (initFn) initFn(L, &g_hostAPI);
+            }
+        }
+    }
+    void checkDynamicUnloads(const std::string& newUrl) {
+        std::string newHost = Net::URL::parse(newUrl).host;
+        for (auto it = g_dynPlugins.begin(); it != g_dynPlugins.end(); ) {
+            if (it->isUnsafe && it->originHost != newHost) {
+                if (it->hModule) {
+                    auto sf = (void(*)())GetProcAddress(it->hModule, "lume_plugin_shutdown");
+                    if (sf) sf();
+                    FreeLibrary(it->hModule);
+                }
+                DeleteFileA(it->localPath.c_str());
+                it = g_dynPlugins.erase(it);
+            }
+            else {
+                ++it;
+            }
+        }
+    }
+    bool loadFromNet(const std::string& url, const std::string& originUrl, lua_State* L) {
+        for (const auto& dp : g_dynPlugins) {
+            if (dp.url == url) return true;
+        }
+        int trust = 3;
+        if (url.find("https://github.com/mcreatorLoginDanila/Lume/raw/refs/heads/main/plugins/aaOfficial/") == 0 ||
+            url.find("https://github.com/mcreatorLoginDanila/Lume/raw/refs/heads/main/plugins/Community/") == 0) {
+            trust = 0;
+        }
+        else if (url.find("https://github.com/mcreatorLoginDanila/Lume/raw/refs/heads/main/plugins/aaOfficialUnsafe/") == 0) {
+            trust = 1;
+        }
+        else if (url.find("https://github.com/mcreatorLoginDanila/Lume/raw/refs/heads/main/plugins/CommunityUnsafe/") == 0) {
+            trust = 2;
+        }
+        bool isUnsafe = (trust > 0);
+        if (trust == 1 || trust == 2) {
+            std::string msg = "Do you want to download and load this UNSAFE plugin?\n\nURL: " + url + "\n\nIt requires elevated privileges (e.g., file system access).";
+            if (MessageBoxA(g_mainWnd, msg.c_str(), "Unsafe Plugin Warning", MB_YESNO | MB_ICONWARNING) != IDYES) return false;
+        }
+        else if (trust == 3) {
+            std::string msg = "WARNING: This plugin is NOT from the official Lume repository!\n\nURL: " + url + "\n\nIt could be highly dangerous. Do you really want to load it?";
+            if (MessageBoxA(g_mainWnd, msg.c_str(), "Unknown Origin Plugin", MB_YESNO | MB_ICONERROR) != IDYES) return false;
+        }
+        auto resp = Net::fetch(Net::URL::parse(url));
+        if (!resp.ok || resp.body.empty()) {
+            MessageBoxA(g_mainWnd, "Failed to download plugin.", "Download Error", MB_OK | MB_ICONERROR);
+            return false;
+        }
+        char tempPath[MAX_PATH];
+        GetTempPathA(MAX_PATH, tempPath);
+        std::string fileName = "lume_dyn_" + std::to_string(GetTickCount()) + ".dll";
+        std::string fullPath = std::string(tempPath) + fileName;
+        std::ofstream ofs(fullPath, std::ios::binary);
+        if (!ofs) return false;
+        ofs.write(resp.body.c_str(), (std::streamsize)resp.body.length());
+        ofs.close();
+        HMODULE hMod = LoadLibraryA(fullPath.c_str());
+        if (!hMod) {
+            DeleteFileA(fullPath.c_str());
+            MessageBoxA(g_mainWnd, "Failed to load the downloaded DLL.", "Load Error", MB_OK | MB_ICONERROR);
+            return false;
+        }
+        auto initFn = (lume_plugin_init_fn)GetProcAddress(hMod, "lume_plugin_init");
+        if (!initFn) {
+            FreeLibrary(hMod);
+            DeleteFileA(fullPath.c_str());
+            MessageBoxA(g_mainWnd, "Invalid Lume Plugin (missing lume_plugin_init).", "Plugin Error", MB_OK | MB_ICONERROR);
+            return false;
+        }
+        initFn(L, &g_hostAPI);
+        DynamicPlugin dp;
+        dp.url = url;
+        dp.localPath = fullPath;
+        dp.originHost = Net::URL::parse(originUrl).host;
+        dp.isUnsafe = isUnsafe;
+        dp.hModule = hMod;
+        g_dynPlugins.push_back(dp);
+        return true;
+    }
+    void unloadAll() {
+        for (auto& p : g_plugins) {
+            if (!p.hModule) continue;
+            auto sf = (void(*)())GetProcAddress(p.hModule, "lume_plugin_shutdown");
+            if (sf) sf();
+            FreeLibrary(p.hModule);
+            p.hModule = nullptr;
+        }
+        g_plugins.clear();
+        for (auto& dp : g_dynPlugins) {
+            if (dp.hModule) {
+                auto sf = (void(*)())GetProcAddress(dp.hModule, "lume_plugin_shutdown");
+                if (sf) sf();
+                FreeLibrary(dp.hModule);
+            }
+            DeleteFileA(dp.localPath.c_str());
+        }
+        g_dynPlugins.clear();
     }
 }
 namespace ImageCache {
@@ -1283,26 +1417,24 @@ namespace GLCanvas {
 namespace GradientText {
     struct HSV { float h, s, v; };
     static HSV rgb2hsv(HTP::Color c) {
-        float r = c.r / 255.0f;
-        float g = c.g / 255.0f;
-        float b = c.b / 255.0f;
-        float max_val = (std::max)(r, (std::max)(g, b));
-        float min_val = (std::min)(r, (std::min)(g, b));
+        float r = c.r * 0.00392156862f;
+        float g = c.g * 0.00392156862f;
+        float b = c.b * 0.00392156862f;
+        float max_val = r;
+        if (g > max_val) max_val = g;
+        if (b > max_val) max_val = b;
+        float min_val = r;
+        if (g < min_val) min_val = g;
+        if (b < min_val) min_val = b;
         float d = max_val - min_val;
         float h = 0.0f;
         float s = (max_val == 0.0f) ? 0.0f : (d / max_val);
         float v = max_val;
         if (d != 0.0f) {
-            if (max_val == r) {
-                h = (g - b) / d + (g < b ? 6.0f : 0.0f);
-            }
-            else if (max_val == g) {
-                h = (b - r) / d + 2.0f;
-            }
-            else {
-                h = (r - g) / d + 4.0f;
-            }
-            h /= 6.0f;
+            if (max_val == r) h = (g - b) / d + (g < b ? 6.0f : 0.0f);
+            else if (max_val == g) h = (b - r) / d + 2.0f;
+            else h = (r - g) / d + 4.0f;
+            h *= 0.166666666f;
         }
         return { h * 360.0f, s, v };
     }
@@ -1386,7 +1518,8 @@ namespace GradientText {
         for (int px = 0; px < W; px++) {
             float normX = (W > 1) ? (float)px / (float)(W - 1) : 0.0f;
             float t = normX + shimmer_offset;
-            t = fmodf(t, span);
+            float div = t * 0.5f;
+            t = t - (int)(div)*span;
             if (t < 0.f) t += span;
             if (t > 1.0f) t = span - t;
             if (t < 0.f) t = 0.f;
@@ -1401,12 +1534,15 @@ namespace GradientText {
                 if (mask == 0) continue;
                 HTP::Color& gc = gradLine[px];
                 int alpha = mask;
-                BYTE bgB = outBits[idx + 0];
-                BYTE bgG = outBits[idx + 1];
-                BYTE bgR = outBits[idx + 2];
-                outBits[idx + 0] = (BYTE)(bgB + ((gc.b - bgB) * alpha) / 255);
-                outBits[idx + 1] = (BYTE)(bgG + ((gc.g - bgG) * alpha) / 255);
-                outBits[idx + 2] = (BYTE)(bgR + ((gc.r - bgR) * alpha) / 255);
+                int bgB = outBits[idx + 0];
+                int bgG = outBits[idx + 1];
+                int bgR = outBits[idx + 2];
+                int pB = (gc.b - bgB) * alpha + 128;
+                int pG = (gc.g - bgG) * alpha + 128;
+                int pR = (gc.r - bgR) * alpha + 128;
+                outBits[idx + 0] = (BYTE)(bgB + ((pB + (pB >> 8)) >> 8));
+                outBits[idx + 1] = (BYTE)(bgG + ((pG + (pG >> 8)) >> 8));
+                outBits[idx + 2] = (BYTE)(bgR + ((pR + (pR >> 8)) >> 8));
             }
         }
         BitBlt(dc, x, y, W, H, outDC, 0, 0, SRCCOPY);
@@ -1501,6 +1637,32 @@ namespace GLBuffers {
     std::map<int, std::vector<float>> buffers;
     int nextId = 1;
     void clear() { buffers.clear(); }
+}
+namespace GLFont {
+    struct Key {
+        HGLRC ctx;
+        uint64_t hash;
+        bool operator<(const Key& o) const {
+            if (ctx != o.ctx) return ctx < o.ctx;
+            return hash < o.hash;
+        }
+    };
+    std::map<Key, GLuint> lists;
+    GLuint get(HDC hdc, HGLRC ctx, HFONT font, uint64_t hash) {
+        Key k{ ctx, hash };
+        auto it = lists.find(k);
+        if (it != lists.end()) return it->second;
+        GLuint base = glGenLists(2048);
+        HFONT oldFont = (HFONT)SelectObject(hdc, font);
+        wglUseFontBitmapsW(hdc, 0, 2048, base);
+        SelectObject(hdc, oldFont);
+        lists[k] = base;
+        return base;
+    }
+    void clear() {
+        for (auto& kv : lists) glDeleteLists(kv.second, 2048);
+        lists.clear();
+    }
 }
 namespace Script {
 struct InputState {
@@ -2154,6 +2316,31 @@ static int l_gl_load_texture_mipmapped(lua_State* L) {
     lua_pushinteger(L, texID);
     return 1;
 }
+static int l_gl_print(lua_State* L) {
+    const char* text = luaL_checkstring(L, 1);
+    float x = (float)luaL_checknumber(L, 2);
+    float y = (float)luaL_checknumber(L, 3);
+    float z = (float)luaL_optnumber(L, 4, 0.0f);
+    int sz = (int)luaL_optinteger(L, 5, 16);
+    const char* fontName = luaL_optstring(L, 6, "Segoe UI");
+    HDC hdc = wglGetCurrentDC();
+    HGLRC ctx = wglGetCurrentContext();
+    if (!hdc || !ctx) return 0;
+    uint64_t hash = 2166136261u;
+    for (const char* p = fontName; *p; ++p) { hash ^= (uint8_t)*p; hash *= 16777619u; }
+    hash ^= (uint64_t)sz;
+    HFONT font = FontCache::get(sz, false, false, fontName);
+    GLuint base = GLFont::get(hdc, ctx, font, hash);
+    thread_local wchar_t wbuf[4096];
+    int wlen = MultiByteToWideChar(CP_UTF8, 0, text, -1, wbuf, 4096);
+    if (wlen > 0) wlen--;
+    glRasterPos3f(x, y, z);
+    glPushAttrib(GL_LIST_BIT);
+    glListBase(base);
+    glCallLists(wlen, GL_UNSIGNED_SHORT, wbuf);
+    glPopAttrib();
+    return 0;
+}
 static int l_download_async(lua_State* L) {
     std::string url = luaL_checkstring(L, 1);
     std::string fname = luaL_checkstring(L, 2);
@@ -2172,6 +2359,12 @@ static int l_download_status(lua_State* L) {
         return 4;
     }
     lua_pushinteger(L, -404);
+    return 1;
+}
+static int l_plugin_from_net(lua_State* L) {
+    std::string url = luaL_checkstring(L, 1);
+    bool ok = Plugins::loadFromNet(url, g_curUrl, L);
+    lua_pushboolean(L, ok ? 1 : 0);
     return 1;
 }
 static int l_wasm_load(lua_State* L) {
@@ -2429,8 +2622,10 @@ void init() {
     lua_register(g_L, "gl_tex_genfv", l_gl_tex_genfv);
     lua_register(g_L, "glu_build2d_mipmaps", l_glu_build2d_mipmaps);
     lua_register(g_L, "gl_load_texture_mipmapped", l_gl_load_texture_mipmapped);
+    lua_register(g_L, "gl_print", l_gl_print);
     lua_register(g_L, "download_async", l_download_async);
     lua_register(g_L, "download_status", l_download_status);
+    lua_register(g_L, "plugin_from_net", l_plugin_from_net);
     lua_register(g_L, "wasm_load", l_wasm_load);
     lua_register(g_L, "wasm_load_raw", l_wasm_load_raw);
     lua_register(g_L, "wasm_call", l_wasm_call);
@@ -2477,6 +2672,7 @@ void reset() {
     ImageCache::clear();
     WasmEngine::clear();
     GLBuffers::clear();
+    GLFont::clear();
     if (g_L) {
         lua_close(g_L);
         g_L = nullptr;
@@ -2525,9 +2721,29 @@ class Engine {
         std::function<void()> drawCall;
     };
     std::vector<RenderCmd> renderQueue;
+    std::vector<int> blockHeights;
+    std::map<uint64_t, int> textHeightCache;
+    std::map<uint64_t, SIZE> textSizeCache;
+    std::map<const HTP::Elem*, int> frameEstCache;
     int scrollY = 0, contentH = 0, curY = 0;
+    int viewportH = 0, lastW = 0;
     std::vector<Hit>* pH = nullptr;
     HDC refDC = nullptr;
+    inline bool isVis(int elemY, int elemH) const {
+        return (elemY + elemH >= -200 && elemY <= viewportH + 200);
+    }
+    inline const std::string* getRefPtr(const HTP::Props& p, const std::string& k) const {
+        static const std::string empty = "";
+        auto it = p.d.find(k);
+        return it != p.d.end() ? &(it->second) : &empty;
+    }
+    uint64_t hashText(const std::string& str, int w, HFONT f) {
+        uint64_t h = 2166136261u;
+        for (char c : str) { h ^= (uint8_t)c; h *= 16777619u; }
+        h ^= (uint64_t)w; h *= 16777619u;
+        h ^= (uint64_t)(uintptr_t)f;
+        return h;
+    }
     void fillRR(HDC dc, int x, int y, int w, int h, HTP::Color c, int rad = 5) {
         HBRUSH b = CreateSolidBrush(c.cr());
         HPEN p = CreatePen(PS_SOLID, 1, c.cr());
@@ -2539,40 +2755,46 @@ class Engine {
         DeleteObject(b);
         DeleteObject(p);
     }
-    int estH(std::shared_ptr<HTP::Elem> e) {
+    int estH(const std::shared_ptr<HTP::Elem>& e) {
         if (!e) return 0;
+        auto it = frameEstCache.find(e.get());
+        if (it != frameEstCache.end()) return it->second;
+        int res = 20;
         switch (e->type) {
         case HTP::EType::TEXT:
-        case HTP::EType::ITEM: return e->props.getInt("size", 16) + 8;
-        case HTP::EType::LINK: return e->props.getInt("size", 16) + 8;
-        case HTP::EType::BUTTON: return e->props.getInt("height", 35) + 8;
-        case HTP::EType::INPUT_FIELD: return e->props.getInt("height", 28) + 8;
-        case HTP::EType::DIVIDER: return e->props.getInt("margin", 10) * 2 + e->props.getInt("thickness", 1);
-        case HTP::EType::IMAGE: return e->props.getInt("height", 100) + 8;
-        case HTP::EType::BR: return e->props.getInt("size", 16);
+        case HTP::EType::ITEM: res = e->props.getInt("size", 16) + 8; break;
+        case HTP::EType::LINK: res = e->props.getInt("size", 16) + 8; break;
+        case HTP::EType::BUTTON: res = e->props.getInt("height", 35) + 8; break;
+        case HTP::EType::INPUT_FIELD: res = e->props.getInt("height", 28) + 8; break;
+        case HTP::EType::DIVIDER: res = e->props.getInt("margin", 10) * 2 + e->props.getInt("thickness", 1); break;
+        case HTP::EType::IMAGE: res = e->props.getInt("height", 100) + 8; break;
+        case HTP::EType::BR: res = e->props.getInt("size", 16); break;
         case HTP::EType::CANVAS:
-        case HTP::EType::GL_CANVAS: return e->props.getInt("height", 200) + 8;
-        case HTP::EType::SCRIPT: return 0;
+        case HTP::EType::GL_CANVAS: res = e->props.getInt("height", 200) + 8; break;
+        case HTP::EType::SCRIPT: res = 0; break;
         case HTP::EType::BLOCK:
         case HTP::EType::COLUMN: {
             int h = e->props.getInt("padding", 10) * 2 + e->props.getInt("margin", 5) * 2;
             for (auto& c : e->children) h += estH(c);
-            return h;
+            res = h; break;
         }
         case HTP::EType::ROW: {
             int m = 0;
             for (auto& c : e->children) m = (std::max)(m, estH(c));
-            return m + e->props.getInt("margin", 5) * 2;
+            res = m + e->props.getInt("margin", 5) * 2; break;
         }
         case HTP::EType::LIST: {
             int h = 0;
             for (auto& c : e->children) h += estH(c);
-            return h;
+            res = h; break;
         }
-        default: return 20;
+        default: break;
         }
+
+        frameEstCache[e.get()] = res;
+        return res;
     }
-    int estW(std::shared_ptr<HTP::Elem> e, int mw) {
+    int estW(const std::shared_ptr<HTP::Elem>& e, int mw) {
         if (!e) return mw;
         switch (e->type) {
         case HTP::EType::BUTTON: return e->props.getInt("width", 120);
@@ -2583,16 +2805,13 @@ class Engine {
         default: return mw;
         }
     }
-    void draw(HDC dc, std::shared_ptr<HTP::Elem> e, int x, int y, int mw) {
+    void draw(HDC dc, const std::shared_ptr<HTP::Elem>& e, int x, int y, int mw) {
         if (!e) return;
         switch (e->type) {
         case HTP::EType::PAGE:
         case HTP::EType::UNKNOWN: {
             int cy = y;
-            for (auto& c : e->children) {
-                draw(dc, c, x, cy, mw);
-                cy = curY;
-            }
+            for (auto& c : e->children) { draw(dc, c, x, cy, mw); cy = curY; }
             break;
         }
         case HTP::EType::SCRIPT:
@@ -2630,19 +2849,20 @@ class Engine {
         case HTP::EType::COLUMN: {
             int pad = e->props.getInt("padding", 5);
             int rad = e->props.getInt("border-radius", 4);
-            std::string bg = e->props.get("background", "");
             int z = e->props.getInt("z-index", 0);
-            auto realHeight = std::make_shared<int>(0);
-            if (!bg.empty()) {
+            const std::string* pBg = getRefPtr(e->props, "background");
+            int heightIdx = blockHeights.size();
+            blockHeights.push_back(0);
+            if (!pBg->empty()) {
+                HTP::Color bgColor = HTP::Color::fromHex(*pBg);
                 renderQueue.push_back({ z, [=]() {
-                    fillRR(dc, x, y - scrollY, mw, *realHeight, HTP::Color::fromHex(bg), rad);
+                    int h = blockHeights[heightIdx];
+                    if (isVis(y - scrollY, h)) fillRR(dc, x, y - scrollY, mw, h, bgColor, rad);
                 } });
             }
             curY = y + pad;
-            for (auto& c : e->children) {
-                draw(dc, c, x + pad, curY, mw - pad * 2);
-            }
-            *realHeight = (curY - y) + pad;
+            for (auto& c : e->children) draw(dc, c, x + pad, curY, mw - pad * 2);
+            blockHeights[heightIdx] = (curY - y) + pad;
             curY += pad;
             break;
         }
@@ -2650,333 +2870,382 @@ class Engine {
             int pad = e->props.getInt("padding", 10);
             int mar = e->props.getInt("margin", 5);
             int rad = e->props.getInt("border-radius", 6);
-            std::string bg = e->props.get("background", "");
-            std::string align = e->props.get("align", "left");
             int z = e->props.getInt("z-index", 0);
-            auto realHeight = std::make_shared<int>(0);
+            const std::string* pBg = getRefPtr(e->props, "background");
+            const std::string* pAlign = getRefPtr(e->props, "align");
+            int heightIdx = blockHeights.size();
+            blockHeights.push_back(0);
             int startY = y + mar;
-            if (!bg.empty()) {
+            if (!pBg->empty()) {
+                HTP::Color bgColor = HTP::Color::fromHex(*pBg);
                 renderQueue.push_back({ z, [=]() {
-                    fillRR(dc, x + mar, startY - scrollY, mw - mar * 2, *realHeight, HTP::Color::fromHex(bg), rad);
+                    int h = blockHeights[heightIdx];
+                    if (isVis(startY - scrollY, h)) fillRR(dc, x + mar, startY - scrollY, mw - mar * 2, h, bgColor, rad);
                 } });
             }
             curY = startY + pad;
             for (auto& c : e->children) {
                 int cx = x + mar + pad;
                 int cmw = mw - (mar + pad) * 2;
-                if (align == "center") {
+                if (*pAlign == "center") {
                     int ew = estW(c, cmw);
                     cx = x + (mw - ew) / 2;
                 }
                 draw(dc, c, cx, curY, cmw);
             }
-            *realHeight = (curY - startY) + pad;
+            blockHeights[heightIdx] = (curY - startY) + pad;
             curY += pad + mar;
             break;
         }
         case HTP::EType::TEXT: {
-            std::string id = e->props.get("id", "");
-            std::string ct = e->props.get("content", "");
-            if (!id.empty()) {
-                auto i = Script::g_texts.find(id);
-                if (i != Script::g_texts.end()) ct = i->second;
-                else Script::g_texts[id] = ct;
+            const std::string* pId = getRefPtr(e->props, "id");
+            const std::string* pCt = getRefPtr(e->props, "content");
+            if (!pId->empty()) {
+                auto i = Script::g_texts.find(*pId);
+                if (i != Script::g_texts.end()) pCt = &(i->second);
+                else {Script::g_texts[*pId] = *pCt; pCt = &Script::g_texts[*pId];}
             }
             int sz = e->props.getInt("size", 16);
             auto col = e->props.getColor("color", { 255,255,255 });
-            std::string grad = e->props.get("gradient", "");
+            const std::string* pGrad = getRefPtr(e->props, "gradient");
             int offset_y = 0;
-            if (!id.empty()) {
-                auto oi = Script::g_offsets_y.find(id);
-                if (oi != Script::g_offsets_y.end()) offset_y = oi->second;
-            }
             float shimmer = 0.0f;
-            if (!id.empty()) {
-                auto si = Script::g_shimmer_offsets.find(id);
+            if (!pId->empty()) {
+                auto oi = Script::g_offsets_y.find(*pId);
+                if (oi != Script::g_offsets_y.end()) offset_y = oi->second;
+                auto si = Script::g_shimmer_offsets.find(*pId);
                 if (si != Script::g_shimmer_offsets.end()) shimmer = si->second;
             }
             int z = e->props.getInt("z-index", 0);
-            HFONT f = FontCache::get(sz,
-                e->props.getBool("bold"),
-                e->props.getBool("italic"),
-                e->props.get("font", "Segoe UI").c_str());
+            const std::string* pFontName = getRefPtr(e->props, "font");
+            HFONT f = FontCache::get(sz, e->props.getBool("bold"), e->props.getBool("italic"), pFontName->empty() ? "Segoe UI" : pFontName->c_str());
             int drawY = y - scrollY + offset_y;
             int th = 0;
-            if (grad.empty()) {
+            uint64_t mKey = hashText(*pCt, mw, f);
+            auto tIt = textHeightCache.find(mKey);
+            if (tIt != textHeightCache.end()) {
+                th = tIt->second;
+            }
+            else {
                 auto of = SelectObject(dc, f);
-                RECT rcCalc = { x, drawY, x + mw, drawY + 1000 };
-                DrawTextU(dc, ct.c_str(), -1, &rcCalc, DT_WORDBREAK | DT_CALCRECT);
+                RECT rcCalc = { x, 0, x + mw, 1000 };
+                DrawTextU(dc, pCt->c_str(), -1, &rcCalc, DT_WORDBREAK | DT_CALCRECT);
                 th = rcCalc.bottom - rcCalc.top;
                 SelectObject(dc, of);
+                textHeightCache[mKey] = th;
             }
-            renderQueue.push_back({ z, [=]() {
-                if (!grad.empty()) {
-                    GradientText::draw(dc, ct, f, x, drawY, col, HTP::Color::fromHex(grad), shimmer);
-                }
-                else {
-                    auto of = SelectObject(dc, f);
-                    SetTextColor(dc, col.cr());
-                    SetBkMode(dc, TRANSPARENT);
-                    RECT rcDraw = { x, drawY, x + mw, drawY + th };
-                    DrawTextU(dc, ct.c_str(), -1, &rcDraw, DT_WORDBREAK);
-                    SelectObject(dc, of);
-                }
-            } });
-            curY = y + (grad.empty() ? th : sz) + 4;
+            if (isVis(drawY, th)) {
+                HTP::Color gradColor;
+                if (!pGrad->empty()) gradColor = HTP::Color::fromHex(*pGrad);
+                renderQueue.push_back({ z, [=]() {
+                    if (!pGrad->empty()) {
+                        GradientText::draw(dc, *pCt, f, x, drawY, col, gradColor, shimmer);
+                    }
+                    else {
+                        auto of = SelectObject(dc, f);
+                        SetTextColor(dc, col.cr());
+                        SetBkMode(dc, TRANSPARENT);
+                        RECT rcDraw = { x, drawY, x + mw, drawY + th };
+                        DrawTextU(dc, pCt->c_str(), -1, &rcDraw, DT_WORDBREAK);
+                        SelectObject(dc, of);
+                    }
+                } });
+            }
+            curY = y + (pGrad->empty() ? th : sz) + 4;
             break;
         }
         case HTP::EType::LINK: {
-            std::string ct = e->props.get("content", "[link]");
-            std::string url = resolveUrl(e->props.get("url", ""), g_curUrl);
+            const std::string* pCt = getRefPtr(e->props, "content");
+            static const std::string defLink = "[link]";
+            if (pCt->empty()) pCt = &defLink;
             int sz = e->props.getInt("size", 16);
             auto col = e->props.getColor("color", { 10,189,227 });
             int z = e->props.getInt("z-index", 0);
             HFONT f = FontCache::get(sz);
-            auto of = SelectObject(dc, f);
-            SIZE ts;
-            GetTextExtentPoint32U(dc, ct.c_str(), (int)ct.length(), &ts);
-            SelectObject(dc, of);
-            renderQueue.push_back({ z, [=]() {
-                auto of2 = SelectObject(dc, f);
-                SetTextColor(dc, col.cr());
-                SetBkMode(dc, TRANSPARENT);
-                RECT rc = { x, y - scrollY, x + ts.cx, y - scrollY + ts.cy };
-                DrawTextU(dc, ct.c_str(), -1, &rc, 0);
-                HPEN p = CreatePen(PS_SOLID, 1, col.cr());
-                auto op = SelectObject(dc, p);
-                MoveToEx(dc, x, y - scrollY + ts.cy - 1, 0);
-                LineTo(dc, x + ts.cx, y - scrollY + ts.cy - 1);
-                SelectObject(dc, op);
-                DeleteObject(p);
-                SelectObject(dc, of2);
-            } });
-            if (pH) {
-                Hit h;
-                h.r = { x, y - scrollY, x + ts.cx, y - scrollY + ts.cy };
-                h.url = url;
-                pH->push_back(h);
+            SIZE ts = { 0, 0 };
+            uint64_t mKey = hashText(*pCt, 0, f);
+            auto tIt = textSizeCache.find(mKey);
+            if (tIt != textSizeCache.end()) {
+                ts = tIt->second;
+            }
+            else {
+                auto of = SelectObject(dc, f);
+                GetTextExtentPoint32U(dc, pCt->c_str(), (int)pCt->length(), &ts);
+                SelectObject(dc, of);
+                textSizeCache[mKey] = ts;
+            }
+            int drawY = y - scrollY;
+            if (isVis(drawY, ts.cy)) {
+                std::string url = resolveUrl(*getRefPtr(e->props, "url"), g_curUrl);
+                renderQueue.push_back({ z, [=]() {
+                    auto of2 = SelectObject(dc, f);
+                    SetTextColor(dc, col.cr());
+                    SetBkMode(dc, TRANSPARENT);
+                    RECT rc = { x, drawY, x + ts.cx, drawY + ts.cy };
+                    DrawTextU(dc, pCt->c_str(), -1, &rc, 0);
+                    HPEN p = CreatePen(PS_SOLID, 1, col.cr());
+                    auto op = SelectObject(dc, p);
+                    MoveToEx(dc, x, drawY + ts.cy - 1, 0);
+                    LineTo(dc, x + ts.cx, drawY + ts.cy - 1);
+                    SelectObject(dc, op);
+                    DeleteObject(p);
+                    SelectObject(dc, of2);
+                } });
+                if (pH) {
+                    Hit h;
+                    h.r = { x, drawY, x + ts.cx, drawY + ts.cy };
+                    h.url = url;
+                    pH->push_back(h);
+                }
             }
             curY = y + ts.cy + 4;
             break;
         }
         case HTP::EType::BUTTON: {
-            std::string id = e->props.get("id", "");
-            std::string ct = e->props.get("content", "Button");
-            std::string act = e->props.get("action", "");
-            std::string url = e->props.get("url", act);
-            if (!url.empty()) url = resolveUrl(url, g_curUrl);
             int bw = e->props.getInt("width", 120);
             int bh = e->props.getInt("height", 35);
-            int sz = e->props.getInt("size", 14);
-            int rad = e->props.getInt("border-radius", 6);
-            auto bg = e->props.getColor("background", { 233,69,96 });
-            auto col = e->props.getColor("color", { 255,255,255 });
-            int z = e->props.getInt("z-index", 0);
-            int bx = x, by = y - scrollY;
-            renderQueue.push_back({ z, [=]() {
-                fillRR(dc, bx, by, bw, bh, bg, rad);
-                HFONT f = FontCache::get(sz, true);
-                auto of = SelectObject(dc, f);
-                SetTextColor(dc, col.cr());
-                SetBkMode(dc, TRANSPARENT);
-                RECT rc = { bx, by, bx + bw, by + bh };
-                DrawTextU(dc, ct.c_str(), -1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-                SelectObject(dc, of);
-            } });
-            if (pH) {
-                Hit h;
-                h.r = { bx, by, bx + bw, by + bh };
-                h.url = url;
-                h.action = act;
-                h.elemId = id;
-                h.isBtn = true;
-                pH->push_back(h);
+            int by = y - scrollY;
+            if (isVis(by, bh)) {
+                const std::string* pId = getRefPtr(e->props, "id");
+                const std::string* pCt = getRefPtr(e->props, "content");
+                static const std::string defBtn = "Button";
+                if (pCt->empty()) pCt = &defBtn;
+                const std::string* pAct = getRefPtr(e->props, "action");
+                const std::string* pUrl = getRefPtr(e->props, "url");
+                std::string url = pUrl->empty() ? *pAct : *pUrl;
+                if (!url.empty()) url = resolveUrl(url, g_curUrl);
+                int sz = e->props.getInt("size", 14);
+                int rad = e->props.getInt("border-radius", 6);
+                auto bg = e->props.getColor("background", { 233,69,96 });
+                auto col = e->props.getColor("color", { 255,255,255 });
+                int z = e->props.getInt("z-index", 0);
+                int bx = x;
+                renderQueue.push_back({ z, [=]() {
+                    fillRR(dc, bx, by, bw, bh, bg, rad);
+                    HFONT f = FontCache::get(sz, true);
+                    auto of = SelectObject(dc, f);
+                    SetTextColor(dc, col.cr());
+                    SetBkMode(dc, TRANSPARENT);
+                    RECT rc = { bx, by, bx + bw, by + bh };
+                    DrawTextU(dc, pCt->c_str(), -1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                    SelectObject(dc, of);
+                } });
+                if (pH) {
+                    Hit h;
+                    h.r = { bx, by, bx + bw, by + bh };
+                    h.url = url;
+                    h.action = *pAct;
+                    h.elemId = *pId;
+                    h.isBtn = true;
+                    pH->push_back(h);
+                }
             }
             curY = y + bh + 8;
             break;
         }
         case HTP::EType::INPUT_FIELD: {
-            std::string id = e->props.get("id", "inp_" + std::to_string(y));
-            std::string ph = e->props.get("placeholder", "");
-            int iw = e->props.getInt("width", 250);
             int ih = e->props.getInt("height", 28);
-            int z = e->props.getInt("z-index", 0);
-            auto& inp = Script::g_inputs[id];
-            if (inp.placeholder.empty() && !ph.empty()) inp.placeholder = ph;
-            inp.x = x; inp.y = y - scrollY; inp.w = iw; inp.h = ih;
-            int ix = x, iy = y - scrollY;
-            bool foc = (Script::g_focusId == id);
-            std::string textToDraw = inp.text;
-            std::string phToDraw = inp.placeholder;
-            int cursorToDraw = inp.cursor;
-            renderQueue.push_back({ z, [=]() {
-                HBRUSH br = CreateSolidBrush(foc ? RGB(50, 50, 80) : RGB(40, 40, 60));
-                HPEN pn = CreatePen(PS_SOLID, foc ? 2 : 1, foc ? RGB(10, 189, 227) : RGB(100, 100, 140));
-                auto ob = SelectObject(dc, br);
-                auto op = SelectObject(dc, pn);
-                RoundRect(dc, ix, iy, ix + iw, iy + ih, 4, 4);
-                SelectObject(dc, ob);
-                SelectObject(dc, op);
-                DeleteObject(br);
-                DeleteObject(pn);
-                HFONT f = FontCache::get(14);
-                auto of = SelectObject(dc, f);
-                SetBkMode(dc, TRANSPARENT);
-                if (!textToDraw.empty()) {
-                    SetTextColor(dc, RGB(230, 230, 240));
-                    RECT rc = { ix + 6, iy + 2, ix + iw - 4, iy + ih - 2 };
-                    DrawTextU(dc, textToDraw.c_str(), -1, &rc, DT_VCENTER | DT_SINGLELINE);
-                    if (foc) {
-                        int cp = (std::min)(cursorToDraw, (int)textToDraw.length());
-                        SIZE ts;
-                        GetTextExtentPoint32U(dc, textToDraw.c_str(), cp, &ts);
-                        HPEN cpen = CreatePen(PS_SOLID, 1, RGB(255, 255, 255));
-                        auto ocp = SelectObject(dc, cpen);
-                        MoveToEx(dc, ix + 6 + ts.cx, iy + 4, 0);
-                        LineTo(dc, ix + 6 + ts.cx, iy + ih - 4);
-                        SelectObject(dc, ocp);
-                        DeleteObject(cpen);
+            int iy = y - scrollY;
+            if (isVis(iy, ih)) {
+                const std::string* pId = getRefPtr(e->props, "id");
+                std::string id = pId->empty() ? ("inp_" + std::to_string(y)) : *pId;
+                const std::string* pPh = getRefPtr(e->props, "placeholder");
+                int iw = e->props.getInt("width", 250);
+                int z = e->props.getInt("z-index", 0);
+                auto& inp = Script::g_inputs[id];
+                if (inp.placeholder.empty() && !pPh->empty()) inp.placeholder = *pPh;
+                inp.x = x; inp.y = iy; inp.w = iw; inp.h = ih;
+                int ix = x;
+                bool foc = (Script::g_focusId == id);
+                int cursorToDraw = inp.cursor;
+                const std::string* pTextDraw = &inp.text;
+                const std::string* pPhDraw = &inp.placeholder;
+                renderQueue.push_back({ z, [=]() {
+                    HBRUSH br = CreateSolidBrush(foc ? RGB(50, 50, 80) : RGB(40, 40, 60));
+                    HPEN pn = CreatePen(PS_SOLID, foc ? 2 : 1, foc ? RGB(10, 189, 227) : RGB(100, 100, 140));
+                    auto ob = SelectObject(dc, br);
+                    auto op = SelectObject(dc, pn);
+                    RoundRect(dc, ix, iy, ix + iw, iy + ih, 4, 4);
+                    SelectObject(dc, ob);
+                    SelectObject(dc, op);
+                    DeleteObject(br);
+                    DeleteObject(pn);
+                    HFONT f = FontCache::get(14);
+                    auto of = SelectObject(dc, f);
+                    SetBkMode(dc, TRANSPARENT);
+                    if (!pTextDraw->empty()) {
+                        SetTextColor(dc, RGB(230, 230, 240));
+                        RECT rc = { ix + 6, iy + 2, ix + iw - 4, iy + ih - 2 };
+                        DrawTextU(dc, pTextDraw->c_str(), -1, &rc, DT_VCENTER | DT_SINGLELINE);
+                        if (foc) {
+                            int cp = (std::min)(cursorToDraw, (int)pTextDraw->length());
+                            SIZE ts;
+                            GetTextExtentPoint32U(dc, pTextDraw->c_str(), cp, &ts);
+                            HPEN cpen = CreatePen(PS_SOLID, 1, RGB(255, 255, 255));
+                            auto ocp = SelectObject(dc, cpen);
+                            MoveToEx(dc, ix + 6 + ts.cx, iy + 4, 0);
+                            LineTo(dc, ix + 6 + ts.cx, iy + ih - 4);
+                            SelectObject(dc, ocp);
+                            DeleteObject(cpen);
+                        }
                     }
+                    else if (!pPhDraw->empty()) {
+                        SetTextColor(dc, RGB(120, 120, 140));
+                        RECT rc = { ix + 6, iy + 2, ix + iw - 4, iy + ih - 2 };
+                        DrawTextU(dc, pPhDraw->c_str(), -1, &rc, DT_VCENTER | DT_SINGLELINE);
+                    }
+                    SelectObject(dc, of);
+                } });
+                if (pH) {
+                    Hit h;
+                    h.r = { ix, iy, ix + iw, iy + ih };
+                    h.elemId = id;
+                    h.isInput = true;
+                    pH->push_back(h);
                 }
-                else if (!phToDraw.empty()) {
-                    SetTextColor(dc, RGB(120, 120, 140));
-                    RECT rc = { ix + 6, iy + 2, ix + iw - 4, iy + ih - 2 };
-                    DrawTextU(dc, phToDraw.c_str(), -1, &rc, DT_VCENTER | DT_SINGLELINE);
-                }
-                SelectObject(dc, of);
-            } });
-            if (pH) {
-                Hit h;
-                h.r = { ix, iy, ix + iw, iy + ih };
-                h.elemId = id;
-                h.isInput = true;
-                pH->push_back(h);
             }
             curY = y + ih + 8;
             break;
         }
         case HTP::EType::CANVAS: {
-            std::string id = e->props.get("id", "cv_" + std::to_string(y));
-            int cw = e->props.getInt("width", 400);
             int ch = e->props.getInt("height", 200);
-            auto bdr = e->props.getColor("border-color", { 80,80,100 });
-            int z = e->props.getInt("z-index", 0);
-            auto cb = Canvas::get(id, refDC, cw, ch);
-            int cx = x, cy = y - scrollY;
-            renderQueue.push_back({ z, [=]() {
-                HPEN p = CreatePen(PS_SOLID, 1, bdr.cr());
-                auto op = SelectObject(dc, p);
-                auto nb = (HBRUSH)GetStockObject(NULL_BRUSH);
-                auto ob = SelectObject(dc, nb);
-                Rectangle(dc, cx - 1, cy - 1, cx + cw + 1, cy + ch + 1);
-                SelectObject(dc, ob);
-                SelectObject(dc, op);
-                DeleteObject(p);
-                if (cb->dc) BitBlt(dc, cx, cy, cw, ch, cb->dc, 0, 0, SRCCOPY);
-            } });
+            int cy = y - scrollY;
+            if (isVis(cy, ch)) {
+                const std::string* pId = getRefPtr(e->props, "id");
+                std::string id = pId->empty() ? ("cv_" + std::to_string(y)) : *pId;
+                int cw = e->props.getInt("width", 400);
+                auto bdr = e->props.getColor("border-color", { 80,80,100 });
+                int z = e->props.getInt("z-index", 0);
+                auto cb = Canvas::get(id, refDC, cw, ch);
+                int cx = x;
+                renderQueue.push_back({ z, [=]() {
+                    HPEN p = CreatePen(PS_SOLID, 1, bdr.cr());
+                    auto op = SelectObject(dc, p);
+                    auto nb = (HBRUSH)GetStockObject(NULL_BRUSH);
+                    auto ob = SelectObject(dc, nb);
+                    Rectangle(dc, cx - 1, cy - 1, cx + cw + 1, cy + ch + 1);
+                    SelectObject(dc, ob);
+                    SelectObject(dc, op);
+                    DeleteObject(p);
+                    if (cb->dc) BitBlt(dc, cx, cy, cw, ch, cb->dc, 0, 0, SRCCOPY);
+                } });
+            }
             curY = y + ch + 8;
             break;
         }
         case HTP::EType::GL_CANVAS: {
-            std::string id = e->props.get("id", "glcv_" + std::to_string(y));
-            int cw = e->props.getInt("width", 400);
             int ch = e->props.getInt("height", 200);
-            auto bdr = e->props.getColor("border-color", { 80,80,100 });
-            int z = e->props.getInt("z-index", 0);
-            int cx = x, cy = y - scrollY;
-            renderQueue.push_back({ z, [=]() {
-                HPEN p = CreatePen(PS_SOLID, 1, bdr.cr());
-                auto op = SelectObject(dc, p);
-                auto nb = (HBRUSH)GetStockObject(NULL_BRUSH);
-                auto ob = SelectObject(dc, nb);
-                Rectangle(dc, cx - 1, cy - 1, cx + cw + 1, cy + ch + 1);
-                SelectObject(dc, ob);
-                SelectObject(dc, op);
-                DeleteObject(p);
-                if (!GLLoader::available()) {
-                    HBRUSH fb = CreateSolidBrush(RGB(40, 40, 60));
-                    RECT fr = { cx, cy, cx + cw, cy + ch };
-                    FillRect(dc, &fr, fb);
-                    DeleteObject(fb);
-                    HFONT f = FontCache::get(14);
-                    auto of = SelectObject(dc, f);
-                    SetTextColor(dc, RGB(150, 150, 170));
-                    SetBkMode(dc, TRANSPARENT);
-                    RECT rc = { cx, cy, cx + cw, cy + ch };
-                    DrawTextU(dc, "No OpenGL", -1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-                    SelectObject(dc, of);
+            int cw = e->props.getInt("width", 400);
+            int cy = y - scrollY;
+            const std::string* pId = getRefPtr(e->props, "id");
+            std::string id = pId->empty() ? ("glcv_" + std::to_string(y)) : *pId;
+            int cx = x;
+            if (isVis(cy, ch)) {
+                auto bdr = e->props.getColor("border-color", { 80,80,100 });
+                int z = e->props.getInt("z-index", 0);
+                renderQueue.push_back({ z, [=]() {
+                    HPEN p = CreatePen(PS_SOLID, 1, bdr.cr());
+                    auto op = SelectObject(dc, p);
+                    auto nb = (HBRUSH)GetStockObject(NULL_BRUSH);
+                    auto ob = SelectObject(dc, nb);
+                    Rectangle(dc, cx - 1, cy - 1, cx + cw + 1, cy + ch + 1);
+                    SelectObject(dc, ob);
+                    SelectObject(dc, op);
+                    DeleteObject(p);
+                    if (!GLLoader::available()) {
+                        HBRUSH fb = CreateSolidBrush(RGB(40, 40, 60));
+                        RECT fr = { cx, cy, cx + cw, cy + ch };
+                        FillRect(dc, &fr, fb);
+                        DeleteObject(fb);
+                        HFONT f = FontCache::get(14);
+                        auto of = SelectObject(dc, f);
+                        SetTextColor(dc, RGB(150, 150, 170));
+                        SetBkMode(dc, TRANSPARENT);
+                        RECT rc = { cx, cy, cx + cw, cy + ch };
+                        DrawTextU(dc, "No OpenGL", -1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                        SelectObject(dc, of);
+                    }
+                }});
+                if (pH) {
+                    Hit h;
+                    h.r = { cx,cy,cx + cw,cy + ch };
+                    h.isGLCanvas = true;
+                    h.canvasId = id;
+                    h.canvasW = cw;
+                    h.canvasH = ch;
+                    pH->push_back(h);
                 }
-            } });
+            }
             auto glv = GLCanvas::ensure(id, cw, ch);
-            if (glv && glv->valid) {
-                GLCanvas::place(id, cx, TOOLBAR_H + cy, cw, ch, scrollY, TOOLBAR_H);
-            }
-            if (pH) {
-                Hit h;
-                h.r = { cx,cy,cx + cw,cy + ch };
-                h.isGLCanvas = true;
-                h.canvasId = id;
-                h.canvasW = cw;
-                h.canvasH = ch;
-                pH->push_back(h);
-            }
+            if (glv && glv->valid) GLCanvas::place(id, cx, TOOLBAR_H + cy, cw, ch, scrollY, TOOLBAR_H);
             curY = y + ch + 8;
             break;
         }
         case HTP::EType::DIVIDER: {
-            auto col = e->props.getColor("color", { 60,60,80 });
             int t = e->props.getInt("thickness", 1);
             int m = e->props.getInt("margin", 10);
-            int z = e->props.getInt("z-index", 0);
-            renderQueue.push_back({ z, [=]() {
-                HPEN p = CreatePen(PS_SOLID, t, col.cr());
-                auto op = SelectObject(dc, p);
-                MoveToEx(dc, x, y + m - scrollY, 0);
-                LineTo(dc, x + mw, y + m - scrollY);
-                SelectObject(dc, op);
-                DeleteObject(p);
-            } });
+            int drawY = y + m - scrollY;
+            if (isVis(drawY, t)) {
+                auto col = e->props.getColor("color", { 60,60,80 });
+                int z = e->props.getInt("z-index", 0);
+                renderQueue.push_back({ z, [=]() {
+                    HPEN p = CreatePen(PS_SOLID, t, col.cr());
+                    auto op = SelectObject(dc, p);
+                    MoveToEx(dc, x, drawY, 0);
+                    LineTo(dc, x + mw, drawY);
+                    SelectObject(dc, op);
+                    DeleteObject(p);
+                } });
+            }
             curY = y + m * 2 + t;
             break;
         }
         case HTP::EType::LIST: {
             int cy = y;
-            for (auto& c : e->children) {
-                draw(dc, c, x + 20, cy, mw - 20);
-                cy = curY;
-            }
+            for (auto& c : e->children) { draw(dc, c, x + 20, cy, mw - 20); cy = curY; }
             break;
         }
         case HTP::EType::ITEM: {
-            std::string ct = e->props.get("content", "");
+            const std::string* pCt = getRefPtr(e->props, "content");
             int sz = e->props.getInt("size", 14);
-            auto col = e->props.getColor("color", { 200,200,200 });
-            int z = e->props.getInt("z-index", 0);
             int by = y - scrollY + sz / 2 - 2;
             HFONT f = FontCache::get(sz);
-            auto of = SelectObject(dc, f);
-            RECT rcCalc = { x, y - scrollY, x + mw, y - scrollY + 200 };
-            DrawTextU(dc, ct.c_str(), -1, &rcCalc, DT_WORDBREAK | DT_CALCRECT);
-            int th = rcCalc.bottom - rcCalc.top;
-            SelectObject(dc, of);
-            renderQueue.push_back({ z, [=]() {
-                HBRUSH b = CreateSolidBrush(col.cr());
-                HPEN pn = CreatePen(PS_SOLID, 1, col.cr());
-                auto ob = SelectObject(dc, b);
-                auto op = SelectObject(dc, pn);
-                Ellipse(dc, x - 12, by, x - 4, by + 6);
-                SelectObject(dc, ob);
-                SelectObject(dc, op);
-                DeleteObject(b);
-                DeleteObject(pn);
 
-                auto of2 = SelectObject(dc, f);
-                SetTextColor(dc, col.cr());
-                SetBkMode(dc, TRANSPARENT);
-                RECT rcDraw = { x, y - scrollY, x + mw, y - scrollY + th };
-                DrawTextU(dc, ct.c_str(), -1, &rcDraw, DT_WORDBREAK);
-                SelectObject(dc, of2);
-            } });
+            int th = 0;
+            uint64_t mKey = hashText(*pCt, mw, f);
+            auto tIt = textHeightCache.find(mKey);
+            if (tIt != textHeightCache.end()) {
+                th = tIt->second;
+            }
+            else {
+                auto of = SelectObject(dc, f);
+                RECT rcCalc = { x, 0, x + mw, 200 };
+                DrawTextU(dc, pCt->c_str(), -1, &rcCalc, DT_WORDBREAK | DT_CALCRECT);
+                th = rcCalc.bottom - rcCalc.top;
+                SelectObject(dc, of);
+                textHeightCache[mKey] = th;
+            }
+            if (isVis(y - scrollY, th)) {
+                auto col = e->props.getColor("color", { 200,200,200 });
+                int z = e->props.getInt("z-index", 0);
+                renderQueue.push_back({ z, [=]() {
+                    HBRUSH b = CreateSolidBrush(col.cr());
+                    HPEN pn = CreatePen(PS_SOLID, 1, col.cr());
+                    auto ob = SelectObject(dc, b);
+                    auto op = SelectObject(dc, pn);
+                    Ellipse(dc, x - 12, by, x - 4, by + 6);
+                    SelectObject(dc, ob);
+                    SelectObject(dc, op);
+                    DeleteObject(b);
+                    DeleteObject(pn);
+                    auto of2 = SelectObject(dc, f);
+                    SetTextColor(dc, col.cr());
+                    SetBkMode(dc, TRANSPARENT);
+                    RECT rcDraw = { x, y - scrollY, x + mw, y - scrollY + th };
+                    DrawTextU(dc, pCt->c_str(), -1, &rcDraw, DT_WORDBREAK);
+                    SelectObject(dc, of2);
+                }});
+            }
             curY = y + th + 4;
             break;
         }
@@ -2984,47 +3253,54 @@ class Engine {
             curY = y + e->props.getInt("size", 16);
             break;
         case HTP::EType::IMAGE: {
-            int iw = e->props.getInt("width", 100);
             int ih = e->props.getInt("height", 100);
-            std::string alt = e->props.get("alt", "[image]");
-            std::string src = e->props.get("src", "");
-            auto bdr = e->props.getColor("border-color", { 80,80,100 });
-            int z = e->props.getInt("z-index", 0);
-            std::string fullUrl = src.empty() ? "" : resolveUrl(src, g_curUrl);
-            renderQueue.push_back({ z, [=]() {
-                auto img = ImageCache::get(fullUrl);
-                if (img) {
-                    Gdiplus::Graphics g(dc);
-                    g.DrawImage(img.get(), x, y - scrollY, iw, ih);
-                    HPEN p = CreatePen(PS_SOLID, 1, bdr.cr());
-                    auto op = SelectObject(dc, p);
-                    auto nb = (HBRUSH)GetStockObject(NULL_BRUSH);
-                    auto ob = SelectObject(dc, nb);
-                    Rectangle(dc, x, y - scrollY, x + iw, y - scrollY + ih);
-                    SelectObject(dc, ob);
-                    SelectObject(dc, op);
-                    DeleteObject(p);
+            if (isVis(y - scrollY, ih)) {
+                int iw = e->props.getInt("width", 100);
+                const std::string* pSrc = getRefPtr(e->props, "src");
+                const std::string* pAlt = getRefPtr(e->props, "alt");
+                static const std::string defAlt = "[image]";
+                if (pAlt->empty()) pAlt = &defAlt;
+                auto bdr = e->props.getColor("border-color", { 80,80,100 });
+                int z = e->props.getInt("z-index", 0);
+                Gdiplus::Image* pImg = nullptr;
+                if (!pSrc->empty()) {
+                    std::string fullUrl = resolveUrl(*pSrc, g_curUrl);
+                    auto imgSp = ImageCache::get(fullUrl);
+                    if (imgSp) pImg = imgSp.get();
                 }
-                else {
-                    HBRUSH b = CreateSolidBrush(RGB(50, 50, 70));
-                    HPEN p = CreatePen(PS_SOLID, 1, bdr.cr());
-                    auto ob = SelectObject(dc, b);
-                    auto op = SelectObject(dc, p);
-                    Rectangle(dc, x, y - scrollY, x + iw, y - scrollY + ih);
-                    SelectObject(dc, ob);
-                    SelectObject(dc, op);
-                    DeleteObject(b);
-                    DeleteObject(p);
-                    HFONT f = FontCache::get(12);
-                    auto of = SelectObject(dc, f);
-                    SetTextColor(dc, RGB(150, 150, 170));
-                    SetBkMode(dc, TRANSPARENT);
-                    RECT rc = {x + 4, y - scrollY + 4, x + iw - 4, y - scrollY + ih - 4};
-                    std::string drawAlt = src.empty() ? alt : "Loading...";
-                    DrawTextU(dc, drawAlt.c_str(), -1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-                    SelectObject(dc, of);
-                }
-            }});
+                renderQueue.push_back({ z, [=]() {
+                    if (pImg) {
+                        Gdiplus::Graphics g(dc);
+                        g.DrawImage(pImg, x, y - scrollY, iw, ih);
+                        HPEN p = CreatePen(PS_SOLID, 1, bdr.cr());
+                        auto op = SelectObject(dc, p);
+                        auto nb = (HBRUSH)GetStockObject(NULL_BRUSH);
+                        auto ob = SelectObject(dc, nb);
+                        Rectangle(dc, x, y - scrollY, x + iw, y - scrollY + ih);
+                        SelectObject(dc, ob);
+                        SelectObject(dc, op);
+                        DeleteObject(p);
+                    }
+                    else {
+                        HBRUSH b = CreateSolidBrush(RGB(50, 50, 70));
+                        HPEN p = CreatePen(PS_SOLID, 1, bdr.cr());
+                        auto ob = SelectObject(dc, b);
+                        auto op = SelectObject(dc, p);
+                        Rectangle(dc, x, y - scrollY, x + iw, y - scrollY + ih);
+                        SelectObject(dc, ob);
+                        SelectObject(dc, op);
+                        DeleteObject(b);
+                        DeleteObject(p);
+                        HFONT f = FontCache::get(12);
+                        auto of = SelectObject(dc, f);
+                        SetTextColor(dc, RGB(150, 150, 170));
+                        SetBkMode(dc, TRANSPARENT);
+                        RECT rc = {x + 4, y - scrollY + 4, x + iw - 4, y - scrollY + ih - 4};
+                        DrawTextU(dc, pAlt->c_str(), -1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                        SelectObject(dc, of);
+                    }
+                }});
+            }
             curY = y + ih + 8;
             break;
         }
@@ -3034,17 +3310,25 @@ class Engine {
         if (curY > contentH) contentH = curY;
     }
 public:
-    int totalH() const { return contentH; }
-    void setScroll(int y) { scrollY = (std::max)(0, y); }
-    int getScroll() const { return scrollY; }
+    int totalH() const {return contentH;}
+    void setScroll(int y) {scrollY = (std::max)(0, y);}
+    int getScroll() const {return scrollY;}
     std::vector<Hit> hits;
     void render(HDC tdc, int w, int h, HTP::Doc& doc) {
+        if (w != lastW) {
+            textHeightCache.clear();
+            textSizeCache.clear();
+            lastW = w;
+        }
+        frameEstCache.clear();
+        viewportH = h;
         contentH = 0;
         curY = 10;
         hits.clear();
         pH = &hits;
         refDC = tdc;
         renderQueue.clear();
+        blockHeights.clear();
         HBRUSH bg = CreateSolidBrush(doc.bg.cr());
         RECT r = { 0,0,w,h };
         FillRect(tdc, &r, bg);
@@ -3052,7 +3336,7 @@ public:
         draw(tdc, doc.root, 10, 10, w - 20);
         std::stable_sort(renderQueue.begin(), renderQueue.end(), [](const RenderCmd& a, const RenderCmd& b) {
             return a.zIndex < b.zIndex;
-            });
+        });
         for (auto& cmd : renderQueue) {
             cmd.drawCall();
         }
@@ -3061,13 +3345,20 @@ public:
 };
 namespace Pages {
     std::string readF(const std::string& p) {
-        std::ifstream f(p);
-        if (!f) return "";
-        std::stringstream s;
-        s << f.rdbuf();
-        return s.str();
+        HANDLE hFile = CreateFileA(p.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+        if (hFile == INVALID_HANDLE_VALUE) return "";
+        DWORD size = GetFileSize(hFile, NULL);
+        if (size == 0 || size == INVALID_FILE_SIZE) {
+            CloseHandle(hFile);
+            return "";
+        }
+        std::string res;
+        res.resize(size);
+        DWORD bytesRead = 0;
+        ReadFile(hFile, &res[0], size, &bytesRead, NULL);
+        CloseHandle(hFile);
+        return res;
     }
-
     std::string home() {
         auto c = readF("home.htp");
         if (!c.empty()) return c;
@@ -3459,6 +3750,7 @@ void loadContent(const std::string& content, const std::string& url, bool isInte
         }
         if (isText) finalContent = buildTextHtp(content);
     }
+    Plugins::checkDynamicUnloads(url);
     Script::reset();
     HTP::Parser p;
     g_doc = p.parse(finalContent);
