@@ -1,7 +1,7 @@
 A light web?-browser on C++ without using chromium\electron
 
 ### Why Lume?
-* **Insanely Small:** exe size is ~0.8 MB.
+* **Insanely Small:** exe size is less than 1 MB.
 * **Zero Bloat:** Uses only **3 MB**(Idle) of RAM (compare that to 500MB+ for a single Chrome tab or even 20mb for explorer ╥_╥).
 * **Blazing Fast:** CPU usage is near **0%**(On Phenom II X6 1055T) in idle and ~10% under load(like in "doom" on 0.3).
 * **Programmable:** Built-in **Lua 5.4.7** engine for logic, animations, and interactivity.
@@ -120,11 +120,6 @@ also you can make TETRIS ON LUME? htp/aaOfficial/tetris.htp
 
 
 COMPILE WITH
-
-```VS2019DevCmd
-cl /EHsc /std:c++17 /O2 /I. main.cpp lib/lapi.c lib/lcode.c lib/lctype.c lib/ldebug.c lib/ldo.c lib/ldump.c lib/lfunc.c lib/lgc.c lib/llex.c lib/lmem.c lib/lobject.c lib/lopcodes.c lib/lparser.c lib/lstate.c lib/lstring.c lib/lstrlib.c lib/ltable.c lib/ltablib.c lib/ltm.c lib/lundump.c lib/lutf8lib.c lib/lvm.c lib/lzio.c lib/lauxlib.c lib/lbaselib.c lib/lcorolib.c lib/ldblib.c lib/linit.c lib/liolib.c lib/lmathlib.c lib/loadlib.c lib/loslib.c /link ws2_32.lib gdi32.lib user32.lib comctl32.lib shell32.lib
-```
-with wasm
 ```VS2019DevCmd
 cl /EHsc /std:c++17 /O2 /utf-8 /I. main.cpp lib/*.c lib/wasm3/*.c /link gdi32.lib user32.lib comctl32.lib shell32.lib winhttp.lib ole32.lib
 ```
