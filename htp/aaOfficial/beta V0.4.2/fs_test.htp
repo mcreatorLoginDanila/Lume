@@ -1,0 +1,37 @@
+@page {title:"Unsafe Demo"; background:"#1a1a1a";}
+@block {
+    padding: 20; align: "center";
+    @text {content:"System Control Plugin"; size:30; color:"#ff4a4a";}
+    @br {size:20;}
+    @row {gap:20;
+        @button {id:"btn_write"; content:"Write File"; width:150; background:"#3b82f6";}
+        @button {id:"btn_read"; content:"Read File"; width:150; background:"#10b981";}
+        @button {id:"btn_exec"; content:"Execute calc.exe"; width:150; background:"#f59e0b";}
+    }
+    @br {size:20;}
+    @text {id:"out_log"; content:"Ready."; size:16; color:"#a1a1aa";}
+}
+@script {
+    local ok = plugin_from_net("https://github.com/mcreatorLoginDanila/Lume/raw/refs/heads/main/plugins/aaOfficialUnsafe/unsafe_fs.dll")
+    on_click("btn_write", function()
+        if fs_write then
+            fs_write("hello.txt", "Lume Unsafe Plugin works!")
+            set_text("out_log", "File written to /workspace/hello.txt")
+        else
+            set_text("out_log", "Plugin not loaded!")
+        end
+    end)
+    on_click("btn_read", function()
+        if fs_read then
+            local data = fs_read("hello.txt")
+            set_text("out_log", "Read: " .. data)
+        end
+    end)
+    on_click("btn_exec", function()
+        if fs_execute then
+            fs_write("launch_calc.bat", "calc.exe")
+            fs_execute("launch_calc.bat", "")
+            set_text("out_log", "Executed workspace/launch_calc.bat")
+        end
+    end)
+}
