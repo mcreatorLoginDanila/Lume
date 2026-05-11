@@ -1,0 +1,15 @@
+@page {title:"Load Lua Demo"}
+@block {
+    @button {id:"btn"; content:"Say Hello"}
+}
+@script {
+    local ok, err = load_lua("https://raw.githubusercontent.com/Lume-corp/LumeSources/refs/heads/main/lua/hello.lua")
+    if not ok then 
+        alert("Load error: " .. err) 
+    end
+    on_click("btn", function()
+        if print_hello then
+            print_hello("Lume User")
+        end
+    end)
+}
