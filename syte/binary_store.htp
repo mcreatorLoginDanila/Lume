@@ -1,8 +1,8 @@
 @page { title:"Lume - Binary Store"; background:"#09090b";}
 @block {align:"center"; padding:40; margin:0; background:"#09090b";
-  @text {content:"BINARY STORE"; size:36; color:"#fafafa"; bold:"true";}
+  @text {align:"center";content:"BINARY STORE"; size:36; color:"#fafafa"; bold:"true";}
   @br {size:5;}
-  @text {content:"Download standalone games directly from the Lume engine"; size:16; color:"#a1a1aa"; italic:"true";}
+  @text {align:"center";content:"Download standalone games directly from the Lume engine"; size:16; color:"#a1a1aa"; italic:"true";}
 }
 @block { align:"center"; padding:20; margin:0; background:"#09090b";
     @row { gap:25;
