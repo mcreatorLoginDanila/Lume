@@ -1,6 +1,6 @@
 @page {title:"Lume - Game Store"; background:"#09090b";}
 @block {align:"center"; padding:40; margin:0; background:"#09090b";
-  @text {content:"LUME STORE"; size:46; color:"#fafafa"; bold:"true";}
+  @text {align:"center";content:"LUME STORE"; size:46; color:"#fafafa"; bold:"true";}
   @br {size:5;}
   @text {content:"Select a game to launch"; size:18; color:"#a1a1aa"; italic:"true";}
   @br {size:20;}
