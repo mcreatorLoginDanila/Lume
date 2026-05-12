@@ -2367,6 +2367,44 @@ static int l_plugin_from_net(lua_State* L) {
     lua_pushboolean(L, ok ? 1 : 0);
     return 1;
 }
+static int l_load_lua(lua_State* L) {
+    const char* url = luaL_checkstring(L, 1);
+    std::string fullUrl = resolveUrl(url, g_curUrl);
+    std::string luaCode;
+    if (fullUrl.substr(0, 7) == "file://") {
+        std::string path = fullUrl.substr(7);
+        int len = MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, NULL, 0);
+        std::wstring wpath(len, 0);
+        MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, &wpath[0], len);
+        HANDLE hFile = CreateFileW(wpath.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+        if (hFile != INVALID_HANDLE_VALUE) {
+            DWORD size = GetFileSize(hFile, NULL);
+            if (size > 0 && size != INVALID_FILE_SIZE) {
+                luaCode.resize(size);
+                DWORD bytesRead = 0;
+                ReadFile(hFile, &luaCode[0], size, &bytesRead, NULL);
+            }
+            CloseHandle(hFile);
+        }
+    }
+    else {
+        auto r = Net::fetch(Net::URL::parse(fullUrl));
+        if (r.ok) luaCode = r.body;
+    }
+    if (luaCode.empty()) {
+        lua_pushboolean(L, 0);
+        lua_pushstring(L, "Failed to load .lua (not found or network error)");
+        return 2;
+    }
+    if (luaL_dostring(L, luaCode.c_str()) != 0) {
+        const char* err = lua_tostring(L, -1);
+        lua_pushboolean(L, 0);
+        lua_pushstring(L, err);
+        return 2;
+    }
+    lua_pushboolean(L, 1);
+    return 1;
+}
 static int l_wasm_load(lua_State* L) {
     const char* url = luaL_checkstring(L, 1);
     std::string fullUrl = resolveUrl(url, g_curUrl);
@@ -2626,6 +2664,7 @@ void init() {
     lua_register(g_L, "download_async", l_download_async);
     lua_register(g_L, "download_status", l_download_status);
     lua_register(g_L, "plugin_from_net", l_plugin_from_net);
+    lua_register(g_L, "load_lua", l_load_lua);
     lua_register(g_L, "wasm_load", l_wasm_load);
     lua_register(g_L, "wasm_load_raw", l_wasm_load_raw);
     lua_register(g_L, "wasm_call", l_wasm_call);
@@ -2796,17 +2835,52 @@ class Engine {
     }
     int estW(const std::shared_ptr<HTP::Elem>& e, int mw) {
         if (!e) return mw;
+        int w = e->props.getInt("width", 0);
+        if (w > 0) return w;
         switch (e->type) {
-        case HTP::EType::BUTTON: return e->props.getInt("width", 120);
-        case HTP::EType::INPUT_FIELD: return e->props.getInt("width", 250);
-        case HTP::EType::IMAGE: return e->props.getInt("width", 100);
+        case HTP::EType::BUTTON: return 120;
+        case HTP::EType::INPUT_FIELD: return 250;
+        case HTP::EType::IMAGE: return 100;
         case HTP::EType::CANVAS:
-        case HTP::EType::GL_CANVAS: return e->props.getInt("width", 400);
-        default: return mw;
+        case HTP::EType::GL_CANVAS: return 400;
+        case HTP::EType::ROW: {
+            int rowW = 0;
+            int gap = e->props.getInt("gap", 10);
+            int nc = 0;
+            for (auto& c : e->children) {
+                rowW += estW(c, mw);
+                nc++;
+            }
+            if (nc > 1) rowW += gap * (nc - 1);
+            rowW += e->props.getInt("margin", 5) * 2 + e->props.getInt("padding", 0) * 2;
+            return rowW;
+        }
+        case HTP::EType::COLUMN: {
+            int maxW = 0;
+            for (auto& c : e->children) {
+                int cw = estW(c, mw);
+                if (cw > maxW) maxW = cw;
+            }
+            maxW += e->props.getInt("padding", 5) * 2;
+            return maxW;
+        }
+        case HTP::EType::BLOCK: {
+            int maxW = 0;
+            for (auto& c : e->children) {
+                int cw = estW(c, mw);
+                if (cw > maxW) maxW = cw;
+            }
+            maxW += e->props.getInt("padding", 10) * 2 + e->props.getInt("margin", 5) * 2;
+            return maxW;
+        }
+        default:
+            return mw;
         }
     }
-    void draw(HDC dc, const std::shared_ptr<HTP::Elem>& e, int x, int y, int mw) {
+    void draw(HDC dc, const std::shared_ptr<HTP::Elem>& e, int x, int y, int mw, const std::string& parentAlign = "") {
         if (!e) return;
+        const std::string* pAlign = getRefPtr(e->props, "align");
+        std::string currentAlign = pAlign->empty() ? parentAlign : *pAlign;
         switch (e->type) {
         case HTP::EType::PAGE:
         case HTP::EType::UNKNOWN: {
@@ -2821,25 +2895,49 @@ class Engine {
             int mar = e->props.getInt("margin", 5);
             int pad = e->props.getInt("padding", 0);
             int gap = e->props.getInt("gap", 10);
-            int nc = 0, fw = 0, fc = 0;
+            int nc = 0;
+            int fw = 0;
+            int fc = 0;
+            int totalContentWidth = 0;
             for (auto& c : e->children) {
                 nc++;
                 int w = c->props.getInt("width", 0);
-                if (w > 0) fw += w; else fc++;
+                if (w > 0) {
+                    fw += w;
+                    totalContentWidth += w;
+                }
+                else {
+                    fc++;
+                    int est = estW(c, 0);
+                    if (est > 0) {
+                        fw += est;
+                        totalContentWidth += est;
+                    }
+                }
             }
-            int avail = mw - mar * 2 - pad * 2 - gap * (std::max)(nc - 1, 0);
-            int flexW = fc > 0 ? (avail - fw) / fc : 0;
-            if (flexW < 50) flexW = 50;
+            if (nc > 1) totalContentWidth += gap * (nc - 1);
+            int avail = mw - mar * 2 - pad * 2;
+            int flexW = 0;
+            if (fc > 0 && avail > fw) flexW = (avail - fw) / fc;
+            if (flexW < 50 && fc > 0) flexW = 50;
             int cx = x + mar + pad;
+            if (currentAlign == "center" && totalContentWidth < avail) {
+                cx = x + mar + pad + (avail - totalContentWidth) / 2;
+            }
+            else if (currentAlign == "right" && totalContentWidth < avail) {
+                cx = x + mar + pad + (avail - totalContentWidth);
+            }
             int ry = y + mar;
             int maxH = 0;
             for (auto& c : e->children) {
-                int cw = c->props.getInt("width", flexW);
+                int cw = c->props.getInt("width", 0);
+                if (cw == 0) cw = estW(c, flexW > 0 ? flexW : 100);
                 int sv = curY;
                 curY = ry;
-                draw(dc, c, cx, ry, cw);
+                draw(dc, c, cx, ry, cw, "left");
                 int ch = curY - ry;
                 if (ch > maxH) maxH = ch;
+
                 cx += cw + gap;
                 curY = sv;
             }
@@ -2861,7 +2959,20 @@ class Engine {
                 } });
             }
             curY = y + pad;
-            for (auto& c : e->children) draw(dc, c, x + pad, curY, mw - pad * 2);
+            for (auto& c : e->children) {
+                int cmw = mw - pad * 2;
+                int cx = x + pad;
+                int cwToPass = cmw;
+                if (currentAlign == "center") {
+                    int ew = estW(c, cmw);
+                    if (ew < cmw) { cx += (cmw - ew) / 2; cwToPass = ew; }
+                }
+                else if (currentAlign == "right") {
+                    int ew = estW(c, cmw);
+                    if (ew < cmw) { cx += (cmw - ew); cwToPass = ew; }
+                }
+                draw(dc, c, cx, curY, cwToPass, currentAlign);
+            }
             blockHeights[heightIdx] = (curY - y) + pad;
             curY += pad;
             break;
@@ -2872,7 +2983,6 @@ class Engine {
             int rad = e->props.getInt("border-radius", 6);
             int z = e->props.getInt("z-index", 0);
             const std::string* pBg = getRefPtr(e->props, "background");
-            const std::string* pAlign = getRefPtr(e->props, "align");
             int heightIdx = blockHeights.size();
             blockHeights.push_back(0);
             int startY = y + mar;
@@ -2885,13 +2995,18 @@ class Engine {
             }
             curY = startY + pad;
             for (auto& c : e->children) {
-                int cx = x + mar + pad;
                 int cmw = mw - (mar + pad) * 2;
-                if (*pAlign == "center") {
+                int cx = x + mar + pad;
+                int cwToPass = cmw;
+                if (currentAlign == "center") {
                     int ew = estW(c, cmw);
-                    cx = x + (mw - ew) / 2;
+                    if (ew < cmw) { cx += (cmw - ew) / 2; cwToPass = ew; }
                 }
-                draw(dc, c, cx, curY, cmw);
+                else if (currentAlign == "right") {
+                    int ew = estW(c, cmw);
+                    if (ew < cmw) { cx += (cmw - ew); cwToPass = ew; }
+                }
+                draw(dc, c, cx, curY, cwToPass, currentAlign);
             }
             blockHeights[heightIdx] = (curY - startY) + pad;
             curY += pad + mar;
@@ -2903,7 +3018,7 @@ class Engine {
             if (!pId->empty()) {
                 auto i = Script::g_texts.find(*pId);
                 if (i != Script::g_texts.end()) pCt = &(i->second);
-                else {Script::g_texts[*pId] = *pCt; pCt = &Script::g_texts[*pId];}
+                else { Script::g_texts[*pId] = *pCt; pCt = &Script::g_texts[*pId]; }
             }
             int sz = e->props.getInt("size", 16);
             auto col = e->props.getColor("color", { 255,255,255 });
@@ -2921,15 +3036,17 @@ class Engine {
             HFONT f = FontCache::get(sz, e->props.getBool("bold"), e->props.getBool("italic"), pFontName->empty() ? "Segoe UI" : pFontName->c_str());
             int drawY = y - scrollY + offset_y;
             int th = 0;
+            UINT dtFormat = DT_WORDBREAK;
+            if (currentAlign == "center") dtFormat |= DT_CENTER;
+            else if (currentAlign == "right") dtFormat |= DT_RIGHT;
             uint64_t mKey = hashText(*pCt, mw, f);
             auto tIt = textHeightCache.find(mKey);
             if (tIt != textHeightCache.end()) {
                 th = tIt->second;
-            }
-            else {
+            } else {
                 auto of = SelectObject(dc, f);
                 RECT rcCalc = { x, 0, x + mw, 1000 };
-                DrawTextU(dc, pCt->c_str(), -1, &rcCalc, DT_WORDBREAK | DT_CALCRECT);
+                DrawTextU(dc, pCt->c_str(), -1, &rcCalc, dtFormat | DT_CALCRECT);
                 th = rcCalc.bottom - rcCalc.top;
                 SelectObject(dc, of);
                 textHeightCache[mKey] = th;
@@ -2939,14 +3056,22 @@ class Engine {
                 if (!pGrad->empty()) gradColor = HTP::Color::fromHex(*pGrad);
                 renderQueue.push_back({ z, [=]() {
                     if (!pGrad->empty()) {
-                        GradientText::draw(dc, *pCt, f, x, drawY, col, gradColor, shimmer);
-                    }
-                    else {
+                        int drawX = x;
+                        if (currentAlign == "center" || currentAlign == "right") {
+                            SIZE ts;
+                            auto of = SelectObject(dc, f);
+                            GetTextExtentPoint32U(dc, pCt->c_str(), (int)pCt->length(), &ts);
+                            SelectObject(dc, of);
+                            if (currentAlign == "center") drawX = x + (mw - ts.cx) / 2;
+                            else if (currentAlign == "right") drawX = x + (mw - ts.cx);
+                        }
+                        GradientText::draw(dc, *pCt, f, drawX, drawY, col, gradColor, shimmer);
+                    } else {
                         auto of = SelectObject(dc, f);
                         SetTextColor(dc, col.cr());
                         SetBkMode(dc, TRANSPARENT);
                         RECT rcDraw = { x, drawY, x + mw, drawY + th };
-                        DrawTextU(dc, pCt->c_str(), -1, &rcDraw, DT_WORDBREAK);
+                        DrawTextU(dc, pCt->c_str(), -1, &rcDraw, dtFormat);
                         SelectObject(dc, of);
                     }
                 } });
@@ -3333,7 +3458,7 @@ public:
         RECT r = { 0,0,w,h };
         FillRect(tdc, &r, bg);
         DeleteObject(bg);
-        draw(tdc, doc.root, 10, 10, w - 20);
+        draw(tdc, doc.root, 10, 10, w - 20, "left");
         std::stable_sort(renderQueue.begin(), renderQueue.end(), [](const RenderCmd& a, const RenderCmd& b) {
             return a.zIndex < b.zIndex;
         });
@@ -3348,10 +3473,7 @@ namespace Pages {
         HANDLE hFile = CreateFileA(p.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
         if (hFile == INVALID_HANDLE_VALUE) return "";
         DWORD size = GetFileSize(hFile, NULL);
-        if (size == 0 || size == INVALID_FILE_SIZE) {
-            CloseHandle(hFile);
-            return "";
-        }
+        if (size == 0 || size == INVALID_FILE_SIZE) {CloseHandle(hFile); return "";}
         std::string res;
         res.resize(size);
         DWORD bytesRead = 0;
@@ -3363,53 +3485,56 @@ namespace Pages {
         auto c = readF("home.htp");
         if (!c.empty()) return c;
         return R"htp(
-@page { title:"Lume - Start"; background:"#09090b"; }
-@block { align:"center"; padding:50; background:"#09090b"; margin:0;
+@page {title:"Lume - Start"; background:"#09090b";}
+@block {align:"center"; padding:50; background:"#09090b"; margin:0;
   @br{size:20;}
-  @text { id:"logo"; content:"LUME"; size:86; color:"#ff0000"; gradient:"#0000ff"; bold:"true"; }
-  @br { size:5; }
-  @text { content:"The Custom Lightweight Engine"; size:18; color:"#71717a"; italic:"true"; }
-  @br { size:40; }
-  @row { gap:10;
-     @input { id:"url_box"; placeholder:"Type address (e.g. about:info or file://...)"; width:420; height:40; }
-     @button { id:"btn_go"; content:"Navigate"; width:110; height:40; background:"#27272a"; color:"#fafafa"; border-radius:6; size:15; }
+  @text {id:"logo"; content:"LUME"; size:86; color:"#ff0000"; gradient:"#0000ff"; bold:"true"; align:"center";}
+  @br {size:5;}
+  @text {content:"The Custom Lightweight Engine"; size:18; color:"#71717a"; italic:"true"; align:"center";}
+  @br {size:40;}
+  @row {align:"center"; gap:10;
+     @input {id:"url_box"; placeholder:"Type address (e.g. about:info or file://...)"; width:420; height:40;}
+     @button {id:"btn_go"; content:"Navigate"; width:110; height:40; background:"#27272a"; color:"#fafafa"; border-radius:6; size:15;}
   }
   @br{size:8;}
-  @text { id:"search_err"; content:""; size:14; color:"#ef4444"; }
+  @text {id:"search_err"; content:""; size:14; color:"#ef4444"; align:"center";}
 }
-@block { align:"left"; padding:30; margin:10; background:"#09090b";
-    @row { gap:20;
-        @column { background:"#18181b"; padding:25; border-radius:10; width:280;
-            @text { content:"3D Graphics"; size:20; color:"#fafafa"; bold:"true"; }
-            @divider { color:"#27272a"; thickness:1; margin:15; }
-            @text { content:"Hardware accelerated OpenGL rendering built directly into the UI layer."; size:15; color:"#a1a1aa"; }
-            @br { size:20; }
-            @button { content:"Launch Demo"; width:140; height:35; background:"#3f3f46"; color:"#ffffff"; border-radius:6; url:"about:gldemo"; }
-            @br { size:30; } 
+@block { align:"center"; padding:30; margin:10; background:"#09090b";
+    @row {align:"center"; gap:20;
+        @column {background:"#18181b"; padding:25; border-radius:10; width:280;
+            @text {content:"3D Graphics"; size:20; color:"#fafafa"; bold:"true";}
+            @divider {color:"#27272a"; thickness:1; margin:15;}
+            @text {content:"Hardware accelerated OpenGL rendering built directly into the UI layer."; size:15; color:"#a1a1aa";}
+            @br {size:20;}
+            @button {content:"Launch Demo"; width:140; height:35; background:"#3f3f46"; color:"#ffffff"; border-radius:6; url:"about:gldemo";}
+            @br {size:30;}
         }
-        @column { background:"#18181b"; padding:25; border-radius:10; width:280;
-            @text { content:"Native Plugins"; size:20; color:"#fafafa"; bold:"true"; }
-            @divider { color:"#27272a"; thickness:1; margin:15; }
-            @text { content:"Extend functionality using the dynamic C++ DLL system. Build anything."; size:15; color:"#a1a1aa"; }
-            @br { size:20; }
-            @button { content:"View Plugins"; width:140; height:35; background:"#3f3f46"; color:"#ffffff"; border-radius:6; url:"about:plugindemo"; }
-            @br { size:30; }
+        @column {background:"#18181b"; padding:25; border-radius:10; width:280;
+            @text {content:"Native Plugins"; size:20; color:"#fafafa"; bold:"true";}
+            @divider {color:"#27272a"; thickness:1; margin:15; }
+            @text {content:"Extend functionality using the dynamic C++ DLL system. Build anything."; size:15; color:"#a1a1aa";}
+            @br {size:20;}
+            @button {content:"View Plugins"; width:140; height:35; background:"#3f3f46"; color:"#ffffff"; border-radius:6; url:"about:plugindemo";}
+            @br {size:30;}
         }
-        @column { background:"#18181b"; padding:25; border-radius:10; width:280;
-            @text { content:"About"; size:20; color:"#fafafa"; bold:"true"; }
-            @divider { color:"#27272a"; thickness:1; margin:15; }
-            @text { content:"Learn about the Lua 5.4 integration, HTP tags, and custom networking."; size:15; color:"#a1a1aa"; }
-            @br { size:20; }
-            @button { content:"Read More"; width:140; height:35; background:"#3f3f46"; color:"#ffffff"; border-radius:6; url:"about:info"; }
-            @br { size:30; }
+    }
+    @br {size:20;}
+    @row {align:"center"; gap:20;
+        @column {background:"#18181b"; padding:25; border-radius:10; width:280;
+            @text {content:"About"; size:20; color:"#fafafa"; bold:"true";}
+            @divider {color:"#27272a"; thickness:1; margin:15;}
+            @text {content:"Learn about the Lua 5.4 integration, HTP tags, and custom networking."; size:15; color:"#a1a1aa";}
+            @br {size:20;}
+            @button {content:"Read More"; width:140; height:35; background:"#3f3f46"; color:"#ffffff"; border-radius:6; url:"about:info";}
+            @br {size:30;}
         }
-        @column { background:"#18181b"; padding:25; border-radius:10; width:280;
-            @text { content:"WebAssembly"; size:20; color:"#fafafa"; bold:"true"; }
-            @divider { color:"#27272a"; thickness:1; margin:15; }
-            @text { content:"Run C/Rust/Zig binaries directly inside your pages at native speeds."; size:15; color:"#a1a1aa"; }
-            @br { size:20; }
-            @button { content:"WASM Demo"; width:140; height:35; background:"#3b82f6"; color:"#ffffff"; border-radius:6; url:"about:wasm"; }
-            @br { size:30; }
+        @column {background:"#18181b"; padding:25; border-radius:10; width:280;
+            @text {content:"WebAssembly"; size:20; color:"#fafafa"; bold:"true";}
+            @divider {color:"#27272a"; thickness:1; margin:15;}
+            @text {content:"Run C/Rust/Zig binaries directly inside your pages at native speeds."; size:15; color:"#a1a1aa";}
+            @br {size:20;}
+            @button { content:"WASM Demo"; width:140; height:35; background:"#3b82f6"; color:"#ffffff"; border-radius:6; url:"about:wasm";}
+            @br {size:30;}
         }
     }
 }
@@ -3456,65 +3581,66 @@ namespace Pages {
 }
 )htp";
     }
-
     std::string about() {
         auto c = readF("about_browser.htp");
         if (!c.empty()) return c;
         return R"htp(
-@page { title:"Lume - About"; background:"#09090b"; }
-@block { align:"center"; padding:40; background:"#09090b"; margin:0;
-  @text { content:"About Lume"; size:46; color:"#fafafa"; bold:"true"; }
-  @br { size:5; }
-  @text { content:"The architecture behind the custom engine."; size:18; color:"#a1a1aa"; italic:"true"; }
+@page {title:"Lume - About"; background:"#09090b";}
+@block {align:"center"; padding:40; background:"#09090b"; margin:0;
+  @text {content:"About Lume"; size:46; color:"#fafafa"; bold:"true"; align:"center";}
+  @br {size:5;}
+  @text {content:"The architecture behind the custom engine."; size:18; color:"#a1a1aa"; italic:"true"; align:"center";}
 }
-@block { align:"center"; padding:20; margin:0; background:"#09090b";
-    @row { gap:20;
-        @column { background:"#18181b"; padding:25; border-radius:10;
-            @text { content:"[*] Custom Rendering"; size:20; color:"#fafafa"; bold:"true"; }
-            @divider { color:"#27272a"; thickness:1; margin:15; }
-            @text { content:"No CEF or Chromium overhead. Everything is drawn natively using WinAPI, GDI+, and custom layout algorithms."; size:15; color:"#a1a1aa"; }
+@block {align:"center"; padding:20; margin:0; background:"#09090b";
+    @row {align:"center"; gap:20;
+        @column {background:"#18181b"; padding:25; border-radius:10; width:300;
+            @text {content:"[*] Custom Rendering"; size:20; color:"#fafafa"; bold:"true";}
+            @divider {color:"#27272a"; thickness:1; margin:15;}
+            @text {content:"No CEF or Chromium overhead. Everything is drawn natively using WinAPI, GDI+, and custom layout algorithms."; size:15; color:"#a1a1aa";}
         }
-        @column { background:"#18181b"; padding:25; border-radius:10;
-            @text { content:"[+] Lua 5.4 Powered"; size:20; color:"#fafafa"; bold:"true"; }
-            @divider { color:"#27272a"; thickness:1; margin:15; }
-            @text { content:"Fast and lightweight scripting. Direct bindings to DOM elements, inputs, and canvases without JS bloat."; size:15; color:"#a1a1aa"; }
-        }
-        @column { background:"#18181b"; padding:25; border-radius:10;
-            @text { content:"[>] OpenGL Integration"; size:20; color:"#fafafa"; bold:"true"; }
-            @divider { color:"#27272a"; thickness:1; margin:15; }
-            @text { content:"Hardware-accelerated canvases embedded directly into the UI flow with full mouse capture support."; size:15; color:"#a1a1aa"; }
-        }
-        @column { background:"#18181b"; padding:25; border-radius:10;
-            @text { content:"[~] Native Plugins"; size:20; color:"#fafafa"; bold:"true"; }
-            @divider { color:"#27272a"; thickness:1; margin:15; }
-            @text { content:"Extend the engine dynamically using C++ DLLs. Add new network protocols, physics, or OS integrations."; size:15; color:"#a1a1aa"; }
+        @column {background:"#18181b"; padding:25; border-radius:10; width:300;
+            @text {content:"[+] Lua 5.4 Powered"; size:20; color:"#fafafa"; bold:"true";}
+            @divider {color:"#27272a"; thickness:1; margin:15; }
+            @text {content:"Fast and lightweight scripting. Direct bindings to DOM elements, inputs, and canvases without JS bloat."; size:15; color:"#a1a1aa";}
         }
     }
-    @br { size:40; }
-    @button { content:"Back to Home"; width:180; height:40; background:"#27272a"; color:"#fafafa"; border-radius:6; url:"about:home"; size:15; }
+    @br {size:20;}
+    @row {align:"center"; gap:20;
+        @column {background:"#18181b"; padding:25; border-radius:10; width:300;
+            @text {content:"[>] OpenGL Integration"; size:20; color:"#fafafa"; bold:"true";}
+            @divider {color:"#27272a"; thickness:1; margin:15;}
+            @text {content:"Hardware-accelerated canvases embedded directly into the UI flow with full mouse capture support."; size:15; color:"#a1a1aa";}
+        }
+        @column {background:"#18181b"; padding:25; border-radius:10; width:300;
+            @text {content:"[~] Native Plugins"; size:20; color:"#fafafa"; bold:"true";}
+            @divider {color:"#27272a"; thickness:1; margin:15;}
+            @text {content:"Extend the engine dynamically using C++ DLLs. Add new network protocols, physics, or OS integrations."; size:15; color:"#a1a1aa";}
+        }
+    }
+    @br {size:40;}
+    @button {content:"Back to Home"; width:180; height:40; background:"#27272a"; color:"#fafafa"; border-radius:6; url:"about:home"; size:15;}
 }
 )htp";
     }
-
     std::string glDemo() {
         return R"htp(
-@page { title:"Lume - 3D Engine"; background:"#09090b"; }
-@block { align:"center"; padding:30; background:"#09090b"; margin:0;
-  @text { content:"Hardware Acceleration"; size:36; color:"#fafafa"; bold:"true"; }
-  @br { size:5; }
-  @text { content:"Click canvas to capture mouse | ESC to release | F11 for Fullscreen"; size:15; color:"#71717a"; }
+@page {title:"Lume - 3D Engine"; background:"#09090b";}
+@block {align:"center"; padding:30; background:"#09090b"; margin:0;
+  @text {content:"Hardware Acceleration"; size:36; color:"#fafafa"; bold:"true"; align:"center";}
+  @br {size:5;}
+  @text {content:"Click canvas to capture mouse | ESC to release | F11 for Fullscreen"; size:15; color:"#71717a"; align:"center";}
 }
-@block { align:"center"; padding:0; margin:10; background:"#09090b";
-  @column { background:"#18181b"; padding:25; border-radius:12; width:650;
-    @glcanvas { id:"gl1"; width:600; height:400; border-color:"#27272a"; }
-    @br { size:20; }
-    @row { gap:20;
-      @button { id:"btn_spin"; content:"Toggle Animation"; width:160; height:35; background:"#3f3f46"; color:"#ffffff"; border-radius:6; }
-      @text { id:"gl_status"; content:"Status: Animated"; size:15; color:"#10b981"; }
+@block {align:"center"; padding:0; margin:10; background:"#09090b";
+  @column {align:"center"; background:"#18181b"; padding:25; border-radius:12; width:650;
+    @glcanvas {id:"gl1"; width:600; height:400; border-color:"#27272a";}
+    @br {size:20;}
+    @row {align:"center"; gap:20;
+      @button {id:"btn_spin"; content:"Toggle Animation"; width:160; height:35; background:"#3f3f46"; color:"#ffffff"; border-radius:6;}
+      @text {id:"gl_status"; content:"Status: Animated"; size:15; color:"#10b981";}
     }
   }
-  @br { size:30; }
-  @button { content:"Back to Home"; width:180; height:40; background:"#27272a"; color:"#fafafa"; border-radius:6; url:"about:home"; size:15; }
+  @br {size:30;}
+  @button {content:"Back to Home"; width:180; height:40; background:"#27272a"; color:"#fafafa"; border-radius:6; url:"about:home"; size:15;}
 }
 @script {
   local animating = true 
@@ -3576,8 +3702,8 @@ namespace Pages {
     gl_line_width(2.0)
     gl_color(1, 1, 1, 0.9)
     gl_begin(GL_LINES)
-    local pts = { {0,1.5,0}, {0,-1.5,0}, {1,0,1}, {-1,0,1}, {1,0,-1}, {-1,0,-1} }
-    local edges = { {1,3},{1,4},{1,5},{1,6}, {2,3},{2,4},{2,5},{2,6}, {3,4},{4,6},{6,5},{5,3} }
+    local pts = {{0,1.5,0}, {0,-1.5,0}, {1,0,1}, {-1,0,1}, {1,0,-1}, {-1,0,-1}}
+    local edges = {{1,3},{1,4},{1,5},{1,6}, {2,3},{2,4},{2,5},{2,6}, {3,4},{4,6},{6,5},{5,3}}
     for i=1, #edges do
         gl_vertex3f(pts[edges[i][1]][1], pts[edges[i][1]][2], pts[edges[i][1]][3])
         gl_vertex3f(pts[edges[i][2]][1], pts[edges[i][2]][2], pts[edges[i][2]][3])
@@ -3610,26 +3736,25 @@ namespace Pages {
     }
     std::string pluginDemo() {
         return R"htp(
-@page { title:"Lume - Plugins"; background:"#09090b"; }
-@block { align:"center"; padding:40; background:"#09090b"; margin:0;
-  @text { content:"Native Plugin Bridge"; size:36; color:"#fafafa"; bold:"true"; }
-  @br { size:5; }
-  @text { content:"Triggering OS-level calls via dynamically loaded C++ DLLs."; size:15; color:"#71717a"; }
+@page {title:"Lume - Plugins"; background:"#09090b";}
+@block {align:"center"; padding:40; background:"#09090b"; margin:0;
+  @text {content:"Native Plugin Bridge"; size:36; color:"#fafafa"; bold:"true"; align:"center";}
+  @br {size:5;}
+  @text {content:"Triggering OS-level calls via dynamically loaded C++ DLLs."; size:15; color:"#71717a"; align:"center";}
 }
-@block { align:"center"; padding:0; margin:10; background:"#09090b";
-  @column { background:"#18181b"; padding:30; border-radius:12; width:400;
-    @text { content:"Test Windows Message Box"; size:18; color:"#fafafa"; bold:"true"; }
-    @divider { color:"#27272a"; thickness:1; margin:15; }
-    @text { content:"This button uses Lua to call a C++ plugin function that interacts with the Windows API natively."; size:14; color:"#a1a1aa"; }
-    @br { size:25; }
-    @button { id:"btn_yesno"; content:"Execute Plugin"; width:200; height:40; background:"#3b82f6"; color:"#ffffff"; border-radius:6; size:15; }
-    @br { size:20; }
-    @text { id:"result"; content:"Waiting for input..."; size:14; color:"#f59e0b"; }
+@block {align:"center"; padding:0; margin:10; background:"#09090b";
+  @column {align:"center"; background:"#18181b"; padding:30; border-radius:12; width:450;
+    @text {content:"Test Windows Message Box"; size:18; color:"#fafafa"; bold:"true"; align:"center";}
+    @divider {color:"#27272a"; thickness:1; margin:15;}
+    @text {content:"This button uses Lua to call a C++ plugin function that interacts with the Windows API natively."; size:14; color:"#a1a1aa"; align:"center";}
+    @br {size:25;}
+    @button {id:"btn_yesno"; content:"Execute Plugin"; width:200; height:40; background:"#3b82f6"; color:"#ffffff"; border-radius:6; size:15;}
+    @br {size:20;}
+    @text {id:"result"; content:"Waiting for input..."; size:14; color:"#f59e0b"; align:"center";}
   }
   @br { size:30; }
-  @button { content:"Back to Home"; width:180; height:40; background:"#27272a"; color:"#fafafa"; border-radius:6; url:"about:home"; size:15; }
+  @button {content:"Back to Home"; width:180; height:40; background:"#27272a"; color:"#fafafa"; border-radius:6; url:"about:home"; size:15;}
 }
-
 @script {
   on_click('btn_yesno', function()
     if msgBox then
@@ -3646,24 +3771,24 @@ namespace Pages {
     }
     std::string wasmDemo() {
         return R"htp(
-@page { title:"Lume - WebAssembly"; background:"#09090b"; }
-@block { align:"center"; padding:40; background:"#09090b"; margin:0;
-  @text { content:"WebAssembly Engine"; size:36; color:"#fafafa"; bold:"true"; }
-  @br { size:5; }
-  @text { content:"Native C/Rust performance directly in your HTP pages."; size:15; color:"#71717a"; }
+@page {title:"Lume - WebAssembly"; background:"#09090b";}
+@block {align:"center"; padding:40; background:"#09090b"; margin:0;
+  @text {content:"WebAssembly Engine"; size:36; color:"#fafafa"; bold:"true"; align:"center";}
+  @br {size:5;}
+  @text {content:"Native C/Rust performance directly in your HTP pages."; size:15; color:"#71717a"; align:"center";}
 }
-@block { align:"center"; padding:30; margin:10; background:"#18181b"; border-radius:12;
-  @text { content:"Calculate via WASM Module"; size:20; color:"#10b981"; bold:"true"; }
-  @divider { color:"#27272a"; thickness:1; margin:15; }
-  @row { gap:15;
-    @input { id:"num_a"; placeholder:"Number A"; width:100; height:35; }
-    @text { content:"+"; size:24; color:"#fafafa"; }
-    @input { id:"num_b"; placeholder:"Number B"; width:100; height:35; }
-    @button { id:"btn_calc"; content:"="; width:50; height:35; background:"#3b82f6"; color:"#ffffff"; border-radius:6; }
-    @text { id:"result"; content:"?"; size:24; color:"#f59e0b"; bold:"true"; }
+@block {align:"center"; padding:30; margin:10; background:"#18181b"; border-radius:12;
+  @text {content:"Calculate via WASM Module"; size:20; color:"#10b981"; bold:"true"; align:"center";}
+  @divider {color:"#27272a"; thickness:1; margin:15; }
+  @row {align:"center"; gap:15;
+    @input {id:"num_a"; placeholder:"Number A"; width:100; height:35;}
+    @text {content:"+"; size:24; color:"#fafafa";}
+    @input {id:"num_b"; placeholder:"Number B"; width:100; height:35;}
+    @button {id:"btn_calc"; content:"="; width:50; height:35; background:"#3b82f6"; color:"#ffffff"; border-radius:6;}
+    @text {id:"result"; content:"?"; size:24; color:"#f59e0b"; bold:"true";}
   }
-  @br { size:30; }
-  @button { content:"Back to Home"; width:180; height:40; background:"#27272a"; color:"#fafafa"; border-radius:6; url:"about:home"; size:15; }
+  @br {size:30;}
+  @button {content:"Back to Home"; width:180; height:40; background:"#27272a"; color:"#fafafa"; border-radius:6; url:"about:home"; size:15;}
 }
 @script {
   local wasm_bytes = "\x00\x61\x73\x6d\x01\x00\x00\x00\x01\x07\x01\x60\x02\x7f\x7f\x01\x7f\x03\x02\x01\x00\x07\x07\x01\x03\x61\x64\x64\x00\x00\x0a\x09\x01\x07\x00\x20\x00\x20\x01\x6a\x0b"
@@ -3684,12 +3809,12 @@ namespace Pages {
     std::string error(const std::string& e, const std::string& u) {
         return "@page{title:\"Error\";background:#1a0000;}\n"
             "@block{align:center;padding:40;margin:30;background:#2a1010;border-radius:10;\n"
-            "  @text{content:\"Error\";size:32;color:#ff4444;bold:true;}\n"
+            "  @text{content:\"Error\";size:32;color:#ff4444;bold:true; align:\"center\";}\n"
             "  @br{size:15;}\n"
-            "  @text{content:\"" + e + "\";size:16;color:#ff8888;}\n"
-            "  @text{content:\"" + u + "\";size:14;color:#aa6666;}\n"
+            "  @text{content:\"" + e + "\";size:16;color:#ff8888; align:\"center\";}\n"
+            "  @text{content:\"" + u + "\";size:14;color:#aa6666; align:\"center\";}\n"
             "  @br{size:20;}\n"
-            "  @link{content:\"Home\";url:\"about:home\";color:#0abde3;size:16;}\n}\n";
+            "  @button{content:\"Back to Home\";url:\"about:home\";background:\"#ff4444\";color:\"#ffffff\";size:16;width:150;height:40;border-radius:6;}\n}\n";
     }
 }
 HTP::Doc g_doc;
@@ -3697,8 +3822,8 @@ Render::Engine g_ren;
 std::vector<std::string> g_hist;
 int g_histPos = -1;
 std::string buildTextHtp(const std::string& rawText) {
-    std::string htp = "@page { title:\"Text Document\"; background:\"#1e1e1e\"; }\n";
-    htp += "@column { padding:10; background:\"#1e1e1e\"; }\n";
+    std::string htp = "@page {title:\"Text Document\"; background:\"#1e1e1e\";}\n";
+    htp += "@column {padding:10; background:\"#1e1e1e\";}\n";
 
     std::istringstream iss(rawText);
     std::string line;
@@ -3722,39 +3847,159 @@ std::string buildTextHtp(const std::string& rawText) {
     }
     return htp;
 }
+std::string parseMarkdown(const std::string& mdText) {
+    std::string htp = "@page {title:\"Markdown Document\"; background:\"#09090b\";}\n";
+    htp += "@column {padding:20; background:\"#09090b\"; align:\"left\";}\n";
+    std::istringstream iss(mdText);
+    std::string line;
+    bool inCodeBlock = false;
+    bool inDetails = false;
+    bool inList = false;
+    auto escapeHtp = [](const std::string& s) {
+        std::string res;
+        for (char c : s) {
+            if (c == '"') res += "\\\"";
+            else if (c == '\\') res += "\\\\";
+            else if (c == '{') res += "\\{";
+            else if (c == '}') res += "\\}";
+            else if (c != '\r') res += c;
+        }
+        return res;
+        };
+    auto formatInline = [](std::string text) {
+        bool bold = false, italic = false;
+        size_t bPos;
+        while ((bPos = text.find("**")) != std::string::npos) { bold = true; text.erase(bPos, 2); }
+        size_t iPos;
+        while ((iPos = text.find("*")) != std::string::npos) { italic = true; text.erase(iPos, 1); }
+        std::string props;
+        if (bold) props += "bold:\"true\"; ";
+        if (italic) props += "italic:\"true\"; ";
+        return std::make_pair(text, props);
+        };
+    auto closeList = [&]() {
+        if (inList) { htp += "  }\n"; inList = false; }
+        };
+    while (std::getline(iss, line)) {
+        if (line.empty() || line == "\r") {
+            closeList();
+            if (!inCodeBlock) htp += "  @br { size:10; }\n";
+            continue;
+        }
+        if (line.find("```") == 0) {
+            closeList();
+            inCodeBlock = !inCodeBlock;
+            if (inCodeBlock) htp += "  @block { background:\"#1e1e1e\"; padding:10; border-radius:6; margin:5; align:\"left\";\n";
+            else htp += "  }\n";
+            continue;
+        }
+        if (inCodeBlock) {
+            htp += "    @text { content:\"" + escapeHtp(line) + "\"; size:14; color:\"#cccccc\"; font:\"Consolas\"; }\n";
+            continue;
+        }
+        if (line.find("<details>") != std::string::npos) {
+            closeList();
+            inDetails = true;
+            htp += "  @block { background:\"#18181b\"; padding:15; border-radius:8; margin:5; align:\"left\";\n";
+            continue;
+        }
+        if (line.find("</details>") != std::string::npos) {
+            inDetails = false;
+            htp += "  }\n";
+            continue;
+        }
+        if (inDetails && line.find("<summary>") != std::string::npos) {
+            size_t s1 = line.find("<summary>") + 9;
+            size_t s2 = line.find("</summary>");
+            std::string summary = (s2 != std::string::npos) ? line.substr(s1, s2 - s1) : line.substr(s1);
+            htp += "    @text {content:\"► " + escapeHtp(summary) + "\"; size:16; color:\"#10b981\"; bold:\"true\";}\n";
+            htp += "    @divider {color:\"#27272a\"; thickness:1; margin:5;}\n";
+            continue;
+        }
+        int hLevel = 0;
+        while (hLevel < line.length() && line[hLevel] == '#') hLevel++;
+        if (hLevel > 0 && hLevel <= 6 && line[hLevel] == ' ') {
+            closeList();
+            std::string text = line.substr(hLevel + 1);
+            int size = 32 - (hLevel * 3);
+            htp += "  @text {content:\"" + escapeHtp(text) + "\"; size:" + std::to_string(size) + "; color:\"#ffffff\"; bold:\"true\";}\n";
+            if (hLevel <= 2) htp += "  @divider {color:\"#3f3f46\"; thickness:1; margin:8;}\n";
+            continue;
+        }
+        if (line.find("* ") == 0 || line.find("- ") == 0) {
+            if (!inList) {
+                htp += "  @list {\n";
+                inList = true;
+            }
+            auto fmt = formatInline(line.substr(2));
+            htp += "    @item {content:\"" + escapeHtp(fmt.first) + "\"; size:15; color:\"#d4d4d8\"; " + fmt.second + "}\n";
+            continue;
+        }
+        closeList();
+        auto fmt = formatInline(line);
+        htp += "  @text {content:\"" + escapeHtp(fmt.first) + "\"; size:15; color:\"#a1a1aa\"; " + fmt.second + "}\n";
+    }
+    closeList();
+    htp += "}\n";
+    return htp;
+}
 void loadContent(const std::string& content, const std::string& url, bool isInternalHtp = false) {
     std::string finalContent = content;
+    std::string displayUrl = url;
+    bool forceRaw = false;
+    bool forceHtp = false;
+    if (displayUrl.length() > 5 && displayUrl.substr(displayUrl.length() - 5) == " !raw") {
+        forceRaw = true;
+        displayUrl = displayUrl.substr(0, displayUrl.length() - 5);
+    }
+    else if (displayUrl.length() > 5 && displayUrl.substr(displayUrl.length() - 5) == " !htp") {
+        forceHtp = true;
+        displayUrl = displayUrl.substr(0, displayUrl.length() - 5);
+    }
     if (!isInternalHtp) {
-        std::string path = url;
-        auto q = path.find('?');
-        if (q != std::string::npos) path = path.substr(0, q);
-        auto slash = path.find_last_of('/');
-        if (slash != std::string::npos) path = path.substr(slash + 1);
         bool isText = false;
-        if (!path.empty()) {
-            auto dot = path.find_last_of('.');
-            if (dot == std::string::npos) {
-                isText = true;
-            }
-            else {
-                std::string ext = path.substr(dot);
-                for (char& c : ext) c = tolower(c);
-                if (ext == ".txt" || ext == ".md" || ext == ".json" || ext == ".log" || ext == ".cpp" || ext == ".h") {
+        if (forceRaw) {
+            isText = true;
+        }
+        else if (forceHtp) {
+            isText = false;
+        }
+        else {
+            std::string path = displayUrl;
+            auto q = path.find('?');
+            if (q != std::string::npos) path = path.substr(0, q);
+            auto slash = path.find_last_of('/');
+            if (slash != std::string::npos) path = path.substr(slash + 1);
+
+            if (!path.empty()) {
+                auto dot = path.find_last_of('.');
+                if (dot == std::string::npos) {
                     isText = true;
                 }
-                else if (ext == ".wasm") {
-                    finalContent = "@page{title:\"WASM Module\";background:\"#09090b\";}@block{align:\"center\";padding:50;@text{content:\"WebAssembly Binary Module\";size:30;color:\"#10b981\";bold:\"true\";}@br{size:10;}@text{content:\"Size: " + std::to_string(content.size()) + " bytes\";size:16;color:\"#a1a1aa\";}}";
-                    isText = false;
+                else {
+                    std::string ext = path.substr(dot);
+                    for (char& c : ext) c = tolower(c);
+                    if (ext == ".txt" || ext == ".json" || ext == ".log" || ext == ".cpp" || ext == ".h") {
+                        isText = true;
+                    }
+                    else if (ext == ".md") {
+                        finalContent = parseMarkdown(content);
+                        isText = false;
+                    }
+                    else if (ext == ".wasm") {
+                        finalContent = "@page{title:\"WASM Module\";background:\"#09090b\";}@block{align:\"center\";padding:50;@text{content:\"WebAssembly Binary Module\";size:30;color:\"#10b981\";bold:\"true\";}@br{size:10;}@text{content:\"Size: " + std::to_string(content.size()) + " bytes\";size:16;color:\"#a1a1aa\";}}";
+                        isText = false;
+                    }
                 }
             }
         }
         if (isText) finalContent = buildTextHtp(content);
     }
-    Plugins::checkDynamicUnloads(url);
+    Plugins::checkDynamicUnloads(displayUrl);
     Script::reset();
     HTP::Parser p;
     g_doc = p.parse(finalContent);
-    g_curUrl = url;
+    g_curUrl = displayUrl;
     g_ren.setScroll(0);
     std::function<void(std::shared_ptr<HTP::Elem>)> run;
     run = [&](std::shared_ptr<HTP::Elem> e) {
@@ -3768,21 +4013,35 @@ void loadContent(const std::string& content, const std::string& url, bool isInte
     invalidateContent();
 }
 void loadFile(const std::string& fp) {
+    std::string originalUrl = fp;
     std::string path = fp;
+    if (path.length() > 5 && path.substr(path.length() - 5) == " !raw") path = path.substr(0, path.length() - 5);
+    else if (path.length() > 5 && path.substr(path.length() - 5) == " !htp") path = path.substr(0, path.length() - 5);
     if (path.length() > 7 && path.substr(0, 7) == "file://") path = path.substr(7);
     std::ifstream f(path);
     if (!f) {
-        loadContent(Pages::error("Not found", path), "file://" + path, true);
+        loadContent(Pages::error("Not found", path), originalUrl, true);
         return;
     }
     std::stringstream ss;
     ss << f.rdbuf();
     f.close();
-    loadContent(ss.str(), "file://" + path);
+    loadContent(ss.str(), originalUrl);
     setStatus("Loaded: " + path);
 }
 void navigateTo(const std::string& url) {
-    std::string u = resolveUrl(url, g_curUrl);
+    std::string rawUrl = url;
+    std::string flags = "";
+    if (rawUrl.length() > 5 && rawUrl.substr(rawUrl.length() - 5) == " !raw") {
+        flags = " !raw";
+        rawUrl = rawUrl.substr(0, rawUrl.length() - 5);
+    }
+    else if (rawUrl.length() > 5 && rawUrl.substr(rawUrl.length() - 5) == " !htp") {
+        flags = " !htp";
+        rawUrl = rawUrl.substr(0, rawUrl.length() - 5);
+    }
+    std::string u = resolveUrl(rawUrl, g_curUrl);
+    std::string urlWithFlags = u + flags;
     if (g_histPos >= 0 && g_histPos < (int)g_hist.size() - 1)
         g_hist.resize(g_histPos + 1);
     auto nav = [&](const std::string& c, const std::string& nu) {
@@ -3791,15 +4050,15 @@ void navigateTo(const std::string& url) {
         loadContent(c, nu, true);
         setStatus("Ready");
         };
-    if (u == "about:home" || u == "about:blank" || u.empty()) { nav(Pages::home(), "about:home"); return;}
-    if (u == "about:info") { nav(Pages::about(), u); return;}
-    if (u == "about:gldemo") { nav(Pages::glDemo(), u); return;}
-    if (u == "about:plugindemo") { nav(Pages::pluginDemo(), u); return;}
-    if (u == "about:wasm") { nav(Pages::wasmDemo(), u); return;}
+    if (u == "about:home" || u == "about:blank" || u.empty()) {nav(Pages::home(), "about:home"); return;}
+    if (u == "about:info") {nav(Pages::about(), u); return;}
+    if (u == "about:gldemo") {nav(Pages::glDemo(), u); return;}
+    if (u == "about:plugindemo") {nav(Pages::pluginDemo(), u); return;}
+    if (u == "about:wasm") {nav(Pages::wasmDemo(), u); return;}
     if (u.length() > 7 && u.substr(0, 7) == "file://") {
-        g_hist.push_back(u);
+        g_hist.push_back(urlWithFlags);
         g_histPos = (int)g_hist.size() - 1;
-        loadFile(u);
+        loadFile(urlWithFlags);
         return;
     }
     if (u.find("://") == std::string::npos) {
@@ -3807,43 +4066,47 @@ void navigateTo(const std::string& url) {
             std::ifstream t(u);
             if (t) {
                 t.close();
-                g_hist.push_back("file://" + u);
+                g_hist.push_back("file://" + urlWithFlags);
                 g_histPos = (int)g_hist.size() - 1;
-                loadFile(u);
+                loadFile("file://" + urlWithFlags);
                 return;
             }
         }
         u = "http://" + u;
+        urlWithFlags = u + flags;
     }
     if ((u.length() > 7 && u.substr(0, 7) == "http://") ||
         (u.length() > 8 && u.substr(0, 8) == "https://")) {
         setStatus("Loading...");
         auto r = Net::fetch(Net::URL::parse(u));
-        g_hist.push_back(u);
+        g_hist.push_back(urlWithFlags);
         g_histPos = (int)g_hist.size() - 1;
         if (r.ok && !r.body.empty()) {
-            loadContent(r.body, u);
+            loadContent(r.body, urlWithFlags);
             setStatus("OK");
         }
         else {
-            loadContent(Pages::error(r.error, u), u, true);
+            loadContent(Pages::error(r.error, u), urlWithFlags, true);
             setStatus("Err");
         }
         return;
     }
-    loadContent(Pages::error("Unknown protocol", u), u, true);
+    loadContent(Pages::error("Unknown protocol", u), urlWithFlags, true);
 }
 void histNav(const std::string& u) {
-    if (u == "about:home") loadContent(Pages::home(), u, true);
-    else if (u == "about:info") loadContent(Pages::about(), u, true);
-    else if (u == "about:gldemo") loadContent(Pages::glDemo(), u, true);
-    else if (u == "about:plugindemo") loadContent(Pages::pluginDemo(), u, true);
-    else if (u == "about:wasm") loadContent(Pages::wasmDemo(), u, true);
-    else if (u.length() > 7 && u.substr(0, 7) == "file://") loadFile(u);
+    std::string cleanU = u;
+    if (cleanU.length() > 5 && cleanU.substr(cleanU.length() - 5) == " !raw") cleanU = cleanU.substr(0, cleanU.length() - 5);
+    else if (cleanU.length() > 5 && cleanU.substr(cleanU.length() - 5) == " !htp") cleanU = cleanU.substr(0, cleanU.length() - 5);
+    if (cleanU == "about:home") loadContent(Pages::home(), u, true);
+    else if (cleanU == "about:info") loadContent(Pages::about(), u, true);
+    else if (cleanU == "about:gldemo") loadContent(Pages::glDemo(), u, true);
+    else if (cleanU == "about:plugindemo") loadContent(Pages::pluginDemo(), u, true);
+    else if (cleanU == "about:wasm") loadContent(Pages::wasmDemo(), u, true);
+    else if (cleanU.length() > 7 && cleanU.substr(0, 7) == "file://") loadFile(u);
     else {
-        auto r = Net::fetch(Net::URL::parse(u));
+        auto r = Net::fetch(Net::URL::parse(cleanU));
         if (r.ok) loadContent(r.body, u);
-        else loadContent(Pages::error(r.error, u), u, true);
+        else loadContent(Pages::error(r.error, cleanU), u, true);
     }
 }
 void goBack() { if (g_histPos > 0) { g_histPos--; histNav(g_hist[g_histPos]); } }
