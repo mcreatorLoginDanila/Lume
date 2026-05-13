@@ -7,6 +7,12 @@ A light web?-browser on C++ without using chromium\electron
 * **Programmable:** Built-in **Lua 5.4.7** engine for logic, animations, and interactivity.
 * **Custom Graphics:** Built-in `@canvas` API for high-performance 2D drawing. (also starting from beta 0.3 added OpenGL(opengl32.dll))
 
+---
+
+All pages\pluhins has been moved to https://github.com/Lume-corp/LumeSources
+
+---
+
 example code:
 ```htp
 @page { 
@@ -35,7 +41,11 @@ example code:
 }
 ```
 
+this is how example code will look like:
+<img width="1920" height="1038" alt="изображение" src="https://github.com/user-attachments/assets/b100bda8-99c8-47a1-8803-95dc221ce163" />
+
 ---
+
 <details>
 <summary>🇺🇸 EN: The Philosophy of Lume: The Developer's Heaven</summary>
     
@@ -101,10 +111,6 @@ Lume: Твой артефакт сопротивления Lume — не про�
     3.3 МБ ОЗУ: Ибо душа должна быть легкой.
     C++ & Lua 5.4.7: Чистые языки Архитектора.
 </details>
----
-
-this is how example code will look like:
-<img width="1920" height="1038" alt="изображение" src="https://github.com/user-attachments/assets/b100bda8-99c8-47a1-8803-95dc221ce163" />
 
 ---
 
