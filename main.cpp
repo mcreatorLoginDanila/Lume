@@ -42,6 +42,8 @@ extern "C" {
 #pragma comment(lib, "opengl32.lib")
 #pragma comment(lib, "glu32.lib")
 #pragma comment(lib, "ole32.lib")
+#pragma comment(lib, "shlwapi.lib")
+#include <shlwapi.h>
 #include <GL/gl.h>
 #include <GL/glu.h>
 std::wstring utf8_to_wstring(const std::string& str) {
@@ -61,6 +63,21 @@ std::string wstring_to_utf8(const std::wstring& wstr) {
     int size = WideCharToMultiByte(CP_UTF8, 0, &wstr[0], (int)wstr.size(), NULL, 0, NULL, NULL);
     std::string res(size, 0);
     WideCharToMultiByte(CP_UTF8, 0, &wstr[0], (int)wstr.size(), &res[0], size, NULL, NULL);
+    return res;
+}
+std::string fastReadFile(const std::string& path) {
+    int len = MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, NULL, 0);
+    std::wstring wpath(len, 0);
+    MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, &wpath[0], len);
+    HANDLE hFile = CreateFileW(wpath.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hFile == INVALID_HANDLE_VALUE) return "";
+    DWORD size = GetFileSize(hFile, NULL);
+    if (size == 0 || size == INVALID_FILE_SIZE) { CloseHandle(hFile); return ""; }
+    std::string res;
+    res.resize(size);
+    DWORD bytesRead = 0;
+    ReadFile(hFile, &res[0], size, &bytesRead, NULL);
+    CloseHandle(hFile);
     return res;
 }
 int DrawTextU(HDC hdc, const char* str, int len, RECT* lprc, UINT format) {
@@ -631,37 +648,30 @@ namespace Net {
         int port = 80;
         static URL parse(const std::string& s) {
             URL u;
-            const char* str = s.c_str();
-            const char* pe = strstr(str, "://");
-            if (pe) {
-                u.proto.assign(str, pe - str);
-                str = pe + 3;
+            std::wstring wurl = utf8_to_wstring(s);
+            URL_COMPONENTSW uc = { sizeof(URL_COMPONENTSW) };
+            uc.dwSchemeLength = (DWORD)-1;
+            uc.dwHostNameLength = (DWORD)-1;
+            uc.dwUrlPathLength = (DWORD)-1;
+            if (WinHttpCrackUrl(wurl.c_str(), (DWORD)wurl.length(), 0, &uc)) {
+                if (uc.dwSchemeLength > 0)
+                    u.proto = wstring_to_utf8(std::wstring(uc.lpszScheme, uc.dwSchemeLength));
+                else
+                    u.proto = "http";
+                if (uc.dwHostNameLength > 0)
+                    u.host = wstring_to_utf8(std::wstring(uc.lpszHostName, uc.dwHostNameLength));
+
+                if (uc.dwUrlPathLength > 0)
+                    u.path = wstring_to_utf8(std::wstring(uc.lpszUrlPath, uc.dwUrlPathLength));
+                else
+                    u.path = "/";
+                u.port = uc.nPort;
             }
             else {
                 u.proto = "http";
-            }
-            const char* ps = strchr(str, '/');
-            if (ps) {
-                u.path = ps;
-            }
-            else {
                 u.path = "/";
-                ps = str + strlen(str);
-            }
-            const char* pp = strchr(str, ':');
-            if (pp && pp < ps) {
-                u.host.assign(str, pp - str);
-                int port = 0;
-                const char* pnum = pp + 1;
-                while (*pnum >= '0' && *pnum <= '9' && pnum < ps) {
-                    port = port * 10 + (*pnum - '0');
-                    pnum++;
-                }
-                u.port = port;
-            }
-            else {
-                u.host.assign(str, ps - str);
-                u.port = (u.proto == "https") ? 443 : 80;
+                u.host = s;
+                u.port = 80;
             }
             return u;
         }
@@ -897,14 +907,14 @@ namespace Plugins {
             if (dp.url == url) return true;
         }
         int trust = 3;
-        if (url.find("https://github.com/mcreatorLoginDanila/Lume/raw/refs/heads/main/plugins/aaOfficial/") == 0 ||
-            url.find("https://github.com/mcreatorLoginDanila/Lume/raw/refs/heads/main/plugins/Community/") == 0) {
+        if (url.find("https://raw.githubusercontent.com/Lume-corp/LumeSources/main/plugins/aaOfficial/") == 0 ||
+            url.find("https://raw.githubusercontent.com/Lume-corp/LumeSources/main/plugins/Community/") == 0) {
             trust = 0;
         }
-        else if (url.find("https://github.com/mcreatorLoginDanila/Lume/raw/refs/heads/main/plugins/aaOfficialUnsafe/") == 0) {
+        else if (url.find("https://raw.githubusercontent.com/Lume-corp/LumeSources/main/plugins/aaOfficialUnsafe/") == 0) {
             trust = 1;
         }
-        else if (url.find("https://github.com/mcreatorLoginDanila/Lume/raw/refs/heads/main/plugins/CommunityUnsafe/") == 0) {
+        else if (url.find("https://raw.githubusercontent.com/Lume-corp/LumeSources/main/plugins/CommunityUnsafe/") == 0) {
             trust = 2;
         }
         bool isUnsafe = (trust > 0);
@@ -2144,10 +2154,13 @@ static int l_gl_load_obj(lua_State* L) {
     while (std::getline(file, line)) {
         if (line.length() >= 2 && line.substr(0, 2) == "v ") {
             float x, y, z;
-            if (sscanf(line.c_str(), "v %f %f %f", &x, &y, &z) == 3) {
-                verts.push_back(x);
-                verts.push_back(y);
-                verts.push_back(z);
+            if (line.length() >= 2 && line[0] == 'v' && line[1] == ' ') {
+                const char* p = line.c_str() + 2;
+                char* end;
+                float x = strtof(p, &end); p = end;
+                float y = strtof(p, &end); p = end;
+                float z = strtof(p, nullptr);
+                verts.push_back(x); verts.push_back(y); verts.push_back(z);
             }
         }
         else if (line.length() >= 2 && line.substr(0, 2) == "f ") {
@@ -2411,15 +2424,7 @@ static int l_wasm_load(lua_State* L) {
     std::string wasmBytes;
     if (fullUrl.substr(0, 7) == "file://") {
         std::string path = fullUrl.substr(7);
-        int len = MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, NULL, 0);
-        std::wstring wpath(len, 0);
-        MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, &wpath[0], len);
-        std::ifstream f(wpath, std::ios::binary);
-        if (f) {
-            std::ostringstream ss;
-            ss << f.rdbuf();
-            wasmBytes = ss.str();
-        }
+        wasmBytes = fastReadFile(path);
     }
     else {
         auto r = Net::fetch(Net::URL::parse(fullUrl));
@@ -2722,26 +2727,10 @@ static std::string g_curUrl;
 std::string resolveUrl(const std::string& url, const std::string& baseUrl) {
     if (url.find("://") != std::string::npos || url.substr(0, 6) == "about:") return url;
     if (url.substr(0, 7) == "file://") return url;
-    if (url.find('/') != std::string::npos && url.find("://") == std::string::npos) {
-        std::string proto = "http";
-        auto pe = baseUrl.find("://");
-        if (pe != std::string::npos) proto = baseUrl.substr(0, pe);
-        if (!url.empty() && url[0] == '/') {
-            if (pe != std::string::npos) {
-                std::string rest = baseUrl.substr(pe + 3);
-                auto slash = rest.find('/');
-                std::string host = (slash != std::string::npos) ? rest.substr(0, slash) : rest;
-                return proto + "://" + host + url;
-            }
-        }
-        return proto + "://" + url;
-    }
-    if (baseUrl.find("://") != std::string::npos) {
-        std::string proto = baseUrl.substr(0, baseUrl.find("://"));
-        std::string rest = baseUrl.substr(baseUrl.find("://") + 3);
-        auto lastSlash = rest.find_last_of("\\/");
-        if (lastSlash != std::string::npos) return proto + "://" + rest.substr(0, lastSlash + 1) + url;
-        return proto + "://" + rest + "/" + url;
+    char out[2048];
+    DWORD len = sizeof(out);
+    if (UrlCombineA(baseUrl.c_str(), url.c_str(), out, &len, 0) == S_OK) {
+        return std::string(out, len);
     }
     return "http://" + url;
 }
@@ -3978,7 +3967,7 @@ void loadContent(const std::string& content, const std::string& url, bool isInte
                 }
                 else {
                     std::string ext = path.substr(dot);
-                    for (char& c : ext) c = tolower(c);
+                    CharLowerBuffA(&ext[0], (DWORD)ext.length());
                     if (ext == ".txt" || ext == ".json" || ext == ".log" || ext == ".cpp" || ext == ".h") {
                         isText = true;
                     }
@@ -4018,15 +4007,12 @@ void loadFile(const std::string& fp) {
     if (path.length() > 5 && path.substr(path.length() - 5) == " !raw") path = path.substr(0, path.length() - 5);
     else if (path.length() > 5 && path.substr(path.length() - 5) == " !htp") path = path.substr(0, path.length() - 5);
     if (path.length() > 7 && path.substr(0, 7) == "file://") path = path.substr(7);
-    std::ifstream f(path);
-    if (!f) {
+    std::string content = fastReadFile(path);
+    if (content.empty()) {
         loadContent(Pages::error("Not found", path), originalUrl, true);
         return;
     }
-    std::stringstream ss;
-    ss << f.rdbuf();
-    f.close();
-    loadContent(ss.str(), originalUrl);
+    loadContent(content, originalUrl);
     setStatus("Loaded: " + path);
 }
 void navigateTo(const std::string& url) {
@@ -4063,9 +4049,7 @@ void navigateTo(const std::string& url) {
     }
     if (u.find("://") == std::string::npos) {
         if (u.length() > 4 && u.substr(u.length() - 4) == ".htp") {
-            std::ifstream t(u);
-            if (t) {
-                t.close();
+            if (GetFileAttributesA(u.c_str()) != INVALID_FILE_ATTRIBUTES) {
                 g_hist.push_back("file://" + urlWithFlags);
                 g_histPos = (int)g_hist.size() - 1;
                 loadFile("file://" + urlWithFlags);
@@ -4463,7 +4447,7 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
         }
         else {
             std::string ext = filename.substr(dot);
-            for (char& c : ext) c = tolower(c);
+            CharLowerBuffA(&ext[0], (DWORD)ext.length());
             if (ext == ".htp" || ext == ".txt" || ext == ".md" || ext == ".json" || ext == ".cpp" || ext == ".h" || ext == ".log" || ext == ".wasm") {
                 loadFile(p);
             }
