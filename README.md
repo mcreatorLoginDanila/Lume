@@ -9,7 +9,7 @@ A light web?-browser on C++ without using chromium\electron
 
 ---
 
-All pages\pluhins has been moved to https://github.com/Lume-corp/LumeSources
+All pages\plugins has been moved to https://github.com/Lume-corp/LumeSources
 
 ---
 
