@@ -2,6 +2,8 @@ A light ~~web~~-browser on C++ ~~without using chromium\electron~~
 
 i hate W3C and Web
 
+0.5 will be a very big update
+
 ### Why Lume?
 * **Insanely Small:** exe size is less than 1 MB.
 * **Zero Bloat:** Uses only **3 MB**(Idle) of RAM (compare that to 500MB+ for a single Chrome tab or even 20mb for explorer ╥_╥).
