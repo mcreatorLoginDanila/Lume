@@ -3975,6 +3975,222 @@ std::string parseMarkdown(const std::string& mdText) {
     htp += "}\n";
     return htp;
 }
+namespace HTML2HTP {
+    std::string decodeHtml(std::string s) {
+        std::vector<std::pair<std::string, std::string>> entities = {
+            {"&nbsp;", " "}, {"&quot;", "\""}, {"&apos;", "'"},
+            {"&lt;", "<"}, {"&gt;", ">"}, {"&amp;", "&"}, {"&#39;", "'"},
+            {"&middot;", "·"}, {"&copy;", "©"}
+        };
+        for (const auto& e : entities) {
+            size_t pos = 0;
+            while ((pos = s.find(e.first, pos)) != std::string::npos) {
+                s.replace(pos, e.first.length(), e.second);
+                pos += e.second.length();
+            }
+        }
+        return s;
+    }
+
+    std::string getAttr(const std::string& tagBody, const std::string& attr) {
+        size_t pos = tagBody.find(attr + "=");
+        if (pos == std::string::npos) return "";
+        pos += attr.length() + 1;
+        if (pos >= tagBody.length()) return "";
+        char quote = tagBody[pos];
+        if (quote != '"' && quote != '\'') return "";
+        size_t end = tagBody.find(quote, pos + 1);
+        if (end == std::string::npos) return "";
+        return tagBody.substr(pos + 1, end - pos - 1);
+    }
+
+    void cleanText(std::string& str) {
+        std::string res;
+        bool inSpace = false;
+        for (char c : str) {
+            if (c == '\r' || c == '\n' || c == '\t' || c == ' ') {
+                if (!inSpace) { res += ' '; inSpace = true; }
+            }
+            else {
+                res += c;
+                inSpace = false;
+            }
+        }
+        if (!res.empty() && res[0] == ' ') res.erase(0, 1);
+        if (!res.empty() && res.back() == ' ') res.pop_back();
+        str = res;
+    }
+
+    // Эти контейнеры (и всё внутри них) мы вырезаем безусловно!
+    bool isGarbageContainer(const std::string& tag) {
+        return tag == "head" || tag == "style" || tag == "script" ||
+            tag == "svg" || tag == "noscript" || tag == "template" ||
+            tag == "nav" || tag == "header" || tag == "footer" ||
+            tag == "dialog" || tag == "form" || tag == "button" || tag == "iframe";
+    }
+
+    std::string convert(const std::string& html) {
+        std::string htp = "@page { title:\"Web View\"; background:\"#0d1117\"; }\n";
+        htp += "@column { padding:20; background:\"#0d1117\"; }\n";
+
+        size_t pos = 0;
+        std::string textBuf = "";
+        bool isBold = false, isItalic = false, isCode = false;
+        std::string href = "";
+        int hLevel = 0;
+        std::string currentAlign = "left";
+
+        auto flushText = [&]() {
+            cleanText(textBuf);
+            if (!textBuf.empty() && textBuf != " ") {
+                textBuf = decodeHtml(textBuf);
+                std::string props = "color:\"#c9d1d9\"; ";
+
+                if (currentAlign != "left") props += "align:\"" + currentAlign + "\"; ";
+
+                if (hLevel > 0) {
+                    int sz = 32 - (hLevel * 3);
+                    if (sz < 16) sz = 16;
+                    props += "size:" + std::to_string(sz) + "; color:\"#ffffff\"; bold:\"true\"; ";
+                }
+                else if (isCode) {
+                    props += "font:\"Consolas\"; color:\"#a5d6ff\"; size:14; ";
+                }
+                else {
+                    props += "size:15; ";
+                    if (isBold) props += "bold:\"true\"; ";
+                    if (isItalic) props += "italic:\"true\"; ";
+                }
+
+                if (!href.empty()) {
+                    htp += "@link { content:\"" + escapeHtp(textBuf) + "\"; url:\"" + escapeHtp(href) + "\"; " + props + "}\n";
+                }
+                else {
+                    htp += "@text { content:\"" + escapeHtp(textBuf) + "\"; " + props + "}\n";
+                }
+            }
+            textBuf.clear();
+            };
+
+        while (pos < html.length()) {
+            size_t tagStart = html.find('<', pos);
+            if (tagStart == std::string::npos) {
+                textBuf += html.substr(pos);
+                break;
+            }
+
+            if (tagStart > pos) {
+                textBuf += html.substr(pos, tagStart - pos);
+            }
+
+            // Пропускаем HTML-комментарии
+            if (html.substr(tagStart, 4) == "<!--") {
+                size_t commentEnd = html.find("-->", tagStart + 4);
+                pos = (commentEnd == std::string::npos) ? html.length() : commentEnd + 3;
+                continue;
+            }
+
+            size_t tagEnd = html.find('>', tagStart);
+            if (tagEnd == std::string::npos) break;
+
+            std::string tagBody = html.substr(tagStart + 1, tagEnd - tagStart - 1);
+            pos = tagEnd + 1;
+
+            // Защита от JS математики (случайные знаки '<')
+            if (tagBody.empty() || (!isalpha((unsigned char)tagBody[0]) && tagBody[0] != '/' && tagBody[0] != '!')) {
+                textBuf += "<" + tagBody + ">";
+                continue;
+            }
+
+            std::string tagName;
+            size_t spacePos = tagBody.find_first_of(" \t\r\n/");
+            if (spacePos != std::string::npos) tagName = tagBody.substr(0, spacePos);
+            else tagName = tagBody;
+
+            for (char& c : tagName) c = tolower(c);
+
+            bool isClose = false;
+            if (!tagName.empty() && tagName[0] == '/') {
+                isClose = true;
+                tagName = tagName.substr(1);
+            }
+
+            // БРОНЕБОЙНЫЙ ПРЫЖОК ЧЕРЕЗ МУСОР (Без счетчиков)
+            if (!isClose && isGarbageContainer(tagName)) {
+                std::string closeTag = "</" + tagName;
+                size_t closePos = html.find(closeTag, tagEnd);
+                if (closePos != std::string::npos) {
+                    pos = html.find('>', closePos);
+                    if (pos != std::string::npos) pos++;
+                    else pos = closePos + closeTag.length() + 1;
+                }
+                else {
+                    pos = tagEnd + 1; // Защита, если закрывающий тег не найден
+                }
+                continue;
+            }
+
+            // Форматирование
+            if (tagName == "b" || tagName == "strong") { flushText(); isBold = !isClose; }
+            else if (tagName == "i" || tagName == "em") { flushText(); isItalic = !isClose; }
+            else if (tagName == "code") { flushText(); isCode = !isClose; }
+            else if (tagName == "a") {
+                flushText();
+                if (isClose) href = "";
+                else href = getAttr(tagBody, "href");
+            }
+            else if (tagName == "center" || getAttr(tagBody, "align") == "center" || getAttr(tagBody, "class").find("text-center") != std::string::npos) {
+                flushText();
+                if (isClose) currentAlign = "left";
+                else currentAlign = "center";
+            }
+            else if (tagName.length() == 2 && tagName[0] == 'h' && isdigit(tagName[1])) {
+                flushText();
+                if (isClose) {
+                    htp += "@divider {color:\"#21262d\"; thickness:1; margin:10;}\n";
+                    hLevel = 0;
+                }
+                else {
+                    htp += "@br {size:15;}\n";
+                    hLevel = tagName[1] - '0';
+                }
+            }
+            else if (tagName == "br") {
+                flushText();
+                htp += "@br {size:10;}\n";
+            }
+            else if (tagName == "hr") {
+                flushText();
+                htp += "@divider {color:\"#30363d\"; thickness:1; margin:15;}\n";
+            }
+            else if (tagName == "p" || tagName == "div" || tagName == "tr" || tagName == "ul") {
+                flushText();
+                if (!isClose) htp += "@br {size:5;}\n";
+            }
+            else if (tagName == "li") {
+                flushText();
+                if (!isClose) htp += "@text { content:\" • \"; color:\"#8b949e\"; bold:\"true\"; }\n";
+            }
+            else if (tagName == "td" || tagName == "th") { // Для таблиц GitHub
+                flushText();
+                if (!isClose) htp += "@text { content:\"  |  \"; color:\"#30363d\"; }\n";
+            }
+            else if (tagName == "img" && !isClose) {
+                flushText();
+                std::string src = getAttr(tagBody, "src");
+                if (!src.empty()) htp += "@image { src:\"" + escapeHtp(src) + "\"; width:48; height:48; border-color:\"#30363d\"; }\n";
+            }
+            else if (tagName == "blockquote") {
+                flushText();
+                if (!isClose) htp += "@block { background:\"#161b22\"; border-radius:6; padding:15; margin:10;\n";
+                else htp += "}\n";
+            }
+        }
+        flushText();
+        htp += "}\n";
+        return htp;
+    }
+}
 void loadContent(const std::string& content, const std::string& url, bool isInternalHtp = false) {
     std::string finalContent = content;
     std::string displayUrl = url;
@@ -4002,10 +4218,17 @@ void loadContent(const std::string& content, const std::string& url, bool isInte
             if (q != std::string::npos) path = path.substr(0, q);
             auto slash = path.find_last_of('/');
             if (slash != std::string::npos) path = path.substr(slash + 1);
-
             if (!path.empty()) {
                 auto dot = path.find_last_of('.');
-                if (dot == std::string::npos) {
+                bool isHtmlSignature = (content.find("<!DOCTYPE html>") != std::string::npos ||
+                    content.find("<!doctype html>") != std::string::npos ||
+                    content.find("<html") != std::string::npos);
+
+                if (isHtmlSignature) {
+                    finalContent = HTML2HTP::convert(content);
+                    isText = false;
+                }
+                else if (dot == std::string::npos) {
                     isText = true;
                 }
                 else {
@@ -4016,6 +4239,10 @@ void loadContent(const std::string& content, const std::string& url, bool isInte
                     }
                     else if (ext == ".md") {
                         finalContent = parseMarkdown(content);
+                        isText = false;
+                    }
+                    else if (ext == ".html" || ext == ".htm") {
+                        finalContent = HTML2HTP::convert(content);
                         isText = false;
                     }
                     else if (ext == ".wasm") {
@@ -4073,6 +4300,26 @@ void navigateTo(const std::string& url) {
     std::string urlWithFlags = u + flags;
     if (g_histPos >= 0 && g_histPos < (int)g_hist.size() - 1)
         g_hist.resize(g_histPos + 1);
+    auto getExt = [](const std::string& p) {
+        auto q = p.find('?');
+        std::string path = (q != std::string::npos) ? p.substr(0, q) : p;
+        auto dot = path.find_last_of('.');
+        if (dot == std::string::npos) return std::string("");
+        std::string e = path.substr(dot);
+        CharLowerBuffA(&e[0], (DWORD)e.length());
+        return e;
+        };
+    std::string fileExt = getExt(u);
+    if (fileExt == ".zip" || fileExt == ".exe" || fileExt == ".dll" ||
+        fileExt == ".gz" || fileExt == ".rar" || fileExt == ".7z") {
+        auto slash = u.find_last_of('/');
+        std::string fname = (slash != std::string::npos) ? u.substr(slash + 1) : "download" + fileExt;
+        auto q = fname.find('?');
+        if (q != std::string::npos) fname = fname.substr(0, q);
+        AsyncNet::startDownload(u, fname);
+        MessageBoxA(g_mainWnd, ("Started downloading: " + fname + "\nCheck 'temp' folder.").c_str(), "Lume Downloader", MB_OK | MB_ICONINFORMATION);
+        return;
+    }
     auto nav = [&](const std::string& c, const std::string& nu) {
         g_hist.push_back(nu);
         if (g_hist.size() > 50) {
