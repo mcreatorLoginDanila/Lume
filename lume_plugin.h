@@ -26,6 +26,15 @@ extern "C" {
         void (*on_mouse_move)(void* page_context, int x, int y);
         void (*on_char)(void* page_context, unsigned int ch);
     } CustomPageHandler;
+    struct CustomProtocolHandler {
+        const char* scheme;
+        void* (*fetch_and_parse)(const char* url);
+        void (*render_page)(void* ctx, HDC dc, int w, int h, int scroll_y);
+        void (*free_page)(void* ctx);
+        int (*get_document_height)(void* ctx);
+        void (*on_mouse_down)(void* ctx, int x, int y, int button);
+        void (*on_mouse_move)(void* ctx, int x, int y);
+    };
     typedef struct LumeHostAPI {
         HWND(*get_main_hwnd)(void);
         void (*invalidate_content)(void);
@@ -57,6 +66,7 @@ extern "C" {
         void (*gl_place)(const char* id, int x, int y, int w, int h, int scroll_y);
         int (*wasm_load)(const char* bytes, size_t len);
         void (*register_on_reset)(void (*callback)());
+        void (*register_protocol_engine)(CustomProtocolHandler handler);
     } LumeHostAPI;
 #ifdef BUILDING_PLUGIN
 #define LUME_PLUGIN_EXPORT __declspec(dllexport)
