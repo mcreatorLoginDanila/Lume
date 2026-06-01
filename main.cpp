@@ -6,15 +6,7 @@
 #include <commctrl.h>
 #include <winhttp.h>
 #include <shellapi.h>
-#include <string>
-#include <vector>
-#include <map>
-#include <functional>
-#include <algorithm>
-#include <memory>
 #include <cmath>
-#include <thread>
-#include <mutex>
 extern "C" {
 #include "lib/lua.h"
 #include "lib/lauxlib.h"
@@ -27,6 +19,11 @@ extern "C" {
 }
 #include "lume_plugin.h"
 #include <objidl.h>
+#include <algorithm> // error C3861: min \ max
+namespace Gdiplus {
+    using std::min;
+    using std::max;
+}
 #include <gdiplus.h>
 #pragma comment(lib, "gdiplus.lib")
 #pragma comment(lib, "winhttp.lib")
@@ -41,69 +38,684 @@ extern "C" {
 #include <shlwapi.h>
 #include <GL/gl.h>
 #include <GL/glu.h>
-std::wstring utf8_to_wstring(const std::string& str) {
+template<typename T>
+class LumeVector {
+private:
+    T* m_data = nullptr;
+    size_t m_size = 0;
+    size_t m_capacity = 0;
+public:
+    using iterator = T*;
+    using const_iterator = const T*;
+    LumeVector() = default;
+    explicit LumeVector(size_t count) {resize(count);}
+    LumeVector(size_t count, const T& val) {
+        reserve(count);
+        for (size_t i = 0; i < count; ++i) new (&m_data[i]) T(val);
+        m_size = count;
+    }
+    LumeVector(const LumeVector& other) {
+        reserve(other.m_size);
+        for (size_t i = 0; i < other.m_size; ++i) new (&m_data[i]) T(other.m_data[i]);
+        m_size = other.m_size;
+    }
+    LumeVector(LumeVector&& other) noexcept : m_data(other.m_data), m_size(other.m_size), m_capacity(other.m_capacity) {
+        other.m_data = nullptr;
+        other.m_size = 0;
+        other.m_capacity = 0;
+    }
+    LumeVector& operator=(const LumeVector& other) {
+        if (this != &other) {
+            clear(); reserve(other.m_size);
+            for (size_t i = 0;i < other.m_size; ++i) new (&m_data[i]) T(other.m_data[i]);
+            m_size = other.m_size;
+        }
+        return *this;
+    }
+    LumeVector& operator=(LumeVector&& other) noexcept {
+        if (this != &other) {
+            clear();
+            if (m_data) HeapFree(GetProcessHeap(), 0, m_data);
+            m_data = other.m_data;
+            m_size = other.m_size;
+            m_capacity = other.m_capacity;
+            other.m_data = nullptr;
+            other.m_size = 0;
+            other.m_capacity = 0;
+        }
+        return *this;
+    }
+    ~LumeVector() {
+        clear();
+        if (m_data) HeapFree(GetProcessHeap(), 0, m_data);
+    }
+    void reserve(size_t newCap) {
+        if (newCap <= m_capacity) return;
+        HANDLE hHeap = GetProcessHeap();
+        T* newData = (T*)HeapAlloc(hHeap, 0, newCap * sizeof(T));
+        if (m_data) {
+            for (size_t i = 0; i < m_size; ++i) {
+                new (&newData[i]) T(static_cast<T&&>(m_data[i]));
+                m_data[i].~T();
+            }
+            HeapFree(hHeap, 0, m_data);
+        }
+        m_data = newData;
+        m_capacity = newCap;
+    }
+    void resize(size_t newSize) {
+        if (newSize > m_capacity) reserve(newSize);
+        if (newSize > m_size) {
+            for (size_t i = m_size; i < newSize; ++i) new (&m_data[i]) T();
+        }
+        else if (newSize < m_size) {
+            for (size_t i = newSize; i < m_size; ++i) m_data[i].~T();
+        }
+        m_size = newSize;
+    }
+    void push_back(const T& val) {
+        if (m_size == m_capacity) reserve(m_capacity == 0 ? 8 : m_capacity * 2);
+        new (&m_data[m_size]) T(val);
+        m_size++;
+    }
+    void push_back(T&& val) {
+        if (m_size == m_capacity) reserve(m_capacity == 0 ? 8 : m_capacity * 2);
+        new (&m_data[m_size]) T(static_cast<T&&>(val));
+        m_size++;
+    }
+    iterator erase(iterator it) {
+        if (it >= begin() && it < end()) {
+            it->~T();
+            size_t idx = it - begin();
+            for (size_t i = idx; i < m_size - 1; ++i) {
+                new (&m_data[i]) T(static_cast<T&&>(m_data[i + 1]));
+                m_data[i + 1].~T();
+            }
+            m_size--;
+            return begin() + idx;
+        }
+        return end();
+    }
+    void clear() {for (size_t i = 0; i < m_size; ++i) m_data[i].~T(); m_size = 0;}
+    size_t size() const {return m_size;}
+    bool empty() const {return m_size == 0;}
+    size_t capacity() const {return m_capacity;}
+    T* data() {return m_data;}
+    const T* data() const {return m_data;}
+    T& operator[](size_t idx) {return m_data[idx];}
+    const T& operator[](size_t idx) const {return m_data[idx];}
+    T& front() {return m_data[0];}
+    T& back() {return m_data[m_size - 1];}
+    iterator begin() {return m_data;}
+    iterator end() {return m_data + m_size;}
+    const_iterator begin() const {return m_data;}
+    const_iterator end() const {return m_data + m_size;}
+};
+template<typename T1, typename T2>
+struct LumePair {
+    T1 first;
+    T2 second;
+    LumePair() = default;
+    LumePair(const T1& a, const T2& b) : first(a), second(b) {}
+};
+template<typename K, typename V>
+class LumeMap {
+private:
+    LumeVector<LumePair<K, V>> m_data;
+public:
+    using iterator = LumePair<K, V>*;
+    LumeMap() = default;
+    V& operator[](const K& key) {
+        for (auto& p : m_data) if (p.first == key) return p.second;
+        m_data.push_back(LumePair<K, V>(key, V()));
+        return m_data.back().second;
+    }
+    iterator find(const K& key) {
+        for (auto it = m_data.begin(); it != m_data.end(); ++it) {
+            if (it->first == key) return it;
+        }
+        return m_data.end();
+    }
+    void erase(iterator it) {
+        if (it >= m_data.begin() && it < m_data.end()) m_data.erase(it);
+    }
+    void erase(const K& key) {
+        auto it = find(key);
+        if (it != end()) m_data.erase(it);
+    }
+    void clear() { m_data.clear(); }
+    iterator begin() { return m_data.begin(); }
+    iterator end() { return m_data.end(); }
+};
+template<typename Iter, typename Compare>
+void LumeStableSort(Iter first, Iter last, Compare comp) {
+    if (first == last) return;
+    for (Iter i = first + 1; i != last; ++i) {
+        auto val = *i;
+        Iter j = i;
+        while (j > first && comp(val, *(j - 1))) {
+            *j = *(j - 1);
+            --j;
+        }
+        *j = val;
+    }
+}
+template<typename T>
+class LumeBasicString {
+private:
+    T* m_data = nullptr;
+    size_t m_size = 0;
+    size_t m_capacity = 0;
+    void grow(size_t minCap) {
+        size_t newCap = m_capacity == 0 ? 15 : m_capacity * 2;
+        if (newCap < minCap) newCap = minCap;
+        HANDLE hHeap = GetProcessHeap();
+        if (!m_data) m_data = (T*)HeapAlloc(hHeap, 0, (newCap + 1) * sizeof(T));
+        else m_data = (T*)HeapReAlloc(hHeap, 0, m_data, (newCap + 1) * sizeof(T));
+        m_capacity = newCap;
+        m_data[m_size] = 0;
+    }
+public:
+    static const size_t npos = (size_t)-1;
+    using iterator = T*;
+    using const_iterator = const T*;
+    LumeBasicString() { grow(15); }
+    LumeBasicString(const T* str) {
+        size_t len = 0; while (str && str[len]) len++;
+        if (len > 0) {
+            grow(len);
+            append(str, len);
+        }
+        else grow(15);
+    }
+    LumeBasicString(const T* str, size_t len) {
+        if (len > 0) {
+            grow(len);
+            append(str, len);
+        }
+        else grow(15);
+    }
+    LumeBasicString(size_t count, T ch) {
+        grow(count);
+        for (size_t i = 0; i < count; ++i) m_data[i] = ch;
+        m_size = count;
+        m_data[m_size] = 0;
+    }
+    LumeBasicString(const LumeBasicString& o) {
+        if (o.m_size > 0) {
+            grow(o.m_size);
+            append(o.m_data, o.m_size);
+        }
+        else grow(15);
+    }
+    LumeBasicString(LumeBasicString&& o) noexcept : m_data(o.m_data), m_size(o.m_size), m_capacity(o.m_capacity) {
+        o.m_data = nullptr; o.m_size = 0; o.m_capacity = 0;
+    }
+    ~LumeBasicString() {
+        if (m_data) HeapFree(GetProcessHeap(), 0, m_data);
+    }
+    LumeBasicString& operator=(const LumeBasicString& o) {
+        if (this != &o) {
+            clear();
+            append(o.m_data, o.m_size);
+        }
+        return *this;
+    }
+    LumeBasicString& operator=(LumeBasicString&& o) noexcept {
+        if (this != &o) {
+            if (m_data) HeapFree(GetProcessHeap(), 0, m_data);
+            m_data = o.m_data; m_size = o.m_size; m_capacity = o.m_capacity;
+            o.m_data = nullptr; o.m_size = 0; o.m_capacity = 0;
+        }
+        return *this;
+    }
+    LumeBasicString& operator=(const T* str) {
+        clear();
+        size_t len = 0; while (str && str[len]) len++;
+        if (len > 0) append(str, len);
+        return *this;
+    }
+    void append(const T* str, size_t len) {
+        if (len == 0) return;
+        if (m_size + len > m_capacity) grow(m_size + len);
+        for (size_t i = 0; i < len; ++i) m_data[m_size + i] = str[i];
+        m_size += len;
+        m_data[m_size] = 0;
+    }
+    LumeBasicString& operator+=(const LumeBasicString& o) { append(o.m_data, o.size()); return *this; }
+    LumeBasicString& operator+=(const T* str) {
+        size_t len = 0; while (str && str[len]) len++;
+        append(str, len); return *this;
+    }
+    LumeBasicString& operator+=(T ch) {append(&ch, 1); return *this;}
+    friend LumeBasicString operator+(const LumeBasicString& lhs, const LumeBasicString& rhs) {
+        LumeBasicString res = lhs; res += rhs; return res;
+    }
+    friend LumeBasicString operator+(const LumeBasicString& lhs, const T* rhs) {
+        LumeBasicString res = lhs;
+        res += rhs;
+        return res;
+    }
+    friend LumeBasicString operator+(const T* lhs, const LumeBasicString& rhs) {
+        LumeBasicString res(lhs);
+        res += rhs;
+        return res;
+    }
+    friend LumeBasicString operator+(const LumeBasicString& lhs, T rhs) {
+        LumeBasicString res = lhs;
+        res += rhs;
+        return res;
+    }
+    bool operator==(const LumeBasicString& o) const {
+        if (m_size != o.m_size) return false;
+        if (!m_data || !o.m_data) return m_size == o.m_size;
+        for (size_t i = 0; i < m_size; ++i) if (m_data[i] != o.m_data[i]) return false;
+        return true;
+    }
+    bool operator==(const T* str) const {
+        size_t i = 0;
+        if (!m_data) return str == nullptr || str[0] == 0;
+        while (i < m_size && str[i]) {
+            if (m_data[i] != str[i]) return false;
+            i++;
+        }
+        return i == m_size && str[i] == 0;
+    }
+    bool operator!=(const LumeBasicString& o) const {return !(*this == o);}
+    bool operator!=(const T* str) const {return !(*this == str);}
+    friend bool operator==(const T* lhs, const LumeBasicString& rhs) {return rhs == lhs;}
+    friend bool operator!=(const T* lhs, const LumeBasicString& rhs) {return rhs != lhs;}
+    bool operator<(const LumeBasicString& o) const {
+        size_t minLen = m_size < o.m_size ? m_size : o.m_size;
+        for (size_t i = 0; i < minLen; ++i) {
+            if (m_data[i] < o.m_data[i]) return true;
+            if (m_data[i] > o.m_data[i]) return false;
+        }
+        return m_size < o.m_size;
+    }
+    const T* c_str() const {return m_data ? m_data : (const T*)"\0\0";}
+    T* data() {return m_data;}
+    const T* data() const {return m_data;}
+    size_t size() const {return m_size;}
+    size_t length() const {return m_size;}
+    bool empty() const {return m_size == 0;}
+    iterator begin() {return m_data;}
+    iterator end() {return m_data + m_size;}
+    const_iterator begin() const {return m_data;}
+    const_iterator end() const {return m_data + m_size;}
+    size_t rfind(const T* str, size_t pos = npos) const {
+        size_t len = 0; while (str && str[len]) len++;
+        if (len == 0) return pos < m_size ? pos : m_size;
+        if (m_size < len || !m_data) return npos;
+        size_t start = (pos < m_size - len) ? pos : m_size - len;
+        for (size_t i = start + 1; i > 0; --i) {
+            bool match = true;
+            for (size_t j = 0; j < len; ++j) {
+                if (m_data[i - 1 + j] != str[j]) {
+                    match = false;
+                    break;
+                }
+            }
+            if (match) return i - 1;
+        }
+        return npos;
+    }
+    size_t find_last_of(T ch) const {
+        if (!m_data) return npos;
+        for (size_t i = m_size; i > 0; --i) if (m_data[i - 1] == ch) return i - 1;
+        return npos;
+    }
+    iterator erase(iterator it) {
+        if (m_data && it >= m_data && it < m_data + m_size) {
+            size_t pos = it - m_data;
+            erase(pos, 1);
+            return m_data + pos;
+        }
+        return end();
+    }
+    void clear() { m_size = 0; if (m_data) m_data[0] = 0; }
+    void resize(size_t n) {
+        if (n > m_capacity) grow(n);
+        if (n > m_size && m_data) {for (size_t i = m_size; i < n; ++i) m_data[i] = 0;}
+        m_size = n;
+        if (m_data) m_data[m_size] = 0;
+    }
+    void reserve(size_t n) {if (n > m_capacity) grow(n);}
+    T& operator[](size_t i) {return m_data[i];}
+    const T& operator[](size_t i) const {return m_data[i];}
+    T& front() {return m_data[0];}
+    T& back() {return m_data[m_size - 1];}
+    void push_back(T ch) {append(&ch, 1);}
+    void pop_back() {
+        if (m_size > 0 && m_data) {
+            m_size--;
+            m_data[m_size] = 0;
+        }
+    }
+    LumeBasicString substr(size_t pos = 0, size_t count = npos) const {
+        if (pos >= m_size || !m_data) return LumeBasicString();
+        size_t len = m_size - pos;
+        if (count < len) len = count;
+        return LumeBasicString(m_data + pos, len);
+    }
+    size_t find(T ch, size_t pos = 0) const {
+        if (!m_data) return npos;
+        for (size_t i = pos; i < m_size; ++i) if (m_data[i] == ch) return i;
+        return npos;
+    }
+    size_t find(const LumeBasicString& str, size_t pos = 0) const {return find(str.c_str(), pos);}
+    size_t find(const T* str, size_t pos = 0) const {
+        size_t len = 0; while (str && str[len]) len++;
+        if (len == 0) return pos <= m_size ? pos : npos;
+        if (pos + len > m_size || !m_data) return npos;
+        for (size_t i = pos; i <= m_size - len; ++i) {
+            bool match = true;
+            for (size_t j = 0; j < len; ++j) {
+                if (m_data[i + j] != str[j]) { match = false; break; }
+            }
+            if (match) return i;
+        }
+        return npos;
+    }
+    size_t find_last_of(const T* chars) const {
+        if (!m_data || !chars) return npos;
+        for (size_t i = m_size; i > 0; --i) {
+            size_t j = 0;
+            while (chars[j]) {
+                if (m_data[i - 1] == chars[j]) return i - 1;
+                j++;
+            }
+        }
+        return npos;
+    }
+    void insert(size_t pos, const LumeBasicString& str) {
+        if (pos > m_size) pos = m_size;
+        size_t len = str.size();
+        if (len == 0) return;
+        if (m_size + len > m_capacity) grow(m_size + len);
+        if (!m_data) return;
+        for (size_t i = m_size; i > pos; --i) m_data[i + len - 1] = m_data[i - 1];
+        for (size_t i = 0; i < len; ++i) m_data[pos + i] = str[i];
+        m_size += len;
+        m_data[m_size] = 0;
+    }
+    void insert(size_t pos, const T* str) {
+        size_t len = 0; while (str && str[len]) len++;
+        if (len > 0) insert(pos, LumeBasicString(str, len));
+    }
+    void erase(size_t pos = 0, size_t count = npos) {
+        if (pos >= m_size || !m_data) return;
+        if (count > m_size - pos) count = m_size - pos;
+        for (size_t i = pos + count; i < m_size; ++i) m_data[i - count] = m_data[i];
+        m_size -= count;
+        m_data[m_size] = 0;
+    }
+    void remove_char(T ch) {
+        if (!m_data) return;
+        size_t write_idx = 0;
+        for (size_t i = 0; i < m_size; ++i) {
+            if (m_data[i] != ch) m_data[write_idx++] = m_data[i];
+        }
+        m_size = write_idx;
+        m_data[m_size] = 0;
+    }
+};
+struct LumeMutex {
+    SRWLOCK lock = SRWLOCK_INIT;
+    void lock_mutex() { AcquireSRWLockExclusive(&lock); }
+    void unlock_mutex() { ReleaseSRWLockExclusive(&lock); }
+};
+template<typename Mutex>
+struct LumeLockGuard {
+    Mutex& m;
+    LumeLockGuard(Mutex& mut) : m(mut) { m.lock_mutex(); }
+    ~LumeLockGuard() { m.unlock_mutex(); }
+};
+template<typename T>
+class LumeSharedPtr {
+private:
+    struct ControlBlock {
+        T* ptr;
+        volatile LONG ref_count;
+    };
+    ControlBlock* cb;
+    void add_ref() {
+        if (cb) InterlockedIncrement(&cb->ref_count);
+    }
+    void release() {
+        if (cb) {
+            if (InterlockedDecrement(&cb->ref_count) == 0) {
+                if (cb->ptr) delete cb->ptr;
+                HeapFree(GetProcessHeap(), 0, cb);
+            }
+        }
+    }
+public:
+    LumeSharedPtr() : cb(nullptr) {}
+    LumeSharedPtr(std::nullptr_t) : cb(nullptr) {}
+    explicit LumeSharedPtr(T* p) {
+        if (p) {
+            cb = (ControlBlock*)HeapAlloc(GetProcessHeap(), 0, sizeof(ControlBlock));
+            cb->ptr = p;
+            cb->ref_count = 1;
+        }
+        else {
+            cb = nullptr;
+        }
+    }
+    LumeSharedPtr(const LumeSharedPtr& o) : cb(o.cb) {add_ref();}
+    LumeSharedPtr(LumeSharedPtr&& o) noexcept : cb(o.cb) {o.cb = nullptr;}
+    ~LumeSharedPtr() {release();}
+    LumeSharedPtr& operator=(const LumeSharedPtr& o) {
+        if (this != &o) { release(); cb = o.cb; add_ref(); }
+        return *this;
+    }
+    LumeSharedPtr& operator=(LumeSharedPtr&& o) noexcept {
+        if (this != &o) {release(); cb = o.cb; o.cb = nullptr;}
+        return *this;
+    }
+    LumeSharedPtr& operator=(std::nullptr_t) {
+        reset();
+        return *this;
+    }
+    T* get() const {return cb ? cb->ptr : nullptr;}
+    T* operator->() const {return get();}
+    T& operator*() const {return *get();}
+    explicit operator bool() const {return get() != nullptr;}
+    void reset() {release(); cb = nullptr;}
+};
+template<typename T, typename... Args>
+LumeSharedPtr<T> lume_make_shared(Args&&... args) {
+    T* ptr = new T(static_cast<Args&&>(args)...);
+    return LumeSharedPtr<T>(ptr);
+}
+static volatile LONG g_isShuttingDown = 0;
+class LumeThread {
+private:
+    HANDLE m_handle = nullptr;
+    template <typename F>
+    struct ThreadData {F func;};
+    template <typename F>
+    static DWORD WINAPI ThreadProc(LPVOID lpParam) {
+        auto* data = static_cast<ThreadData<F>*>(lpParam);
+        if (InterlockedCompareExchange(&g_isShuttingDown, 0, 0) == 0) {
+            data->func();
+        }
+        data->~ThreadData();
+        HeapFree(GetProcessHeap(), 0, data);
+        return 0;
+    }
+public:
+    LumeThread() = default;
+    template <typename F>
+    explicit LumeThread(F&& f) {
+        HANDLE hHeap = GetProcessHeap();
+        auto* data = (ThreadData<F>*)HeapAlloc(hHeap, 0, sizeof(ThreadData<F>));
+        if (data) {
+            new (data) ThreadData<F>{ static_cast<F&&>(f) };
+            m_handle = CreateThread(nullptr, 0, ThreadProc<F>, data, 0, nullptr);
+            if (!m_handle) {
+                data->~ThreadData();
+                HeapFree(hHeap, 0, data);
+            }
+        }
+    }
+    ~LumeThread() { detach(); }
+    LumeThread(const LumeThread&) = delete;
+    LumeThread& operator=(const LumeThread&) = delete;
+    LumeThread(LumeThread&& other) noexcept : m_handle(other.m_handle) {
+        other.m_handle = nullptr;
+    }
+    LumeThread& operator=(LumeThread&& other) noexcept {
+        if (this != &other) {
+            detach();
+            m_handle = other.m_handle;
+            other.m_handle = nullptr;
+        }
+        return *this;
+    }
+    bool joinable() const {return m_handle != nullptr;}
+    void join() {
+        if (m_handle) {
+            WaitForSingleObject(m_handle, INFINITE);
+            CloseHandle(m_handle);
+            m_handle = nullptr;
+        }
+    }
+    void detach() {
+        if (m_handle) {
+            CloseHandle(m_handle);
+            m_handle = nullptr;
+        }
+    }
+    template <typename F>
+    static void RunAsync(F&& f) {
+        HANDLE hHeap = GetProcessHeap();
+        auto* data = (ThreadData<F>*)HeapAlloc(hHeap, 0, sizeof(ThreadData<F>));
+        if (data) {
+            new (data) ThreadData<F>{static_cast<F&&>(f)};
+            if (!QueueUserWorkItem(ThreadProc<F>, data, WT_EXECUTEDEFAULT)) {
+                data->~ThreadData();
+                HeapFree(hHeap, 0, data);
+            }
+        }
+    }
+};
+template<typename T> T lume_min(T a, T b) {return a < b ? a : b;}
+template<typename T> T lume_max(T a, T b) {return a > b ? a : b;}
+class LumeAction {
+private:
+    struct Concept {
+        virtual ~Concept() {}
+        virtual void invoke() = 0;
+        virtual Concept* clone() const = 0;
+    };
+    template<typename F>
+    struct Model : Concept {
+        F func;
+        Model(F f) : func(static_cast<F&&>(f)) {}
+        void invoke() override { func(); }
+        Concept* clone() const override { return new Model<F>(func); }
+    };
+    Concept* ptr = nullptr;
+public:
+    LumeAction() = default;
+    template<typename F>
+    LumeAction(F f) { ptr = new Model<F>(static_cast<F&&>(f)); }
+    LumeAction(const LumeAction& o) { if (o.ptr) ptr = o.ptr->clone(); }
+    LumeAction(LumeAction&& o) noexcept : ptr(o.ptr) { o.ptr = nullptr; }
+    LumeAction& operator=(const LumeAction& o) {
+        if (this != &o) { if (ptr) delete ptr; ptr = o.ptr ? o.ptr->clone() : nullptr; }
+        return *this;
+    }
+    LumeAction& operator=(LumeAction&& o) noexcept {
+        if (this != &o) { if (ptr) delete ptr; ptr = o.ptr; o.ptr = nullptr; }
+        return *this;
+    }
+    ~LumeAction() { if (ptr) delete ptr; }
+    void operator()() const { if (ptr) ptr->invoke(); }
+    explicit operator bool() const { return ptr != nullptr; }
+};
+using LumeString = LumeBasicString<char>;
+using LumeWString = LumeBasicString<wchar_t>;
+inline LumeString lume_to_string(int val) {
+    char buf[32];
+    wsprintfA(buf, "%d", val);
+    return LumeString(buf);
+}
+inline LumeString lume_to_string(unsigned int val) {
+    char buf[32];
+    wsprintfA(buf, "%u", val);
+    return LumeString(buf);
+}
+inline LumeString lume_to_string(uint64_t val) {
+    char buf[64];
+    wsprintfA(buf, "%I64u", val);
+    return LumeString(buf);
+}
+LumeWString utf8_to_wstring(const LumeString& str) {
     if (str.empty()) return L"";
     if (str.size() < 1024) {
         wchar_t buf[1024];
-        int len = MultiByteToWideChar(CP_UTF8, 0, str.data(), (int)str.size(), buf, 1024);
-        return std::wstring(buf, len);
+        int len = MultiByteToWideChar(CP_UTF8, 0, str.data(), (int)str.size(), buf, 1023);
+        buf[len] = L'\0';
+        return LumeWString(buf, len);
     }
     int size_needed = MultiByteToWideChar(CP_UTF8, 0, str.data(), (int)str.size(), NULL, 0);
-    std::wstring wstrTo(size_needed, 0);
+    LumeWString wstrTo(size_needed, 0);
     MultiByteToWideChar(CP_UTF8, 0, str.data(), (int)str.size(), &wstrTo[0], size_needed);
     return wstrTo;
 }
-std::string wstring_to_utf8(const std::wstring& wstr) {
+LumeString wstring_to_utf8(const LumeWString& wstr) {
     if (wstr.empty()) return "";
     int size = WideCharToMultiByte(CP_UTF8, 0, &wstr[0], (int)wstr.size(), NULL, 0, NULL, NULL);
-    std::string res(size, 0);
+    LumeString res(size, 0);
     WideCharToMultiByte(CP_UTF8, 0, &wstr[0], (int)wstr.size(), &res[0], size, NULL, NULL);
     return res;
 }
-std::string fastReadFile(const std::string& path) {
-    int len = MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, NULL, 0);
-    std::wstring wpath(len, 0);
-    MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, &wpath[0], len);
-    HANDLE hFile = CreateFileW(wpath.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+LumeString fastReadFile(const LumeString& path) {
+    wchar_t wpath[MAX_PATH];
+    MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, wpath, MAX_PATH);
+    HANDLE hFile = CreateFileW(wpath, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
     if (hFile == INVALID_HANDLE_VALUE) return "";
     DWORD size = GetFileSize(hFile, NULL);
     if (size == 0 || size == INVALID_FILE_SIZE) { CloseHandle(hFile); return ""; }
-    std::string res;
+    LumeString res;
     res.resize(size);
     DWORD bytesRead = 0;
-    ReadFile(hFile, &res[0], size, &bytesRead, NULL);
+    ReadFile(hFile, res.data(), size, &bytesRead, NULL);
     CloseHandle(hFile);
     return res;
 }
 int DrawTextU(HDC hdc, const char* str, int len, RECT* lprc, UINT format) {
-    thread_local wchar_t buf[4096];
+    wchar_t buf[4096];
     int wlen = MultiByteToWideChar(CP_UTF8, 0, str, len, buf, 4095);
     buf[wlen] = L'\0';
     return DrawTextW(hdc, buf, wlen, lprc, format);
 }
 BOOL GetTextExtentPoint32U(HDC hdc, const char* str, int len, LPSIZE psizl) {
-    thread_local wchar_t buf[4096];
+    wchar_t buf[4096];
     int wlen = MultiByteToWideChar(CP_UTF8, 0, str, len, buf, 4095);
     buf[wlen] = L'\0';
     return GetTextExtentPoint32W(hdc, buf, wlen, psizl);
 }
 BOOL TextOutU(HDC hdc, int x, int y, const char* str, int len) {
-    thread_local wchar_t buf[4096];
+    wchar_t buf[4096];
     int wlen = MultiByteToWideChar(CP_UTF8, 0, str, len, buf, 4095);
     buf[wlen] = L'\0';
     return TextOutW(hdc, x, y, buf, wlen);
 }
 BOOL SetWindowTextU(HWND hwnd, const char* str) {
-    thread_local wchar_t buf[4096];
+    wchar_t buf[4096];
     int wlen = MultiByteToWideChar(CP_UTF8, 0, str, -1, buf, 4095);
     if (wlen == 0) {wlen = 4095;}
     buf[wlen] = L'\0';
     return SetWindowTextW(hwnd, buf);
 }
 int MessageBoxU(HWND hWnd, const char* text, const char* caption, UINT type) {
-    std::wstring wtext = utf8_to_wstring(text ? text : "");
-    std::wstring wcap = utf8_to_wstring(caption ? caption : "");
-    return MessageBoxW(hWnd, wtext.c_str(), wcap.c_str(), type);
+    wchar_t wtext[2048]; MultiByteToWideChar(CP_UTF8, 0, text ? text : "", -1, wtext, 2048);
+    wchar_t wcap[512]; MultiByteToWideChar(CP_UTF8, 0, caption ? caption : "", -1, wcap, 512);
+    return MessageBoxW(hWnd, wtext, wcap, type);
 }
 typedef HGLRC(WINAPI* PFN_wglCreateContext)(HDC);
 typedef BOOL(WINAPI* PFN_wglMakeCurrent)(HDC, HGLRC);
@@ -132,7 +744,7 @@ bool load() {
     g_loaded = true;
     char sysDir[MAX_PATH] = {};
     GetSystemDirectoryA(sysDir, MAX_PATH);
-    std::string glPath = std::string(sysDir) + "\\opengl32.dll";
+    LumeString glPath = LumeString(sysDir) + "\\opengl32.dll";
     hGL = LoadLibraryA(glPath.c_str());
     if (!hGL) return false;
     pfn_wglCreateContext = (PFN_wglCreateContext)GetProcAddress(hGL, "wglCreateContext");
@@ -152,13 +764,14 @@ void unload() {
     }
     g_loaded = false;
 }
-bool available() { return hGL != nullptr; }
+bool available() {return hGL != nullptr;}
 }
-void navigateTo(const std::string& url);
+void navigateTo(const LumeString& url);
 void invalidateContent();
 HWND g_mainWnd = nullptr;
 HWND g_addressBar = nullptr;
 HWND g_statusBar = nullptr;
+HWND g_menuBtn = nullptr;
 const int TOOLBAR_H = 40;
 const int STATUS_H = 24;
 #define ID_ADDR 1001
@@ -166,22 +779,35 @@ const int STATUS_H = 24;
 #define ID_BACK 1003
 #define ID_FWD  1004
 #define ID_REF  1005
+#define ID_MENU_BTN 1006
+#define IDM_GPU_TOGGLE 1100
+#define IDM_LUA_HTTP 1101
+#define IDM_LUA_MOUSE 1102
+#define IDM_HIST_START 2000
+#define IDM_PLUGIN_START 3000
 #define WM_UPDATE_CONTENT (WM_USER + 1)
 #define WM_PAGE_LOADED (WM_USER + 2)
+#define WM_NAVIGATE_DEFERRED (WM_USER + 3)
+extern bool g_opt_gpu;
+bool g_opt_gpu = true;
+bool g_opt_lua_http = true;
+bool g_opt_lua_mouse = true;
+bool g_opt_plugins = true;
 ULONG_PTR g_gdiplusToken;
 static HDC g_backDC = nullptr;
 static HBITMAP g_backBmp = nullptr;
 static HBITMAP g_backOld = nullptr;
 static int g_backW = 0, g_backH = 0;
 static bool g_contentDirty = true;
+static bool g_domDirty = true;
 static bool g_mouseCaptured = false;
 static bool g_ignoreWarpMouse = false;
-static std::string g_capturedCanvasId;
+static char g_capturedCanvasId[128] = { 0 };
 static int g_capturedCanvasX = 0, g_capturedCanvasY = 0;
 static int g_capturedCanvasW = 0, g_capturedCanvasH = 0;
 static int g_mouseDeltaX = 0, g_mouseDeltaY = 0;
 static bool g_fullscreenCanvas = false;
-static std::string g_fullscreenCanvasId;
+static char g_fullscreenCanvasId[128] = { 0 };
 static RECT g_preFullscreenRect = {};
 static LONG g_preFullscreenStyle = 0;
 void ensureBackbuffer(HDC hdc, int w, int h) {
@@ -215,9 +841,18 @@ void cleanupBackbuffer() {
     g_backOld = nullptr;
     g_backW = g_backH = 0;
 }
+void invalidateDOM() {
+    if (!g_mainWnd) return;
+    g_domDirty = true;
+    g_contentDirty = true;
+    RECT cr; GetClientRect(g_mainWnd, &cr);
+    RECT contentRect = {0, TOOLBAR_H, cr.right, cr.bottom - STATUS_H};
+    InvalidateRect(g_mainWnd, &contentRect, FALSE);
+}
 void invalidateContent() {
     if (!g_mainWnd) return;
     g_contentDirty = true;
+    g_domDirty = true;
     RECT cr;
     GetClientRect(g_mainWnd, &cr);
     RECT contentRect = { 0, TOOLBAR_H, cr.right, cr.bottom - STATUS_H };
@@ -233,42 +868,42 @@ void invalidateGLCanvasRect(int x, int y, int w, int h) {
     RECT r = { x, TOOLBAR_H + y, x + w, TOOLBAR_H + y + h };
     InvalidateRect(g_mainWnd, &r, FALSE);
 }
-void setStatus(const std::string& t) {
+void setStatus(const LumeString& t) {
     if (g_statusBar) SetWindowTextU(g_statusBar, t.c_str());
 }
-void captureCanvasMouse(const std::string& canvasId);
+void captureCanvasMouse(const LumeString& canvasId);
 void releaseMouse() {
     if (g_mouseCaptured) {
         g_mouseCaptured = false;
         g_ignoreWarpMouse = false;
-        g_capturedCanvasId.clear();
+        g_capturedCanvasId[0] = '\0';
         ReleaseCapture();
         ShowCursor(TRUE);
         ClipCursor(nullptr);
     }
 }
 namespace Script {
-    void fireCanvasClick(const std::string& canvasId, int x, int y, int button);
+    void fireCanvasClick(const LumeString& canvasId, int x, int y, int button);
 }
 namespace GLCanvas {
     struct GLView;
-    std::shared_ptr<GLView> find(const std::string& id);
+    LumeSharedPtr<GLView> find(const LumeString& id);
     bool registerClass(HINSTANCE hInst);
     void beginLayoutPass();
     void endLayoutPass();
-    void place(const std::string& id, int x, int y, int w, int h, int scrollY = 0, int toolbarH = 0);
-    bool beginRender(const std::string& id, int w, int h);
-    void endRender(const std::string& id);
-    void refresh(const std::string& id);
-    void moveToFullscreen(const std::string& id);
-    void restoreFromFullscreen(const std::string& id);
+    void place(const LumeString& id, int x, int y, int w, int h, int scrollY = 0, int toolbarH = 0);
+    bool beginRender(const LumeString& id, int w, int h);
+    void endRender(const LumeString& id);
+    void refresh(const LumeString& id);
+    void moveToFullscreen(const LumeString& id);
+    void restoreFromFullscreen(const LumeString& id);
     void destroyAll();
 }
 void exitFullscreenCanvas() {
     if (!g_fullscreenCanvas) return;
-    std::string prevId = g_fullscreenCanvasId;
+    LumeString prevId = g_fullscreenCanvasId;
     g_fullscreenCanvas = false;
-    g_fullscreenCanvasId.clear();
+    g_fullscreenCanvasId[0] = '\0';
     SetWindowLongA(g_mainWnd, GWL_STYLE, g_preFullscreenStyle);
     SetWindowPos(g_mainWnd, HWND_NOTOPMOST,
         g_preFullscreenRect.left, g_preFullscreenRect.top,
@@ -290,11 +925,12 @@ void exitFullscreenCanvas() {
     }
     g_contentDirty = true;
     InvalidateRect(g_mainWnd, nullptr, FALSE);
+    invalidateDOM();
 }
-void enterFullscreenCanvas(const std::string& canvasId) {
+void enterFullscreenCanvas(const LumeString& canvasId) {
     if (g_fullscreenCanvas) return;
     g_fullscreenCanvas = true;
-    g_fullscreenCanvasId = canvasId;
+    lstrcpynA(g_fullscreenCanvasId, canvasId.c_str(), 128);
     GetWindowRect(g_mainWnd, &g_preFullscreenRect);
     g_preFullscreenStyle = GetWindowLongA(g_mainWnd, GWL_STYLE);
     HMONITOR hMon = MonitorFromWindow(g_mainWnd, MONITOR_DEFAULTTONEAREST);
@@ -320,43 +956,62 @@ void enterFullscreenCanvas(const std::string& canvasId) {
     InvalidateRect(g_mainWnd, nullptr, FALSE);
 }
 namespace FontCache {
-struct Key {
-    int size;
-    bool bold, italic;
-    uint32_t face_hash;
-    bool operator<(const Key& o) const {
-        if (size != o.size) return size < o.size;
-        if (bold != o.bold) return bold < o.bold;
-        if (italic != o.italic) return italic < o.italic;
-        return face_hash < o.face_hash;
+    struct Key {
+        int size; bool bold, italic; uint32_t face_hash;
+        bool operator==(const Key& o) const {
+            return size == o.size && bold == o.bold && italic == o.italic && face_hash == o.face_hash;
+        }
+    };
+    struct Entry {Key k; HFONT v; bool occ;};
+    static Entry* g_tab = nullptr;
+    static size_t g_cap = 0, g_sz = 0;
+    static LumeVector<HANDLE> g_memFonts;
+    HFONT get(int sz, bool b = false, bool i = false, const char* f = "Segoe UI") {
+        uint32_t hash = 2166136261u;
+        for (const char* p = f; *p; ++p) {hash ^= (uint8_t)*p; hash *= 16777619u;}
+        Key k{ sz, b, i, hash };
+        uint32_t kh = hash ^ ((uint32_t)sz << 16) ^ (b ? 1 : 0) ^ (i ? 2 : 0);
+        if (g_sz >= g_cap / 2) {
+            size_t oCap = g_cap; Entry* oTab = g_tab;
+            g_cap = oCap == 0 ? 16 : oCap * 2;
+            g_tab = (Entry*)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, g_cap * sizeof(Entry));
+            g_sz = 0;
+            if (oTab) {
+                for (size_t j = 0; j < oCap; ++j) {
+                    if (oTab[j].occ) {
+                        uint32_t h = oTab[j].k.face_hash ^ ((uint32_t)oTab[j].k.size << 16) ^ (oTab[j].k.bold ? 1 : 0) ^ (oTab[j].k.italic ? 2 : 0);
+                        size_t idx = h & (g_cap - 1);
+                        while (g_tab[idx].occ) idx = (idx + 1) & (g_cap - 1);
+                        g_tab[idx] = oTab[j];
+                        g_sz++;
+                    }
+                }
+                HeapFree(GetProcessHeap(), 0, oTab);
+            }
+        }
+        size_t idx = kh & (g_cap - 1);
+        while (g_tab[idx].occ) {
+            if (g_tab[idx].k == k) return g_tab[idx].v;
+            idx = (idx + 1) & (g_cap - 1);
+        }
+        LumeWString wface = utf8_to_wstring(f);
+        HFONT font = CreateFontW(-sz, 0, 0, 0, b ? FW_BOLD : FW_NORMAL, i, 0, 0, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, wface.c_str());
+        g_tab[idx] = {k, font, true};
+        g_sz++;
+        return font;
     }
-};
-static std::map<Key, HFONT> g_cache;
-HFONT get(int sz, bool b = false, bool i = false, const char* f = "Segoe UI") {
-    uint32_t hash = 2166136261u;
-    for (const char* p = f; *p; ++p) {
-        hash ^= (uint8_t)*p;
-        hash *= 16777619u;
+    void clear() {
+        if (g_tab) {
+            for (size_t j = 0; j < g_cap; ++j) if (g_tab[j].occ) DeleteObject(g_tab[j].v);
+            HeapFree(GetProcessHeap(), 0, g_tab);
+            g_tab = nullptr; g_cap = g_sz = 0;
+        }
+        for (HANDLE h : g_memFonts) RemoveFontMemResourceEx(h);
+        g_memFonts.clear();
     }
-    Key k{ sz, b, i, hash };
-    auto it = g_cache.find(k);
-    if (it != g_cache.end()) return it->second;
-    std::wstring wface = utf8_to_wstring(f);
-    HFONT font = CreateFontW(-sz, 0, 0, 0,
-        b ? FW_BOLD : FW_NORMAL,
-        i, 0, 0,
-        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-        CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, wface.c_str());
-    g_cache[k] = font;
-    return font;
-}
-void clear() {
-    for (auto& kv : g_cache) DeleteObject(kv.second);
-    g_cache.clear();
-}
 }
 inline bool fast_streq(const char* a, const char* b) {
-    while (*a && *a == *b) { ++a; ++b; }
+    while (*a && *a == *b) {++a; ++b;}
     return *a == *b;
 }
 namespace HTP {
@@ -389,7 +1044,7 @@ enum class EType {
     PAGE, BLOCK, TEXT, IMAGE, LINK, BUTTON, INPUT_FIELD, DIVIDER, LIST, ITEM, BR, SCRIPT, CANVAS, ROW, COLUMN, GL_CANVAS, UNKNOWN
 };
 struct Props {
-    std::vector<std::pair<std::string, std::string>> d;
+    LumeVector<LumePair<LumeString, LumeString>> d;
     const char* get(const char* k, const char* def = "") const {
         for (const auto& pair : d) {
             if (fast_streq(pair.first.c_str(), k)) return pair.second.c_str();
@@ -432,17 +1087,17 @@ struct Props {
 };
 struct Elem {
     EType type = EType::UNKNOWN;
-    std::string tag;
+    LumeString tag;
     Props props;
-    std::string scriptCode;
-    std::vector<std::shared_ptr<Elem>> children;
+    LumeString scriptCode;
+    LumeVector<LumeSharedPtr<Elem>> children;
 };
 struct Doc {
-    std::shared_ptr<Elem> root;
-    std::string title;
+    LumeSharedPtr<Elem> root;
+    LumeString title;
     Color bg = { 26,26,46 };
 };
-std::shared_ptr<Elem> findById(std::shared_ptr<Elem> node, const std::string& id) {
+LumeSharedPtr<Elem> findById(LumeSharedPtr<Elem> node, const LumeString& id) {
     if (!node) return nullptr;
     const char* nodeId = node->props.get("id");
     if (nodeId[0] != '\0' && fast_streq(nodeId, id.c_str())) return node;
@@ -453,7 +1108,7 @@ std::shared_ptr<Elem> findById(std::shared_ptr<Elem> node, const std::string& id
     return nullptr;
 }
 class Parser {
-    std::string src;
+    LumeString src;
     int pos = 0, len = 0;
     void skipWS() {
         while (pos < len) {
@@ -472,7 +1127,7 @@ class Parser {
             break;
         }
     }
-    std::string readIdent() {
+    LumeString readIdent() {
         int start = pos;
         const char* p = src.data();
         while (pos < len) {
@@ -485,12 +1140,12 @@ class Parser {
                 break;
             }
         }
-        return std::string(p + start, pos - start);
+        return LumeString(p + start, pos - start);
     }
-    std::string readString() {
+    LumeString readString() {
         if (pos >= len || src[pos] != '"') return "";
         pos++;
-        std::string r;
+        LumeString r;
         r.reserve(64);
         while (pos < len && src[pos] != '"') {
             if (src[pos] == '\\' && pos + 1 < len) {
@@ -511,7 +1166,7 @@ class Parser {
         if (pos < len) pos++;
         return r;
     }
-    std::string readValue() {
+    LumeString readValue() {
         skipWS();
         if (pos < len && src[pos] == '"') return readString();
         int start = pos;
@@ -521,9 +1176,9 @@ class Parser {
         while (end > start && (p[end - 1] == ' ' || p[end - 1] == '\t' || p[end - 1] == '\r' || p[end - 1] == '\n')) {
             end--;
         }
-        return std::string(p + start, end - start);
+        return LumeString(p + start, end - start);
     }
-    std::string readRawBlock() {
+    LumeString readRawBlock() {
         int depth = 1;
         int start = pos;
         bool inStr = false, inLC = false, inBC = false;
@@ -573,17 +1228,17 @@ class Parser {
             else if (c == '}') { depth--; if (depth == 0) break; }
             pos++;
         }
-        std::string code = src.substr(start, pos - start);
+        LumeString code = src.substr(start, pos - start);
         if (pos < len && src[pos] == '}') pos++;
         return code;
     }
-    void parseInlineAttrs(std::shared_ptr<Elem>& e) {
+    void parseInlineAttrs(LumeSharedPtr<Elem>& e) {
         skipWS();
         if (pos >= len || src[pos] != '(') return;
         pos++;
         while (pos < len && src[pos] != ')') {
             skipWS();
-            std::string key = readIdent();
+            LumeString key = readIdent();
             skipWS();
             if (pos < len && src[pos] == '=') {
                 pos++;
@@ -595,7 +1250,7 @@ class Parser {
         }
         if (pos < len) pos++;
     }
-    EType tagToType(const std::string& t) {
+    EType tagToType(const LumeString& t) {
         if (t == "page") return EType::PAGE;
         if (t == "block") return EType::BLOCK;
         if (t == "text") return EType::TEXT;
@@ -614,11 +1269,11 @@ class Parser {
         if (t == "glcanvas") return EType::GL_CANVAS;
         return EType::UNKNOWN;
     }
-    std::shared_ptr<Elem> parseElement() {
+    LumeSharedPtr<Elem> parseElement() {
         skipWS();
         if (pos >= len || src[pos] != '@') return nullptr;
         pos++;
-        auto e = std::make_shared<Elem>();
+        auto e = lume_make_shared<Elem>();
         e->tag = readIdent();
         e->type = tagToType(e->tag);
         parseInlineAttrs(e);
@@ -638,7 +1293,7 @@ class Parser {
                 if (ch) e->children.push_back(ch);
             }
             else if (IsCharAlphaA(src[pos]) || src[pos] == '_') {
-                std::string key = readIdent();
+                LumeString key = readIdent();
                 skipWS();
                 if (pos < len && src[pos] == ':') {
                     pos++;
@@ -652,12 +1307,12 @@ class Parser {
         return e;
     }
 public:
-    Doc parse(const std::string& source) {
+    Doc parse(const LumeString& source) {
         Doc doc;
         src = source;
         pos = 0;
         len = (int)src.length();
-        auto root = std::make_shared<Elem>();
+        auto root = lume_make_shared<Elem>();
         root->type = EType::PAGE;
         root->tag = "root";
         while (pos < len) {
@@ -683,25 +1338,25 @@ public:
 }
 namespace Net {
     struct URL {
-        std::string proto, host, path;
+        LumeString proto, host, path;
         int port = 80;
-        static URL parse(const std::string& s) {
+        static URL parse(const LumeString& s) {
             URL u;
-            std::wstring wurl = utf8_to_wstring(s);
+            LumeWString wurl = utf8_to_wstring(s);
             URL_COMPONENTSW uc = { sizeof(URL_COMPONENTSW) };
             uc.dwSchemeLength = (DWORD)-1;
             uc.dwHostNameLength = (DWORD)-1;
             uc.dwUrlPathLength = (DWORD)-1;
             if (WinHttpCrackUrl(wurl.c_str(), (DWORD)wurl.length(), 0, &uc)) {
                 if (uc.dwSchemeLength > 0)
-                    u.proto = wstring_to_utf8(std::wstring(uc.lpszScheme, uc.dwSchemeLength));
+                    u.proto = wstring_to_utf8(LumeWString(uc.lpszScheme, uc.dwSchemeLength));
                 else
                     u.proto = "http";
                 if (uc.dwHostNameLength > 0)
-                    u.host = wstring_to_utf8(std::wstring(uc.lpszHostName, uc.dwHostNameLength));
+                    u.host = wstring_to_utf8(LumeWString(uc.lpszHostName, uc.dwHostNameLength));
 
                 if (uc.dwUrlPathLength > 0)
-                    u.path = wstring_to_utf8(std::wstring(uc.lpszUrlPath, uc.dwUrlPathLength));
+                    u.path = wstring_to_utf8(LumeWString(uc.lpszUrlPath, uc.dwUrlPathLength));
                 else
                     u.path = "/";
                 u.port = uc.nPort;
@@ -717,17 +1372,19 @@ namespace Net {
     };
 struct Resp {
     int code = 0;
-    std::string body, error;
+    LumeString body, error;
     bool ok = false;
 };
 Resp fetch(const URL& url, bool verifyCert = false) {
     Resp resp;
-    HINTERNET hSession = WinHttpOpen(L"Lume Browser Engine",WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,WINHTTP_NO_PROXY_NAME,WINHTTP_NO_PROXY_BYPASS,0);
+    wchar_t whost[1024]; MultiByteToWideChar(CP_UTF8, 0, url.host.c_str(), -1, whost, 1024);
+    wchar_t wpath[2048]; MultiByteToWideChar(CP_UTF8, 0, url.path.c_str(), -1, wpath, 2048);
+    HINTERNET hSession = WinHttpOpen(L"Lume Browser Engine", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
     if (!hSession) { resp.error = "WinHttpOpen failed"; return resp; }
-    HINTERNET hConnect = WinHttpConnect(hSession, utf8_to_wstring(url.host).c_str(), url.port, 0);
+    HINTERNET hConnect = WinHttpConnect(hSession, whost, url.port, 0);
     if (!hConnect) { WinHttpCloseHandle(hSession); resp.error = "WinHttpConnect failed"; return resp; }
     DWORD flags = (url.proto == "https") ? WINHTTP_FLAG_SECURE : 0;
-    HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"GET", utf8_to_wstring(url.path).c_str(),NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, flags);
+    HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"GET", wpath, NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, flags);
     if (!hRequest) {
         WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession);
         resp.error = "WinHttpOpenRequest failed"; return resp;
@@ -751,7 +1408,7 @@ Resp fetch(const URL& url, bool verifyCert = false) {
             dwSize = 0;
             if (!WinHttpQueryDataAvailable(hRequest, &dwSize)) break;
             if (dwSize == 0) break;
-            std::vector<char> buffer(dwSize);
+            LumeVector<char> buffer(dwSize);
             if (WinHttpReadData(hRequest, (LPVOID)buffer.data(), dwSize, &dwDownloaded)) {
                 resp.body.append(buffer.data(), dwDownloaded);
             }
@@ -765,49 +1422,61 @@ Resp fetch(const URL& url, bool verifyCert = false) {
     WinHttpCloseHandle(hSession);
     return resp;
 }
-Resp fetchUrl(const std::string& u) { return fetch(URL::parse(u)); }
+Resp fetchUrl(const LumeString& u) {return fetch(URL::parse(u));}
 }
 namespace AsyncNet {
     struct DLState {
         int status = 0;
-        std::string localPath;
+        LumeString localPath;
         size_t downloadedBytes = 0;
         size_t totalBytes = 0;
     };
-    std::map<std::string, DLState> g_downloads;
-    std::mutex g_dlMutex;
-    std::string getTempDir() {
+    LumeMap<LumeString, DLState> g_downloads;
+    LumeMutex g_dlMutex;
+    LumeString getTempDir() {
         char ep[MAX_PATH] = {};
         GetModuleFileNameA(nullptr, ep, MAX_PATH);
-        std::string dir = ep;
+        LumeString dir = ep;
         auto ls = dir.find_last_of("\\/");
-        dir = (ls != std::string::npos) ? dir.substr(0, ls + 1) : ".\\";
-        std::string td = dir + "temp\\";
+        dir = (ls != LumeString::npos) ? dir.substr(0, ls + 1) : ".\\";
+        LumeString td = dir + "temp\\";
         CreateDirectoryA(td.c_str(), nullptr);
         return td;
     }
-    void startDownload(const std::string& urlStr, const std::string& filename) {
-        if (filename.find("..") != std::string::npos || filename.find('/') != std::string::npos || filename.find('\\') != std::string::npos) {
+    void startDownload(const LumeString& urlStr, const LumeString& filename) {
+        if (filename.find("..") != LumeString::npos || filename.find('/') != LumeString::npos || filename.find('\\') != LumeString::npos) {
             return;
         }
         {
-            std::lock_guard<std::mutex> lock(g_dlMutex);
+            LumeLockGuard<LumeMutex> lock(g_dlMutex);
             g_downloads[urlStr] = { 0, "", 0, 0 };
         }
-        std::thread([urlStr, filename]() {
+        LumeThread::RunAsync([urlStr, filename]() {
             Net::URL url = Net::URL::parse(urlStr);
-            std::string outPath = getTempDir() + filename;
+            LumeString outPath = getTempDir() + filename;
             auto setError = [&]() {
-                std::lock_guard<std::mutex> lock(g_dlMutex);
+                LumeLockGuard<LumeMutex> lock(g_dlMutex);
                 g_downloads[urlStr].status = -1;
                 };
             HINTERNET hSession = WinHttpOpen(L"Lume Download Agent", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
-            if (!hSession) { setError(); return; }
+            if (!hSession) {
+                setError();
+                return;
+            }
             HINTERNET hConnect = WinHttpConnect(hSession, utf8_to_wstring(url.host).c_str(), url.port, 0);
-            if (!hConnect) { WinHttpCloseHandle(hSession); setError(); return; }
+            if (!hConnect) {
+                WinHttpCloseHandle(hSession);
+                setError();
+                return;
+            }
             DWORD flags = (url.proto == "https") ? WINHTTP_FLAG_SECURE : 0;
             HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"GET", utf8_to_wstring(url.path).c_str(), NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, flags);
-            if (!hRequest) { WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession); setError(); return; }
+            if (!hRequest) {
+                WinHttpCloseHandle(hConnect);
+                WinHttpCloseHandle(hSession);
+                setError();
+                return;
+            }
             if (flags & WINHTTP_FLAG_SECURE) {
                 DWORD secFlags = SECURITY_FLAG_IGNORE_UNKNOWN_CA | SECURITY_FLAG_IGNORE_CERT_CN_INVALID | SECURITY_FLAG_IGNORE_CERT_DATE_INVALID;
                 WinHttpSetOption(hRequest, WINHTTP_OPTION_SECURITY_FLAGS, &secFlags, sizeof(secFlags));
@@ -817,32 +1486,45 @@ namespace AsyncNet {
             if (bResults) {
                 DWORD statusCode = 0, sz = sizeof(statusCode);
                 WinHttpQueryHeaders(hRequest, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_HEADER_NAME_BY_INDEX, &statusCode, &sz, WINHTTP_NO_HEADER_INDEX);
-                if (statusCode >= 400) { WinHttpCloseHandle(hRequest); WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession); setError(); return;}
+                if (statusCode >= 400) {
+                    WinHttpCloseHandle(hRequest);
+                    WinHttpCloseHandle(hConnect);
+                    WinHttpCloseHandle(hSession);
+                    setError();
+                    return;
+                }
                 DWORD contentLength = 0;
                 sz = sizeof(contentLength);
                 WinHttpQueryHeaders(hRequest, WINHTTP_QUERY_CONTENT_LENGTH | WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_HEADER_NAME_BY_INDEX, &contentLength, &sz, WINHTTP_NO_HEADER_INDEX);
                 {
-                    std::lock_guard<std::mutex> lock(g_dlMutex);
+                    LumeLockGuard<LumeMutex> lock(g_dlMutex);
                     g_downloads[urlStr].totalBytes = contentLength;
                 }
-                std::wstring wOutPath = utf8_to_wstring(outPath);
+                LumeWString wOutPath = utf8_to_wstring(outPath);
                 HANDLE hFile = CreateFileW(wOutPath.c_str(), GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-                if (hFile == INVALID_HANDLE_VALUE) { WinHttpCloseHandle(hRequest); WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession); setError(); return; }
+                if (hFile == INVALID_HANDLE_VALUE) {
+                    WinHttpCloseHandle(hRequest);
+                    WinHttpCloseHandle(hConnect);
+                    WinHttpCloseHandle(hSession);
+                    setError();
+                    return;
+                }
                 DWORD dwSize = 0, dwDownloaded = 0;
                 do {
+                    if (InterlockedCompareExchange(&g_isShuttingDown, 0, 0) != 0) break;
                     if (!WinHttpQueryDataAvailable(hRequest, &dwSize)) break;
                     if (dwSize == 0) break;
-                    std::vector<char> buffer(dwSize);
+                    LumeVector<char> buffer(dwSize);
                     if (WinHttpReadData(hRequest, (LPVOID)buffer.data(), dwSize, &dwDownloaded)) {
                         DWORD bytesWritten = 0;
                         WriteFile(hFile, buffer.data(), dwDownloaded, &bytesWritten, NULL);
-                        std::lock_guard<std::mutex> lock(g_dlMutex);
+                        LumeLockGuard<LumeMutex> lock(g_dlMutex);
                         g_downloads[urlStr].downloadedBytes += dwDownloaded;
                     }
                 } while (dwSize > 0);
                 CloseHandle(hFile);
                 {
-                    std::lock_guard<std::mutex> lock(g_dlMutex);
+                    LumeLockGuard<LumeMutex> lock(g_dlMutex);
                     g_downloads[urlStr].status = 1;
                     g_downloads[urlStr].localPath = outPath;
                 }
@@ -853,36 +1535,46 @@ namespace AsyncNet {
             WinHttpCloseHandle(hRequest);
             WinHttpCloseHandle(hConnect);
             WinHttpCloseHandle(hSession);
-            }).detach();
+            });
     }
 }
 namespace WasmEngine {
-    int load(const std::string& wasmBytes);
+    int load(const LumeString& wasmBytes);
+}
+namespace Script {
+    extern lua_State* g_L;
 }
 namespace Plugins {
+    LumeMap<LumeString, CustomProtocolHandler> g_protocols;
+    CustomProtocolHandler* g_activeProtocol = nullptr;
+    void hostRegisterProtocolEngine(CustomProtocolHandler handler) {
+        g_protocols[handler.scheme] = handler;
+    }
     struct LoadedPlugin {
-        std::string name, path;
+        LumeString name, path;
         HMODULE hModule = nullptr;
         lume_plugin_init_fn initFn = nullptr;
+        bool enabled = true;
     };
     struct DynamicPlugin {
-        std::string url;
-        std::string localPath;
-        std::string originHost;
+        LumeString url, localPath, originHost;
         bool isUnsafe;
-        HMODULE hModule;
+        HMODULE hModule = nullptr;
+        bool enabled = true;
     };
-    static std::vector<LoadedPlugin> g_plugins;
-    static std::vector<DynamicPlugin> g_dynPlugins;
+    static LumeVector<LoadedPlugin> g_plugins;
+    static LumeVector<DynamicPlugin> g_dynPlugins;
     static LumeHostAPI g_hostAPI = {};
     static HWND hostGetMainHwnd() {return g_mainWnd;}
     static void hostInvalidateContent() {invalidateContent();}
     static void hostSetStatus(const char* t) {setStatus(t ? t : "");}
-    static void hostNavigateTo(const char* u) {if (u) navigateTo(u);}
-    std::map<std::string, CustomTagHandler> g_customTags;
-    std::map<std::string, CustomPageHandler> g_customPages;
+    static void hostNavigateTo(const char* u) { if (u) navigateTo(u); }
+
+    LumeMap<LumeString, CustomTagHandler> g_customTags;
+    LumeMap<LumeString, CustomPageHandler> g_customPages;
     CustomPageHandler* g_activeCustomEngine = nullptr;
     void* g_activeCustomPageContext = nullptr;
+
     const char* hostGetNodeProp(HTP_NodeHandle node, const char* key, const char* def) {
         if (!node) return def;
         auto e = (HTP::Elem*)node;
@@ -913,11 +1605,51 @@ namespace Plugins {
     }
     static int hostWasmLoad(const char* bytes, size_t len) {
         if (!bytes || len == 0) return -1;
-        return WasmEngine::load(std::string(bytes, len));
+        return WasmEngine::load(LumeString(bytes, len));
     }
-    static std::vector<void(*)()> g_onResetCallbacks;
+    static LumeVector<void(*)()> g_onResetCallbacks;
     static void hostRegisterOnReset(void (*callback)()) {
         if (callback) g_onResetCallbacks.push_back(callback);
+    }
+    void reboot() {
+        if (g_activeCustomEngine && g_activeCustomPageContext) {
+            g_activeCustomEngine->free_page(g_activeCustomPageContext);
+        }
+        if (g_activeProtocol && g_activeCustomPageContext) {
+            g_activeProtocol->free_page(g_activeCustomPageContext);
+        }
+        g_activeCustomEngine = nullptr;
+        g_activeProtocol = nullptr;
+        g_activeCustomPageContext = nullptr;
+        g_onResetCallbacks.clear();
+        for (auto& p : g_plugins) {
+            if (p.hModule) {
+                auto sf = (void(*)())GetProcAddress(p.hModule, "lume_plugin_shutdown");
+                if (sf) sf();
+                FreeLibrary(p.hModule);
+                p.hModule = nullptr;
+                p.initFn = nullptr;
+            }
+        }
+        for (auto& dp : g_dynPlugins) {
+            if (dp.hModule) {
+                auto sf = (void(*)())GetProcAddress(dp.hModule, "lume_plugin_shutdown");
+                if (sf) sf();
+                FreeLibrary(dp.hModule);
+                dp.hModule = nullptr;
+            }
+        }
+        g_protocols.clear();
+        g_customTags.clear();
+        g_customPages.clear();
+        for (auto& p : g_plugins) {
+            if (!p.enabled) continue;
+            p.hModule = LoadLibraryW(utf8_to_wstring(p.path).c_str());
+        }
+        for (auto& dp : g_dynPlugins) {
+            if (!dp.enabled) continue;
+            dp.hModule = LoadLibraryA(dp.localPath.c_str());
+        }
     }
     void initHostAPI() {
         g_hostAPI.get_main_hwnd = hostGetMainHwnd;
@@ -935,6 +1667,7 @@ namespace Plugins {
         g_hostAPI.gl_place = hostGlPlace;
         g_hostAPI.wasm_load = hostWasmLoad;
         g_hostAPI.register_on_reset = hostRegisterOnReset;
+        g_hostAPI.register_protocol_engine = hostRegisterProtocolEngine;
         g_hostAPI.p_luaL_checknumber = luaL_checknumber;
         g_hostAPI.p_luaL_checkinteger = luaL_checkinteger;
         g_hostAPI.p_luaL_optinteger = luaL_optinteger;
@@ -954,10 +1687,10 @@ namespace Plugins {
     void discoverPlugins() {
         wchar_t ep[MAX_PATH] = {};
         GetModuleFileNameW(nullptr, ep, MAX_PATH);
-        std::wstring dir = ep;
+        LumeWString dir = ep;
         auto ls = dir.find_last_of(L"\\/");
-        dir = (ls != std::wstring::npos) ? dir.substr(0, ls + 1) : L".\\";
-        std::wstring pd = dir + L"plugins\\";
+        dir = (ls != LumeWString::npos) ? dir.substr(0, ls + 1) : L".\\";
+        LumeWString pd = dir + L"plugins\\";
         CreateDirectoryW(pd.c_str(), nullptr);
         WIN32_FIND_DATAW fd = {};
         HANDLE hf = FindFirstFileW((pd + L"*.dll").c_str(), &fd);
@@ -966,7 +1699,7 @@ namespace Plugins {
             if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
             LoadedPlugin p;
             p.name = wstring_to_utf8(fd.cFileName);
-            std::wstring fullWPath = pd + fd.cFileName;
+            LumeWString fullWPath = pd + fd.cFileName;
             p.path = wstring_to_utf8(fullWPath);
             p.hModule = LoadLibraryW(fullWPath.c_str());
             if (!p.hModule) continue;
@@ -980,17 +1713,24 @@ namespace Plugins {
         FindClose(hf);
     }
     void initAllPlugins(lua_State* L) {
-        for (auto& p : g_plugins)
-            if (p.initFn) p.initFn(L, &g_hostAPI);
+        if (!L) return;
+        for (auto& p : g_plugins) {
+            if (!p.enabled) continue;
+            if (p.hModule) {
+                p.initFn = (lume_plugin_init_fn)GetProcAddress(p.hModule, "lume_plugin_init");
+                if (p.initFn) p.initFn(L, &g_hostAPI);
+            }
+        }
         for (auto& dp : g_dynPlugins) {
+            if (!dp.enabled) continue;
             if (dp.hModule) {
                 auto initFn = (lume_plugin_init_fn)GetProcAddress(dp.hModule, "lume_plugin_init");
                 if (initFn) initFn(L, &g_hostAPI);
             }
         }
     }
-    void checkDynamicUnloads(const std::string& newUrl) {
-        std::string newHost = Net::URL::parse(newUrl).host;
+    void checkDynamicUnloads(const LumeString& newUrl) {
+        LumeString newHost = Net::URL::parse(newUrl).host;
         for (auto it = g_dynPlugins.begin(); it != g_dynPlugins.end(); ) {
             if (it->isUnsafe && it->originHost != newHost) {
                 if (it->hModule) {
@@ -1006,36 +1746,43 @@ namespace Plugins {
             }
         }
     }
-    bool loadFromNet(const std::string& url, const std::string& originUrl, lua_State* L) {
+    bool loadFromNet(const LumeString& url, const LumeString& originUrl, lua_State* L) {
         for (const auto& dp : g_dynPlugins) {
             if (dp.url == url) return true;
         }
         int trust = 3;
-        if (url.find("..") != std::string::npos ||
-            url.find("%2e") != std::string::npos ||
-            url.find("%2E") != std::string::npos) {
+        if (url.find("..") != LumeString::npos ||
+            url.find("%2e") != LumeString::npos ||
+            url.find("%2E") != LumeString::npos) {
             trust = 3;
         }
-        if (url.find("..") != std::string::npos) {
-            trust = 3;
-        }
-        else if (url.find("https://raw.githubusercontent.com/Lume-corp/LumeSources/main/plugins/aaOfficial/") == 0 ||
-            url.find("https://raw.githubusercontent.com/Lume-corp/LumeSources/main/plugins/Community/") == 0) {
-            trust = 0;
-        }
-        else if (url.find("https://raw.githubusercontent.com/Lume-corp/LumeSources/main/plugins/aaOfficialUnsafe/") == 0) {
-            trust = 1;
-        }
-        else if (url.find("https://raw.githubusercontent.com/Lume-corp/LumeSources/main/plugins/CommunityUnsafe/") == 0) {
-            trust = 2;
+        else {
+            if (url.find("https://raw.githubusercontent.com/Lume-corp/LumeSources/main/plugins/aaOfficial/") == 0 ||
+                url.find("https://raw.githubusercontent.com/Lume-corp/LumeSources/refs/heads/main/plugins/aaOfficial/") == 0 ||
+                url.find("https://raw.githubusercontent.com/Lume-corp/LumeSources/main/plugins/Community/") == 0 ||
+                url.find("https://raw.githubusercontent.com/Lume-corp/LumeSources/refs/heads/main/plugins/Community/") == 0 ||
+                url.find("https://github.com/Lume-corp/LumeSources/raw/refs/heads/main/plugins/aaOfficial/") == 0 ||
+                url.find("https://github.com/Lume-corp/LumeSources/raw/refs/heads/main/plugins/Community/") == 0) {
+                trust = 0;
+            }
+            else if (url.find("https://raw.githubusercontent.com/Lume-corp/LumeSources/main/plugins/aaOfficialUnsafe/") == 0 ||
+                url.find("https://raw.githubusercontent.com/Lume-corp/LumeSources/refs/heads/main/plugins/aaOfficialUnsafe/") == 0 ||
+                url.find("https://github.com/Lume-corp/LumeSources/raw/refs/heads/main/plugins/aaOfficialUnsafe/") == 0) {
+                trust = 1;
+            }
+            else if (url.find("https://raw.githubusercontent.com/Lume-corp/LumeSources/main/plugins/CommunityUnsafe/") == 0 ||
+                url.find("https://raw.githubusercontent.com/Lume-corp/LumeSources/refs/heads/main/plugins/CommunityUnsafe/") == 0 ||
+                url.find("https://github.com/Lume-corp/LumeSources/raw/refs/heads/main/plugins/CommunityUnsafe/") == 0) {
+                trust = 2;
+            }
         }
         bool isUnsafe = (trust > 0);
         if (trust == 1 || trust == 2) {
-            std::string msg = "Do you want to download and load this UNSAFE plugin?\n\nURL: " + url + "\n\nIt requires elevated privileges (e.g., file system access).";
+            LumeString msg = "Do you want to download and load this UNSAFE plugin?\n\nURL: " + url + "\n\nIt requires elevated privileges (e.g., file system access).";
             if (MessageBoxA(g_mainWnd, msg.c_str(), "Unsafe Plugin Warning", MB_YESNO | MB_ICONWARNING) != IDYES) return false;
         }
         else if (trust == 3) {
-            std::string msg = "WARNING: This plugin is NOT from the official Lume repository or contains suspicious paths!\n\nURL: " + url + "\n\nIt could be highly dangerous. Do you really want to load it?";
+            LumeString msg = "WARNING: This plugin is NOT from the official Lume repository or contains suspicious paths!\n\nURL: " + url + "\n\nIt could be highly dangerous. Do you really want to load it?";
             if (MessageBoxA(g_mainWnd, msg.c_str(), "Unknown Origin Plugin", MB_YESNO | MB_ICONERROR) != IDYES) return false;
         }
         auto resp = Net::fetch(Net::URL::parse(url), true);
@@ -1045,10 +1792,10 @@ namespace Plugins {
         }
         char tempPath[MAX_PATH];
         GetTempPathA(MAX_PATH, tempPath);
-        static std::atomic<int> pluginCounter{ 0 };
-        std::string fileName = "lume_dyn_" + std::to_string(GetTickCount64()) + "_" + std::to_string(++pluginCounter) + ".dll";
-        std::string fullPath = std::string(tempPath) + fileName;
-        std::wstring wFullPath = utf8_to_wstring(fullPath);
+        static volatile LONG pluginCounter = 0;
+        LumeString fileName = "lume_dyn_" + lume_to_string(GetTickCount64()) + "_" + lume_to_string(InterlockedIncrement(&pluginCounter)) + ".dll";
+        LumeString fullPath = LumeString(tempPath) + fileName;
+        LumeWString wFullPath = utf8_to_wstring(fullPath);
         HANDLE hFile = CreateFileW(wFullPath.c_str(), GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
         if (hFile == INVALID_HANDLE_VALUE) return false;
         DWORD bytesWritten = 0;
@@ -1098,22 +1845,22 @@ namespace Plugins {
     }
 }
 namespace ImageCache {
-    std::map<std::string, std::shared_ptr<Gdiplus::Image>> cache;
-    std::map<std::string, bool> loading;
-    std::vector<std::string> history;
-    std::mutex mtx;
+    LumeMap<LumeString, LumeSharedPtr<Gdiplus::Image>> cache;
+    LumeMap<LumeString, bool> loading;
+    LumeVector<LumeString> history;
+    LumeMutex mtx;
     const size_t MAX_CACHE_SIZE = 50;
-    std::shared_ptr<Gdiplus::Image> get(const std::string& url) {
+    LumeSharedPtr<Gdiplus::Image> get(const LumeString& url) {
         if (url.empty()) return nullptr;
         {
-            std::lock_guard<std::mutex> lock(mtx);
+            LumeLockGuard<LumeMutex> lock(mtx);
             auto it = cache.find(url);
             if (it != cache.end()) return it->second;
             if (loading[url]) return nullptr;
             loading[url] = true;
         }
-        std::thread([url]() {
-            std::shared_ptr<Gdiplus::Image> img;
+        LumeThread::RunAsync([url]() {
+            LumeSharedPtr<Gdiplus::Image> img;
             if (url.substr(0, 4) == "http") {
                 auto r = Net::fetch(Net::URL::parse(url));
                 if (r.ok && !r.body.empty()) {
@@ -1124,94 +1871,91 @@ namespace ImageCache {
                         GlobalUnlock(hMem);
                         IStream* pStream = nullptr;
                         if (CreateStreamOnHGlobal(hMem, TRUE, &pStream) == S_OK) {
-                            img = std::shared_ptr<Gdiplus::Image>(Gdiplus::Image::FromStream(pStream));
+                            img = LumeSharedPtr<Gdiplus::Image>(Gdiplus::Image::FromStream(pStream));
                             pStream->Release();
                         }
                     }
                 }
             }
             else {
-                std::string path = url;
+                LumeString path = url;
                 if (path.length() > 7 && path.substr(0, 7) == "file://") path = path.substr(7);
                 int len = MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, NULL, 0);
-                std::wstring wpath(len, 0);
+                LumeWString wpath(len, 0);
                 MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, &wpath[0], len);
-                img = std::shared_ptr<Gdiplus::Image>(Gdiplus::Image::FromFile(wpath.c_str()));
+                img = LumeSharedPtr<Gdiplus::Image>(Gdiplus::Image::FromFile(wpath.c_str()));
             }
             if (img && img->GetLastStatus() != Gdiplus::Ok) {
                 img = nullptr;
             }
             {
-                std::lock_guard<std::mutex> lock(mtx);
+                LumeLockGuard<LumeMutex> lock(mtx);
                 cache[url] = img;
                 loading[url] = false;
                 if (img) {
                     history.push_back(url);
                     if (history.size() > MAX_CACHE_SIZE) {
-                        std::string oldest = history.front();
+                        LumeString oldest = history.front();
                         history.erase(history.begin());
                         cache.erase(oldest);
                     }
                 }
             }
             PostMessage(g_mainWnd, WM_UPDATE_CONTENT, 0, 0);
-            }).detach();
-
+            });
         return nullptr;
     }
     void clear() {
-        std::lock_guard<std::mutex> lock(mtx);
+        LumeLockGuard<LumeMutex> lock(mtx);
         cache.clear();
         loading.clear();
         history.clear();
     }
 }
 namespace Canvas {
-struct Buf {
-    int w = 0, h = 0;
-    HDC dc = 0;
-    HBITMAP bmp = 0, old = 0;
-    void create(HDC ref, int ww, int hh) {
-        cleanup();
-        w = ww;
-        h = hh;
-        dc = CreateCompatibleDC(ref);
-        bmp = CreateCompatibleBitmap(ref, w, h);
-        old = (HBITMAP)SelectObject(dc, bmp);
-        HBRUSH b = CreateSolidBrush(0);
-        RECT r = { 0,0,w,h };
-        FillRect(dc, &r, b);
-        DeleteObject(b);
-    }
-    void cleanup() {
-        if (dc) {
-            SelectObject(dc, old);
-            DeleteDC(dc);
-            dc = 0;
+    struct Buf {
+        int w = 0, h = 0;
+        HDC dc = 0;
+        HBITMAP bmp = 0, old = 0;
+        void create(HDC ref, int ww, int hh) {
+            cleanup(); w = ww; h = hh;
+            dc = CreateCompatibleDC(ref);
+            bmp = CreateCompatibleBitmap(ref, w, h);
+            old = (HBITMAP)SelectObject(dc, bmp);
+            HBRUSH b = CreateSolidBrush(0);
+            RECT r = {0,0,w,h};
+            FillRect(dc, &r, b);
+            DeleteObject(b);
         }
-        if (bmp) {
-            DeleteObject(bmp);
-            bmp = 0;
+        void cleanup() {
+            if (dc) {
+                SelectObject(dc, old);
+                DeleteDC(dc); dc = 0;
+            }
+            if (bmp) {
+                DeleteObject(bmp);
+                bmp = 0;
+            }
         }
+        ~Buf() {cleanup();}
+    };
+    LumeMap<LumeString, LumeSharedPtr<Buf>> g_bufs;
+    LumeSharedPtr<Buf> get(const LumeString& id, HDC ref, int w, int h) {
+        auto i = g_bufs.find(id);
+        if (i != g_bufs.end() && i->second->w == w && i->second->h == h) return i->second;
+        auto b = lume_make_shared<Buf>();
+        b->create(ref, w, h);
+        g_bufs[id] = b;
+        return b;
     }
-    ~Buf() { cleanup(); }
-};
-std::map<std::string, std::shared_ptr<Buf>> g_bufs;
-std::shared_ptr<Buf> get(const std::string& id, HDC ref, int w, int h) {
-    auto i = g_bufs.find(id);
-    if (i != g_bufs.end() && i->second->w == w && i->second->h == h) return i->second;
-    auto b = std::make_shared<Buf>();
-    b->create(ref, w, h);
-    g_bufs[id] = b;
-    return b;
 }
-}
+extern HTP::Doc g_doc;
 namespace GLCanvas {
     static const wchar_t* kClassName = L"LumeGLCanvasClass";
     static bool g_classRegistered = false;
     static HINSTANCE g_hInst = nullptr;
     struct GLView {
-        std::string id;
+        LumeString id;
         HWND hwnd = nullptr;
         HDC hdc = nullptr;
         HGLRC hglrc = nullptr;
@@ -1221,8 +1965,8 @@ namespace GLCanvas {
         bool touchedThisLayout = false;
         bool fullscreen = false;
     };
-    std::map<std::string, std::shared_ptr<GLView>> g_views;
-    std::string findIdByHwnd(HWND hwnd) {
+    LumeMap<LumeString, LumeSharedPtr<GLView>> g_views;
+    LumeString findIdByHwnd(HWND hwnd) {
         for (auto& kv : g_views) {
             if (kv.second && kv.second->hwnd == hwnd)
                 return kv.first;
@@ -1241,12 +1985,14 @@ namespace GLCanvas {
         }
         case WM_LBUTTONDOWN: {
             if (!g_mainWnd) return 0;
-            std::string canvasId = findIdByHwnd(hwnd);
+            LumeString canvasId = findIdByHwnd(hwnd);
             int localX = GET_X_LPARAM(lp);
             int localY = GET_Y_LPARAM(lp);
-
+            auto e = HTP::findById(::g_doc.root, canvasId);
             if (!canvasId.empty()) {
                 Script::fireCanvasClick(canvasId, localX, localY, 1);
+            }
+            if (!e || e->props.getBool("capture", true)) {
                 captureCanvasMouse(canvasId);
             }
             SetFocus(g_mainWnd);
@@ -1254,7 +2000,7 @@ namespace GLCanvas {
         }
         case WM_RBUTTONDOWN: {
             if (!g_mainWnd) return 0;
-            std::string canvasId = findIdByHwnd(hwnd);
+            LumeString canvasId = findIdByHwnd(hwnd);
             if (!canvasId.empty()) {
                 Script::fireCanvasClick(canvasId, GET_X_LPARAM(lp), GET_Y_LPARAM(lp), 2);
             }
@@ -1263,7 +2009,7 @@ namespace GLCanvas {
         }
         case WM_MBUTTONDOWN: {
             if (!g_mainWnd) return 0;
-            std::string canvasId = findIdByHwnd(hwnd);
+            LumeString canvasId = findIdByHwnd(hwnd);
             if (!canvasId.empty()) {
                 Script::fireCanvasClick(canvasId, GET_X_LPARAM(lp), GET_Y_LPARAM(lp), 3);
             }
@@ -1323,9 +2069,9 @@ namespace GLCanvas {
         if (!SetPixelFormat(hdc, pf, &pfd)) return false;
         return true;
     }
-    std::shared_ptr<GLView> createView(const std::string& id, int w, int h) {
+    LumeSharedPtr<GLView> createView(const LumeString& id, int w, int h) {
         if (!g_mainWnd || !g_hInst) return nullptr;
-        auto v = std::make_shared<GLView>();
+        auto v = lume_make_shared<GLView>();
         v->id = id;
         v->w = w;
         v->h = h;
@@ -1368,7 +2114,7 @@ namespace GLCanvas {
         UpdateWindow(v->hwnd);
         return v;
     }
-    void destroyView(std::shared_ptr<GLView>& v) {
+    void destroyView(LumeSharedPtr<GLView>& v) {
         if (!v) return;
         if (v->hglrc) {
             wglMakeCurrent(nullptr, nullptr);
@@ -1385,17 +2131,18 @@ namespace GLCanvas {
         }
         v->valid = false;
     }
-    std::shared_ptr<GLView> find(const std::string& id) {
+    LumeSharedPtr<GLView> find(const LumeString& id) {
         auto it = g_views.find(id);
         if (it == g_views.end()) return nullptr;
         return it->second;
     }
-    std::shared_ptr<GLView> ensure(const std::string& id, int w, int h) {
+    LumeSharedPtr<GLView> ensure(const LumeString& id, int w, int h) {
+        if (!g_opt_gpu) return nullptr;
         auto it = g_views.find(id);
         if (it != g_views.end()) {
             auto v = it->second;
             if (v && v->valid) {
-                if (v->w != w || v->h != h) {
+                if (!v->fullscreen && (v->w != w || v->h != h)) {
                     v->w = w;
                     v->h = h;
                     MoveWindow(v->hwnd, v->x, v->y, w, h, TRUE);
@@ -1413,7 +2160,7 @@ namespace GLCanvas {
             if (kv.second) kv.second->touchedThisLayout = false;
         }
     }
-    void place(const std::string& id, int x, int y, int w, int h, int scrollY, int toolbarH) {
+    void place(const LumeString& id, int x, int y, int w, int h, int scrollY, int toolbarH) {
         auto v = ensure(id, w, h);
         if (!v || !v->valid) return;
         v->touchedThisLayout = true;
@@ -1457,28 +2204,28 @@ namespace GLCanvas {
             }
         }
     }
-    bool beginRender(const std::string& id, int w, int h) {
+    bool beginRender(const LumeString& id, int w, int h) {
         auto v = ensure(id, w, h);
         if (!v || !v->valid) return false;
         return wglMakeCurrent(v->hdc, v->hglrc) == TRUE;
     }
-    void endRender(const std::string& id) {
+    void endRender(const LumeString& id) {
         auto v = find(id);
         if (!v || !v->valid) return;
         glFlush();
         SwapBuffers(v->hdc);
         wglMakeCurrent(nullptr, nullptr);
     }
-    void refresh(const std::string& id) {
+    void refresh(const LumeString& id) {
         (void)id;
     }
-    void setVisible(const std::string& id, bool vis) {
+    void setVisible(const LumeString& id, bool vis) {
         auto v = find(id);
         if (!v || !v->valid) return;
         v->visible = vis;
         ShowWindow(v->hwnd, vis ? SW_SHOW : SW_HIDE);
     }
-    void moveToFullscreen(const std::string& id) {
+    void moveToFullscreen(const LumeString& id) {
         auto v = find(id);
         if (!v || !v->valid || !g_mainWnd) return;
         RECT cr;
@@ -1489,7 +2236,7 @@ namespace GLCanvas {
         ShowWindow(v->hwnd, SW_SHOW);
         BringWindowToTop(v->hwnd);
     }
-    void restoreFromFullscreen(const std::string& id) {
+    void restoreFromFullscreen(const LumeString& id) {
         auto v = find(id);
         if (!v || !v->valid) return;
         v->fullscreen = false;
@@ -1521,13 +2268,13 @@ namespace GLCanvas {
         g_views.clear();
     }
 }
-void captureCanvasMouse(const std::string& canvasId) {
+void captureCanvasMouse(const LumeString& canvasId) {
     if (g_mouseCaptured) return;
     auto v = GLCanvas::find(canvasId);
     if (v && v->valid) {
         g_mouseCaptured = true;
         g_ignoreWarpMouse = false;
-        g_capturedCanvasId = canvasId;
+        lstrcpynA(g_capturedCanvasId, canvasId.c_str(), 128);
         g_capturedCanvasW = v->w;
         g_capturedCanvasH = v->h;
         g_capturedCanvasX = v->x;
@@ -1540,7 +2287,7 @@ void captureCanvasMouse(const std::string& canvasId) {
     }
 }
 namespace GradientText {
-    struct HSV { float h, s, v; };
+    struct HSV {float h, s, v;};
     static HSV rgb2hsv(HTP::Color c) {
         float r = c.r * 0.00392156862f;
         float g = c.g * 0.00392156862f;
@@ -1568,11 +2315,11 @@ namespace GradientText {
         float x = c * (1.0f - std::abs(fmodf(hsv.h / 60.0f, 2.0f) - 1.0f));
         float m = hsv.v - c;
         float r = 0, g = 0, b = 0;
-        if (hsv.h >= 0 && hsv.h < 60) { r = c; g = x; b = 0; }
-        else if (hsv.h >= 60 && hsv.h < 120) { r = x; g = c; b = 0; }
-        else if (hsv.h >= 120 && hsv.h < 180) { r = 0; g = c; b = x; }
-        else if (hsv.h >= 180 && hsv.h < 240) { r = 0; g = x; b = c; }
-        else if (hsv.h >= 240 && hsv.h < 300) { r = x; g = 0; b = c; }
+        if (hsv.h >= 0 && hsv.h < 60) {r = c; g = x; b = 0;}
+        else if (hsv.h >= 60 && hsv.h < 120) {r = x; g = c; b = 0;}
+        else if (hsv.h >= 120 && hsv.h < 180) {r = 0; g = c; b = x;}
+        else if (hsv.h >= 180 && hsv.h < 240) {r = 0; g = x; b = c;}
+        else if (hsv.h >= 240 && hsv.h < 300) {r = x; g = 0; b = c;}
         else { r = c; g = 0; b = x; }
         return {
             (int)((r + m) * 255.0f),
@@ -1602,7 +2349,7 @@ namespace GradientText {
         float v = hsv1.v + (hsv2.v - hsv1.v) * t;
         return hsv2rgb({ h, s, v });
     }
-    void draw(HDC dc, const std::string& text, HFONT font,int x, int y, HTP::Color c1, HTP::Color c2,float shimmer_offset = 0.0f)
+    void draw(HDC dc, const LumeString& text, HFONT font,int x, int y, HTP::Color c1, HTP::Color c2,float shimmer_offset = 0.0f)
     {
         if (text.empty()) return;
         HFONT oldFont = (HFONT)SelectObject(dc, font);
@@ -1639,7 +2386,7 @@ namespace GradientText {
         BitBlt(outDC, 0, 0, W, H, dc, x, y, SRCCOPY);
         GdiFlush();
         float span = 2.0f;
-        std::vector<HTP::Color> gradLine(W);
+        LumeVector<HTP::Color> gradLine(W);
         for (int px = 0; px < W; px++) {
             float normX = (W > 1) ? (float)px / (float)(W - 1) : 0.0f;
             float t = normX + shimmer_offset;
@@ -1710,26 +2457,18 @@ static void gluLookAt_impl(double eyeX, double eyeY, double eyeZ,
     glMultMatrixd(m);
     glTranslated(-eyeX, -eyeY, -eyeZ);
 }
-std::string resolveUrl(const std::string& url, const std::string& baseUrl);
-extern std::string g_curUrl;
+LumeString resolveUrl(const LumeString& url, const LumeString& baseUrl);
+extern LumeString g_curUrl;
 namespace WasmEngine {
     static IM3Environment env = nullptr;
-    struct Instance {
-        IM3Runtime runtime = nullptr;
-        IM3Module module = nullptr;
-        std::string bytes;
-    };
-    static std::map<int, Instance> instances;
+    struct Instance {IM3Runtime runtime = nullptr; IM3Module module = nullptr; LumeString bytes;};
+    static LumeMap<int, Instance> instances;
     static int nextId = 1;
-
-    void init() {
-        if (!env) env = m3_NewEnvironment();
-    }
-    int load(const std::string& wasmBytes) {
+    void init() {if (!env) env = m3_NewEnvironment();}
+    int load(const LumeString& wasmBytes) {
         if (!env) init();
         IM3Runtime runtime = m3_NewRuntime(env, 64 * 1024, nullptr);
         if (!runtime) return -1;
-
         int id = nextId++;
         Instance& inst = instances[id];
         inst.bytes = wasmBytes;
@@ -1751,9 +2490,7 @@ namespace WasmEngine {
         return id;
     }
     void clear() {
-        for (auto& kv : instances) {
-            m3_FreeRuntime(kv.second.runtime);
-        }
+        for (auto& kv : instances) m3_FreeRuntime(kv.second.runtime);
         instances.clear();
         if (env) {
             m3_FreeEnvironment(env);
@@ -1763,56 +2500,88 @@ namespace WasmEngine {
 }
 extern HTP::Doc g_doc;
 namespace GLBuffers {
-    std::map<int, std::vector<float>> buffers;
+    LumeMap<int, LumeVector<float>> buffers;
     int nextId = 1;
     void clear() { buffers.clear(); }
 }
 namespace GLFont {
     struct Key {
-        HGLRC ctx;
-        uint64_t hash;
-        bool operator<(const Key& o) const {
-            if (ctx != o.ctx) return ctx < o.ctx;
-            return hash < o.hash;
-        }
+        HGLRC ctx; uint64_t hash;
+        bool operator==(const Key& o) const {return ctx == o.ctx && hash == o.hash;}
     };
-    std::map<Key, GLuint> lists;
+    struct Entry {Key k; GLuint v; bool occ;};
+    static Entry* g_tab = nullptr;
+    static size_t g_cap = 0, g_sz = 0;
     GLuint get(HDC hdc, HGLRC ctx, HFONT font, uint64_t hash) {
-        Key k{ ctx, hash };
-        auto it = lists.find(k);
-        if (it != lists.end()) return it->second;
+        Key k{ctx, hash};
+        uint32_t kh = (uint32_t)(hash ^ (hash >> 32)) ^ (uint32_t)(uintptr_t)ctx;
+        if (g_sz >= g_cap / 2) {
+            size_t oCap = g_cap; Entry* oTab = g_tab;
+            g_cap = oCap == 0 ? 16 : oCap * 2;
+            g_tab = (Entry*)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, g_cap * sizeof(Entry));
+            g_sz = 0;
+            if (oTab) {
+                for (size_t j = 0; j < oCap; ++j) {
+                    if (oTab[j].occ) {
+                        uint32_t h = (uint32_t)(oTab[j].k.hash ^ (oTab[j].k.hash >> 32)) ^ (uint32_t)(uintptr_t)oTab[j].k.ctx;
+                        size_t idx = h & (g_cap - 1);
+                        while (g_tab[idx].occ) idx = (idx + 1) & (g_cap - 1);
+                        g_tab[idx] = oTab[j];
+                        g_sz++;
+                    }
+                }
+                HeapFree(GetProcessHeap(), 0, oTab);
+            }
+        }
+        size_t idx = kh & (g_cap - 1);
+        while (g_tab[idx].occ) {
+            if (g_tab[idx].k == k) return g_tab[idx].v;
+            idx = (idx + 1) & (g_cap - 1);
+        }
         GLuint base = glGenLists(2048);
         HFONT oldFont = (HFONT)SelectObject(hdc, font);
         wglUseFontBitmapsW(hdc, 0, 2048, base);
         SelectObject(hdc, oldFont);
-        lists[k] = base;
+        g_tab[idx] = {k, base, true};
+        g_sz++;
         return base;
     }
     void clear() {
-        for (auto& kv : lists) glDeleteLists(kv.second, 2048);
+        if (g_tab) {
+            for (size_t j = 0; j < g_cap; ++j) if (g_tab[j].occ) glDeleteLists(g_tab[j].v, 2048);
+            HeapFree(GetProcessHeap(), 0, g_tab);
+            g_tab = nullptr; g_cap = g_sz = 0;
+        }
+    }
+}
+namespace GLModelCache {
+    LumeVector<GLuint> lists;
+    void add(GLuint id) { lists.push_back(id); }
+    void clear() {
+        for (GLuint id : lists) glDeleteLists(id, 1);
         lists.clear();
     }
 }
 namespace Script {
 struct InputState {
-    std::string text, placeholder;
+    LumeString text, placeholder;
     int x = 0, y = 0, w = 250, h = 28;
     bool focused = false;
     int cursor = 0;
 };
-std::map<std::string, InputState> g_inputs;
-std::map<std::string, std::string> g_texts;
-std::map<std::string, int> g_offsets_y;
-std::map<std::string, float> g_shimmer_offsets;
-std::map<std::string, std::function<void()>> g_clicks;
-std::map<int, int> g_timerRefs;
-std::map<std::string, int> g_canvasClickRefs;
-std::map<std::string, int> g_canvasMouseMoveRefs;
+LumeMap<LumeString, InputState> g_inputs;
+LumeMap<LumeString, LumeString> g_texts;
+LumeMap<LumeString, int> g_offsets_y;
+LumeMap<LumeString, float> g_shimmer_offsets;
+LumeMap<LumeString, LumeAction> g_clicks;
+LumeMap<int, int> g_timerRefs;
+LumeMap<LumeString, int> g_canvasClickRefs;
+LumeMap<LumeString, int> g_canvasMouseMoveRefs;
 int g_timerN = 9000;
 int g_keyDownRef = LUA_NOREF;
 lua_State* g_L = nullptr;
 HWND g_hwnd = nullptr;
-std::string g_focusId;
+LumeString g_focusId;
 static int l_set_prop(lua_State* L) {
     const char* id = luaL_checkstring(L, 1);
     const char* prop = luaL_checkstring(L, 2);
@@ -1824,9 +2593,22 @@ static int l_set_prop(lua_State* L) {
             if (pair.first == prop) { pair.second = val; found = true; break; }
         }
         if (!found) e->props.d.push_back({ prop, val });
-        invalidateContent();
+        invalidateDOM();
     }
     return 0;
+}
+static int l_get_node_prop(lua_State* L) {
+    const char* id = luaL_checkstring(L, 1);
+    const char* prop = luaL_checkstring(L, 2);
+    const char* def = luaL_optstring(L, 3, "");
+    auto e = HTP::findById(g_doc.root, id);
+    if (e) {
+        lua_pushstring(L, e->props.get(prop, def));
+    }
+    else {
+        lua_pushstring(L, def);
+    }
+    return 1;
 }
 static int l_set_inner_htp(lua_State* L) {
     const char* id = luaL_checkstring(L, 1);
@@ -1836,20 +2618,20 @@ static int l_set_inner_htp(lua_State* L) {
         HTP::Parser p;
         HTP::Doc temp = p.parse(htp);
         e->children = temp.root->children;
-        invalidateContent();
+        invalidateDOM();
     }
     return 0;
 }
 static int l_set_text(lua_State* L) {
     const char* id = luaL_checkstring(L, 1);
     const char* t = luaL_checkstring(L, 2);
-    std::string nv = t;
+    LumeString nv = t;
     auto& c = g_texts[id];
     if (c != nv) {
         c = nv;
         auto i = g_inputs.find(id);
         if (i != g_inputs.end()) i->second.text = nv;
-        invalidateContent();
+        invalidateDOM();
     }
     return 0;
 }
@@ -1869,7 +2651,7 @@ static int l_set_offset_y(lua_State* L) {
     auto& c = g_offsets_y[id];
     if (c != o) {
         c = o;
-        invalidateContent();
+        invalidateDOM();
     }
     return 0;
 }
@@ -1880,7 +2662,7 @@ static int l_get_offset_y(lua_State* L) {
 }
 static int l_set_shimmer(lua_State* L) {
     g_shimmer_offsets[luaL_checkstring(L, 1)] = (float)luaL_checknumber(L, 2);
-    invalidateContent();
+    invalidateDOM();
     return 0;
 }
 static int l_on_click(lua_State* L) {
@@ -1888,7 +2670,7 @@ static int l_on_click(lua_State* L) {
     luaL_checktype(L, 2, LUA_TFUNCTION);
     lua_pushvalue(L, 2);
     int ref = luaL_ref(L, LUA_REGISTRYINDEX);
-    std::string sid = id;
+    LumeString sid = id;
     g_clicks[sid] = [sid, ref]() {
         if (!g_L) return;
         lua_rawgeti(g_L, LUA_REGISTRYINDEX, ref);
@@ -1900,6 +2682,11 @@ static int l_on_click(lua_State* L) {
     return 0;
 }
 static int l_get_mouse(lua_State* L) {
+    if (!g_opt_lua_mouse) {
+        lua_pushinteger(L, 0);
+        lua_pushinteger(L, 0);
+        return 2;
+    }
     POINT p;
     GetCursorPos(&p);
     if (g_hwnd) ScreenToClient(g_hwnd, &p);
@@ -1908,6 +2695,11 @@ static int l_get_mouse(lua_State* L) {
     return 2;
 }
 static int l_get_mouse_delta(lua_State* L) {
+    if (!g_opt_lua_mouse) {
+        lua_pushinteger(L, 0);
+        lua_pushinteger(L, 0);
+        return 2;
+    }
     lua_pushinteger(L, g_mouseDeltaX);
     lua_pushinteger(L, g_mouseDeltaY);
     g_mouseDeltaX = 0;
@@ -1942,7 +2734,12 @@ static bool isLocalAccessAllowed() {
     return (g_curUrl.find("http://") != 0 && g_curUrl.find("https://") != 0);
 }
 static int l_http(lua_State* L) {
-    std::string reqUrl = luaL_checkstring(L, 1);
+    if (!g_opt_lua_http) {
+        lua_pushstring(L, "SECURITY_ERROR: HTTP requests are disabled by user.");
+        lua_pushinteger(L, 403);
+        return 2;
+    }
+    LumeString reqUrl = luaL_checkstring(L, 1);
     if (reqUrl.find("file://") == 0 && !isLocalAccessAllowed()) {
         lua_pushstring(L, "SECURITY_ERROR: Remote pages cannot access local files.");
         lua_pushinteger(L, 403);
@@ -1953,9 +2750,20 @@ static int l_http(lua_State* L) {
     lua_pushinteger(L, r.code);
     return 2;
 }
-static int l_navigate(lua_State* L) { navigateTo(luaL_checkstring(L, 1)); return 0; }
-static int l_alert(lua_State* L) { MessageBoxU(g_hwnd, luaL_checkstring(L, 1), "Lume", MB_OK); return 0; }
-static int l_refresh(lua_State* L) { (void)L; invalidateContent(); return 0; }
+static int l_navigate(lua_State* L) {
+    LumeString* url = new LumeString(luaL_checkstring(L, 1));
+    PostMessage(g_hwnd, WM_NAVIGATE_DEFERRED, (WPARAM)url, 0);
+    return 0;
+}
+static int l_alert(lua_State* L) {
+    MessageBoxU(g_hwnd, luaL_checkstring(L, 1), "Lume", MB_OK);
+    return 0;
+}
+static int l_refresh(lua_State* L) {
+    (void)L;
+    invalidateContent();
+    return 0;
+}
 static int l_get_input(lua_State* L) {
     auto i = g_inputs.find(luaL_checkstring(L, 1));
     lua_pushstring(L, i != g_inputs.end() ? i->second.text.c_str() : "");
@@ -2048,10 +2856,14 @@ static int l_cv_text(lua_State* L) {
     return 0;
 }
 static int l_gl_available(lua_State* L) {
-    lua_pushboolean(L, 1);
+    lua_pushboolean(L, (g_opt_gpu && GLLoader::available()) ? 1 : 0);
     return 1;
 }
 static int l_gl_begin(lua_State* L) {
+    if (!g_opt_gpu) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
     const char* id = luaL_checkstring(L, 1);
     int w = (int)luaL_optinteger(L, 2, 0);
     int h = (int)luaL_optinteger(L, 3, 0);
@@ -2168,7 +2980,7 @@ static int l_get_window_size(lua_State* L) {
     }
     return 2;
 }
-void fireCanvasClick(const std::string& canvasId, int x, int y, int button) {
+void fireCanvasClick(const LumeString& canvasId, int x, int y, int button) {
     auto it = g_canvasClickRefs.find(canvasId);
     if (it == g_canvasClickRefs.end() || !g_L) return;
     lua_rawgeti(g_L, LUA_REGISTRYINDEX, it->second);
@@ -2183,7 +2995,7 @@ void fireCanvasClick(const std::string& canvasId, int x, int y, int button) {
 static int l_on_canvas_click(lua_State* L) {
     const char* id = luaL_checkstring(L, 1);
     luaL_checktype(L, 2, LUA_TFUNCTION);
-    std::string sid = id;
+    LumeString sid = id;
     auto it = g_canvasClickRefs.find(sid);
     if (it != g_canvasClickRefs.end()) {
         luaL_unref(L, LUA_REGISTRYINDEX, it->second);
@@ -2216,24 +3028,17 @@ static int l_gl_text_coord2f(lua_State* L) {
 }
 static int l_gl_load_texture(lua_State* L) {
     const char* path = luaL_checkstring(L, 1);
-    int len = MultiByteToWideChar(CP_UTF8, 0, path, -1, NULL, 0);
-    std::wstring wpath(len, 0);
-    MultiByteToWideChar(CP_UTF8, 0, path, -1, &wpath[0], len);
-    Gdiplus::Bitmap bmp(wpath.c_str());
+    wchar_t wpath[MAX_PATH];
+    MultiByteToWideChar(CP_UTF8, 0, path, -1, wpath, MAX_PATH);
+    Gdiplus::Bitmap bmp(wpath);
     if (bmp.GetLastStatus() != Gdiplus::Ok) {
         lua_pushnil(L);
         return 1;
     }
     int w = bmp.GetWidth();
     int h = bmp.GetHeight();
-    std::vector<unsigned char> pixels;
-    try {
-        pixels.resize(w * h * 4);
-    }
-    catch (...) {
-        lua_pushnil(L);
-        return 1;
-    }
+    LumeVector<unsigned char> pixels;
+    pixels.resize(w * h * 4);
     Gdiplus::Rect rect(0, 0, w, h);
     Gdiplus::BitmapData bmpData;
     bmp.LockBits(&rect, Gdiplus::ImageLockModeRead, PixelFormat32bppARGB, &bmpData);
@@ -2259,15 +3064,453 @@ static int l_gl_load_texture(lua_State* L) {
     lua_pushinteger(L, texID);
     return 1;
 }
-static int l_gl_load_obj(lua_State* L) {
+namespace FastJson {
+    enum Type {TYPE_NULL = 0, TYPE_BOOL, TYPE_NUMBER, TYPE_STRING, TYPE_ARRAY, TYPE_OBJECT};
+    struct Node {
+        Type type; char* key; Node* next;
+        union {
+            char* str_val;
+            double num_val;
+            bool bool_val;
+            Node* child;
+        };
+    };
+    struct ArenaChunk {
+        ArenaChunk* next;
+        size_t used;
+        size_t cap;
+        char data[1];
+    };
+    struct Doc {
+        ArenaChunk* head = nullptr;
+        Node* root = nullptr;
+    };
+    static void* Alloc(Doc* doc, size_t size) {
+        size = (size + 7) & ~7;
+        if (!doc->head || doc->head->used + size > doc->head->cap) {
+            size_t cap = size > 65536 ? size : 65536;
+            ArenaChunk* chunk = (ArenaChunk*)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(ArenaChunk) + cap);
+            if (!chunk) return nullptr;
+            chunk->cap = cap;
+            chunk->next = doc->head;
+            doc->head = chunk;
+        }
+        void* ptr = doc->head->data + doc->head->used;
+        doc->head->used += size;
+        return ptr;
+    }
+    static void Free(Doc* doc) {
+        while (doc->head) {
+            ArenaChunk* next = doc->head->next;
+            HeapFree(GetProcessHeap(), 0, doc->head);
+            doc->head = next;
+        }
+    }
+    static void SkipWS(const char** p) {while (**p == ' ' || **p == '\t' || **p == '\n' || **p == '\r') (*p)++;}
+    static bool FastStrToD(const char** str, double* out) {
+        const char* p = *str; double sign = 1.0;
+        if (*p == '-') {
+            sign = -1.0;
+            p++;
+        }
+        double val = 0.0; bool has_digits = false;
+        while (*p >= '0' && *p <= '9') {
+            val = val * 10.0 + (*p - '0');
+            p++;
+            has_digits = true;
+        }
+        if (!has_digits) return false;
+        if (*p == '.') {
+            p++; double frac = 1.0;
+            while (*p >= '0' && *p <= '9') {
+                frac *= 0.1;
+                val += (*p - '0') * frac;
+                p++;
+            }
+        }
+        if (*p == 'e' || *p == 'E') {
+            p++;
+            double exp_sign = 1.0;
+            if (*p == '-') {
+                exp_sign = -1.0;
+                p++;
+            }
+            else if (*p == '+') p++;
+            int exp = 0;
+            while (*p >= '0' && *p <= '9') {
+                exp = exp * 10 + (*p - '0');
+                p++;
+            }
+            double mult = 1.0, base = 10.0;
+            while (exp > 0) {
+                if (exp & 1) mult *= base;
+                base *= base;
+                exp >>= 1;
+            }
+            if (exp_sign < 0) val /= mult;
+            else val *= mult;
+        }
+        *str = p;
+        *out = sign * val;
+        return true;
+    }
+    static char* ParseStr(Doc* doc, const char** p) {
+        (*p)++;
+        const char* start = *p;
+        while (**p && **p != '"') {
+            if (**p == '\\') (*p)++;
+            (*p)++;
+        }
+        if (**p != '"') return nullptr;
+        size_t max_len = *p - start;
+        char* str = (char*)Alloc(doc, max_len + 1);
+        if (!str) return nullptr;
+        const char* src = start; char* dst = str;
+        while (src < *p) {
+            if (*src == '\\') {
+                src++;
+                switch (*src) {
+                case '"': *dst++ = '"'; break;
+                case '\\': *dst++ = '\\'; break;
+                case '/': *dst++ = '/'; break;
+                case 'b': *dst++ = '\b'; break;
+                case 'f': *dst++ = '\f'; break;
+                case 'n': *dst++ = '\n'; break;
+                case 'r': *dst++ = '\r'; break;
+                case 't': *dst++ = '\t'; break;
+                default: *dst++ = *src;break;
+                }
+                src++;
+            }
+            else *dst++ = *src++;
+        }
+        *dst = '\0';
+        (*p)++;
+        return str;
+    }
+    static Node* ParseVal(Doc* doc, const char** p, int depth);
+    static Node* ParseArr(Doc* doc, const char** p, int depth) {
+        if (depth > 512) return nullptr;
+        Node* node = (Node*)Alloc(doc, sizeof(Node));
+        node->type = TYPE_ARRAY;
+        (*p)++;
+        SkipWS(p);
+        if (**p == ']') {
+            (*p)++;
+            return node;
+        }
+        Node* current = nullptr;
+        while (**p) {
+            Node* child = ParseVal(doc, p, depth + 1);
+            if (!child) return nullptr;
+            if (!node->child) {
+                node->child = child;
+                current = child;
+            }
+            else {
+                current->next = child;
+                current = child;
+            }
+            SkipWS(p);
+            if (**p == ']') {
+                (*p)++;
+                return node;
+            }
+            if (**p != ',') return nullptr;
+            (*p)++; SkipWS(p);
+        }
+        return nullptr;
+    }
+    static Node* ParseObj(Doc* doc, const char** p, int depth) {
+        if (depth > 512) return nullptr;
+        Node* node = (Node*)Alloc(doc, sizeof(Node));
+        node->type = TYPE_OBJECT;
+        (*p)++;
+        SkipWS(p);
+        if (**p == '}') {
+            (*p)++;
+            return node;
+        }
+        Node* current = nullptr;
+        while (**p) {
+            if (**p != '"') return nullptr;
+            char* key = ParseStr(doc, p);
+            if (!key) return nullptr;
+            SkipWS(p);
+            if (**p != ':') return nullptr;
+            (*p)++;
+            SkipWS(p);
+            Node* child = ParseVal(doc, p, depth + 1);
+            if (!child) return nullptr;
+            child->key = key;
+            if (!node->child) {
+                node->child = child;
+                current = child;
+            }
+            else {
+                current->next = child;
+                current = child;
+            }
+            SkipWS(p); if (**p == '}') {
+                (*p)++;
+                return node;
+            }
+            if (**p != ',') return nullptr;
+            (*p)++;
+            SkipWS(p);
+        }
+        return nullptr;
+    }
+    static Node* ParseVal(Doc* doc, const char** p, int depth) {
+        SkipWS(p);
+        char c = **p;
+        if (!c) return nullptr;
+        if (c == '"') {
+            Node* n = (Node*)Alloc(doc, sizeof(Node));
+            n->type = TYPE_STRING;
+            n->str_val = ParseStr(doc, p);
+            return n->str_val ? n : nullptr;
+        }
+        if (c == '{') return ParseObj(doc, p, depth);
+        if (c == '[') return ParseArr(doc, p, depth);
+        if ((c >= '0' && c <= '9') || c == '-') {
+            double val;
+            if (!FastStrToD(p, &val)) return nullptr;
+            Node* n = (Node*)Alloc(doc, sizeof(Node));
+            n->type = TYPE_NUMBER;
+            n->num_val = val;
+            return n;
+        }
+        auto match = [](const char* s, const char* t, int l) {
+            for (int i = 0; i < l; i++) if (s[i] != t[i]) return false;
+            return true;
+        };
+        if (match(*p, "true", 4)) {
+            Node* n = (Node*)Alloc(doc, sizeof(Node));
+            n->type = TYPE_BOOL;
+            n->bool_val = true;
+            (*p) += 4;
+            return n;
+        }
+        if (match(*p, "false", 5)) {
+            Node* n = (Node*)Alloc(doc, sizeof(Node));
+            n->type = TYPE_BOOL;
+            n->bool_val = false;
+            (*p) += 5;
+            return n;
+        }
+        if (match(*p, "null", 4)) {
+            Node* n = (Node*)Alloc(doc, sizeof(Node));
+            n->type = TYPE_NULL;
+            (*p) += 4;
+            return n;
+        }
+        return nullptr;
+    }
+    static bool Parse(const char* json, Doc* out) {
+        const char* p = json; out->head = nullptr; out->root = ParseVal(out, &p, 0);
+        if (!out->root) {
+            Free(out);
+            return false;
+        }
+        return true;
+    }
+    static Node* GetObj(Node* obj, const char* key) {
+        if (!obj || obj->type != TYPE_OBJECT) return nullptr;
+        for (Node* c = obj->child; c; c = c->next) if (c->key && fast_streq(c->key, key)) return c;
+        return nullptr;
+    }
+}
+static void PushJsonToLua(lua_State* L, FastJson::Node* node) {
+    if (!node) { lua_pushnil(L); return; }
+    switch (node->type) {
+        case FastJson::TYPE_NULL: lua_pushnil(L); break;
+        case FastJson::TYPE_BOOL: lua_pushboolean(L, node->bool_val); break;
+        case FastJson::TYPE_NUMBER: lua_pushnumber(L, node->num_val); break;
+        case FastJson::TYPE_STRING: lua_pushstring(L, node->str_val); break;
+        case FastJson::TYPE_ARRAY: {
+            lua_newtable(L); int idx = 1;
+            for (FastJson::Node* c = node->child; c; c = c->next) {
+                PushJsonToLua(L, c);
+                lua_rawseti(L, -2, idx++);
+            }
+            break;
+        }
+        case FastJson::TYPE_OBJECT: {
+            lua_newtable(L);
+            for (FastJson::Node* c = node->child; c; c = c->next) {
+                if (c->key) {
+                    PushJsonToLua(L, c);
+                    lua_setfield(L, -2, c->key);
+                }
+            }
+            break;
+        }
+    }
+}
+static int l_json_parse(lua_State* L) {
+    const char* json_str = luaL_checkstring(L, 1);
+    FastJson::Doc doc;
+    if (FastJson::Parse(json_str, &doc)) {
+        PushJsonToLua(L, doc.root);
+        FastJson::Free(&doc);
+        return 1;
+    }
+    lua_pushnil(L);
+    lua_pushstring(L, "Invalid JSON format or depth limit exceeded");
+    return 2;
+}
+static LumeString fetch_resource(const LumeString& fullUrl) {
+    if (fullUrl.find("http://") == 0 || fullUrl.find("https://") == 0) {
+        auto r = Net::fetch(Net::URL::parse(fullUrl));
+        return r.ok ? r.body : "";
+    }
+    LumeString path = fullUrl;
+    if (path.find("file://") == 0) path = path.substr(7);
+    return fastReadFile(path);
+}
+static int l_gl_load_bbmodel(lua_State* L) {
     const char* path = luaL_checkstring(L, 1);
-    std::string fileData = fastReadFile(path);
+    LumeString fullUrl = resolveUrl(path, g_curUrl);
+    LumeString fileData = fetch_resource(fullUrl);
     if (fileData.empty()) {
         lua_pushnil(L);
         return 1;
     }
-    std::vector<float> verts;
+    FastJson::Doc doc;
+    if (!FastJson::Parse(fileData.c_str(), &doc)) {
+        lua_pushnil(L);
+        return 1;
+    }
     GLuint listId = glGenLists(1);
+    GLModelCache::add(listId);
+    glNewList(listId, GL_COMPILE);
+    FastJson::Node* resNode = FastJson::GetObj(doc.root, "resolution");
+    float resW = 16.0f, resH = 16.0f;
+    if (resNode) {
+        FastJson::Node* rw = FastJson::GetObj(resNode, "width");
+        if (rw && rw->type == FastJson::TYPE_NUMBER) resW = (float)rw->num_val;
+        FastJson::Node* rh = FastJson::GetObj(resNode, "height");
+        if (rh && rh->type == FastJson::TYPE_NUMBER) resH = (float)rh->num_val;
+    }
+    auto get_vec3 = [](FastJson::Node* obj, const char* name, float* out, float def) {
+        out[0] = out[1] = out[2] = def;
+        FastJson::Node* arr = FastJson::GetObj(obj, name);
+        if (arr && arr->type == FastJson::TYPE_ARRAY && arr->child) {
+            FastJson::Node* c = arr->child; out[0] = (float)c->num_val; c = c->next;
+            if (c) { out[1] = (float)c->num_val; c = c->next; if (c) out[2] = (float)c->num_val; }
+        }
+    };
+    auto get_uv = [](FastJson::Node* obj, const char* dir, float* uv, float rw, float rh) {
+        uv[0] = 0; uv[1] = 0; uv[2] = 1; uv[3] = 1;
+        FastJson::Node* faces = FastJson::GetObj(obj, "faces");
+        if (!faces) return;
+        FastJson::Node* face = FastJson::GetObj(faces, dir);
+        if (!face) return;
+        FastJson::Node* uv_arr = FastJson::GetObj(face, "uv");
+        if (uv_arr && uv_arr->type == FastJson::TYPE_ARRAY && uv_arr->child) {
+            FastJson::Node* c = uv_arr->child;
+            uv[0] = (float)c->num_val / rw;
+            c = c->next;
+            if (c) {
+                uv[1] = (float)c->num_val / rh;
+                c = c->next;
+                if (c) {
+                    uv[2] = (float)c->num_val / rw;
+                    c = c->next;
+                    if (c) uv[3] = (float)c->num_val / rh;
+                }
+            }
+        }
+    };
+    FastJson::Node* elements = FastJson::GetObj(doc.root, "elements");
+    if (elements && elements->type == FastJson::TYPE_ARRAY) {
+        for (FastJson::Node* el = elements->child;
+            el;
+            el = el->next) {
+            if (el->type != FastJson::TYPE_OBJECT) continue;
+            float from[3], to[3], origin[3];
+            get_vec3(el, "from", from, 0.0f);
+            get_vec3(el, "to", to, 0.0f);
+            get_vec3(el, "origin", origin, 0.0f);
+            for (int j = 0; j < 3; j++) {
+                from[j] /= 16.0f;
+                to[j] /= 16.0f;
+                origin[j] /= 16.0f;
+            }
+            float rotAngle = 0.0f;
+            const char* rotAxis = "x";
+            FastJson::Node* rot = FastJson::GetObj(el, "rotation");
+            if (rot) {
+                FastJson::Node* ra = FastJson::GetObj(rot, "angle");
+                if (ra) rotAngle = (float)ra->num_val;
+                FastJson::Node* rx = FastJson::GetObj(rot, "axis"); 
+                if (rx && rx->str_val) rotAxis = rx->str_val;
+            }
+            glPushMatrix();
+            glTranslatef(origin[0], origin[1], origin[2]);
+            if (rotAngle != 0.0f) {
+                if (rotAxis[0] == 'x') glRotatef(rotAngle, 1, 0, 0);
+                else if (rotAxis[0] == 'y') glRotatef(rotAngle, 0, 1, 0);
+                else if (rotAxis[0] == 'z') glRotatef(rotAngle, 0, 0, 1);
+            }
+            glTranslatef(-origin[0], -origin[1], -origin[2]);
+            glBegin(GL_QUADS);
+            float uv[4];
+            glNormal3f(0.0f, 0.0f, -1.0f); get_uv(el, "north", uv, resW, resH);
+            glTexCoord2f(uv[2], uv[3]); glVertex3f(from[0], from[1], from[2]);
+            glTexCoord2f(uv[0], uv[3]); glVertex3f(to[0], from[1], from[2]);
+            glTexCoord2f(uv[0], uv[1]); glVertex3f(to[0], to[1], from[2]);
+            glTexCoord2f(uv[2], uv[1]); glVertex3f(from[0], to[1], from[2]);
+
+            glNormal3f(0.0f, 0.0f, 1.0f); get_uv(el, "south", uv, resW, resH);
+            glTexCoord2f(uv[0], uv[3]); glVertex3f(from[0], from[1], to[2]);
+            glTexCoord2f(uv[2], uv[3]); glVertex3f(to[0], from[1], to[2]);
+            glTexCoord2f(uv[2], uv[1]); glVertex3f(to[0], to[1], to[2]);
+            glTexCoord2f(uv[0], uv[1]); glVertex3f(from[0], to[1], to[2]);
+
+            glNormal3f(0.0f, 1.0f, 0.0f); get_uv(el, "up", uv, resW, resH);
+            glTexCoord2f(uv[0], uv[3]); glVertex3f(from[0], to[1], from[2]);
+            glTexCoord2f(uv[2], uv[3]); glVertex3f(to[0], to[1], from[2]);
+            glTexCoord2f(uv[2], uv[1]); glVertex3f(to[0], to[1], to[2]);
+            glTexCoord2f(uv[0], uv[1]); glVertex3f(from[0], to[1], to[2]);
+
+            glNormal3f(0.0f, -1.0f, 0.0f); get_uv(el, "down", uv, resW, resH);
+            glTexCoord2f(uv[0], uv[1]); glVertex3f(from[0], from[1], from[2]);
+            glTexCoord2f(uv[2], uv[1]); glVertex3f(to[0], from[1], from[2]);
+            glTexCoord2f(uv[2], uv[3]); glVertex3f(to[0], from[1], to[2]);
+            glTexCoord2f(uv[0], uv[3]); glVertex3f(from[0], from[1], to[2]);
+
+            glNormal3f(1.0f, 0.0f, 0.0f); get_uv(el, "east", uv, resW, resH);
+            glTexCoord2f(uv[2], uv[3]); glVertex3f(to[0], from[1], from[2]);
+            glTexCoord2f(uv[0], uv[3]); glVertex3f(to[0], from[1], to[2]);
+            glTexCoord2f(uv[0], uv[1]); glVertex3f(to[0], to[1], to[2]);
+            glTexCoord2f(uv[2], uv[1]); glVertex3f(to[0], to[1], from[2]);
+
+            glNormal3f(-1.0f, 0.0f, 0.0f); get_uv(el, "west", uv, resW, resH);
+            glTexCoord2f(uv[0], uv[3]); glVertex3f(from[0], from[1], from[2]);
+            glTexCoord2f(uv[2], uv[3]); glVertex3f(from[0], from[1], to[2]);
+            glTexCoord2f(uv[2], uv[1]); glVertex3f(from[0], to[1], to[2]);
+            glTexCoord2f(uv[0], uv[1]); glVertex3f(from[0], to[1], from[2]);
+            glEnd();
+            glPopMatrix();
+        }
+    }
+    FastJson::Free(&doc);
+    glEndList();
+    lua_pushinteger(L, listId);
+    return 1;
+}
+static int l_gl_load_obj(lua_State* L) {
+    const char* path = luaL_checkstring(L, 1);
+    LumeString fileData = fastReadFile(path);
+    if (fileData.empty()) {
+        lua_pushnil(L);
+        return 1;
+    }
+    LumeVector<float> verts;
+    GLuint listId = glGenLists(1);
+    GLModelCache::add(listId);
     glNewList(listId, GL_COMPILE);
     glBegin(GL_TRIANGLES);
     auto fast_atof = [](const char** ptr) -> float {
@@ -2288,8 +3531,8 @@ static int l_gl_load_obj(lua_State* L) {
     size_t pos = 0;
     while (pos < fileData.length()) {
         size_t next = fileData.find('\n', pos);
-        std::string line = (next == std::string::npos) ? fileData.substr(pos) : fileData.substr(pos, next - pos);
-        pos = (next == std::string::npos) ? fileData.length() : next + 1;
+        LumeString line = (next == LumeString::npos) ? fileData.substr(pos) : fileData.substr(pos, next - pos);
+        pos = (next == LumeString::npos) ? fileData.length() : next + 1;
         if (!line.empty() && line.back() == '\r') line.pop_back();
         if (line.length() >= 2 && line[0] == 'v' && line[1] == ' ') {
             const char* p = line.c_str() + 2;
@@ -2299,7 +3542,7 @@ static int l_gl_load_obj(lua_State* L) {
             verts.push_back(x); verts.push_back(y); verts.push_back(z);
         }
         else if (line.length() >= 2 && line[0] == 'f' && line[1] == ' ') {
-            std::vector<int> face_verts;
+            LumeVector<int> face_verts;
             const char* p = line.c_str() + 2;
             int total_verts = (int)(verts.size() / 3);
             while (*p) {
@@ -2329,6 +3572,23 @@ static int l_gl_load_obj(lua_State* L) {
     glEnd();
     glEndList();
     lua_pushinteger(L, listId);
+    return 1;
+}
+static int l_load_ttf(lua_State* L) {
+    const char* urlStr = luaL_checkstring(L, 1);
+    LumeString fullUrl = resolveUrl(urlStr, g_curUrl);
+    LumeString fontBytes = fetch_resource(fullUrl);
+    if (fontBytes.empty()) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    DWORD numFonts = 0;
+    HANDLE hFont = AddFontMemResourceEx((void*)fontBytes.data(), (DWORD)fontBytes.size(), 0, &numFonts);
+    if (hFont) {
+        FontCache::g_memFonts.push_back(hFont);
+        lua_pushboolean(L, 1);
+    }
+    else lua_pushboolean(L, 0);
     return 1;
 }
 static int l_gl_delete_texture(lua_State* L) {
@@ -2367,7 +3627,7 @@ static int l_gl_materialfv(lua_State* L) {
 static int l_gl_create_buffer(lua_State* L) {
     luaL_checktype(L, 1, LUA_TTABLE);
     int len = (int)luaL_len(L, 1);
-    std::vector<float> buf;
+    LumeVector<float> buf;
     buf.reserve(len);
     for (int i = 1; i <= len; ++i) {
         lua_rawgeti(L, 1, i);
@@ -2375,7 +3635,7 @@ static int l_gl_create_buffer(lua_State* L) {
         lua_pop(L, 1);
     }
     int id = GLBuffers::nextId++;
-    GLBuffers::buffers[id] = std::move(buf);
+    GLBuffers::buffers[id] = static_cast<LumeVector<float>&&>(buf);
     lua_pushinteger(L, id);
     return 1;
 }
@@ -2437,14 +3697,13 @@ static int l_glu_build2d_mipmaps(lua_State* L) {
 }
 static int l_gl_load_texture_mipmapped(lua_State* L) {
     const char* path = luaL_checkstring(L, 1);
-    int len = MultiByteToWideChar(CP_UTF8, 0, path, -1, NULL, 0);
-    std::wstring wpath(len, 0);
-    MultiByteToWideChar(CP_UTF8, 0, path, -1, &wpath[0], len);
-    Gdiplus::Bitmap bmp(wpath.c_str());
+    wchar_t wpath[MAX_PATH];
+    MultiByteToWideChar(CP_UTF8, 0, path, -1, wpath, MAX_PATH);
+    Gdiplus::Bitmap bmp(wpath);
     if (bmp.GetLastStatus() != Gdiplus::Ok) { lua_pushnil(L); return 1; }
     int w = bmp.GetWidth();
     int h = bmp.GetHeight();
-    std::vector<unsigned char> pixels(w * h * 4);
+    LumeVector<unsigned char> pixels(w * h * 4);
     Gdiplus::Rect rect(0, 0, w, h);
     Gdiplus::BitmapData bmpData;
     bmp.LockBits(&rect, Gdiplus::ImageLockModeRead, PixelFormat32bppARGB, &bmpData);
@@ -2496,14 +3755,14 @@ static int l_gl_print(lua_State* L) {
     return 0;
 }
 static int l_download_async(lua_State* L) {
-    std::string url = luaL_checkstring(L, 1);
-    std::string fname = luaL_checkstring(L, 2);
+    LumeString url = luaL_checkstring(L, 1);
+    LumeString fname = luaL_checkstring(L, 2);
     AsyncNet::startDownload(url, fname);
     return 0;
 }
 static int l_download_status(lua_State* L) {
-    std::string url = luaL_checkstring(L, 1);
-    std::lock_guard<std::mutex> lock(AsyncNet::g_dlMutex);
+    LumeString url = luaL_checkstring(L, 1);
+    LumeLockGuard<LumeMutex> lock(AsyncNet::g_dlMutex);
     auto it = AsyncNet::g_downloads.find(url);
     if (it != AsyncNet::g_downloads.end()) {
         lua_pushinteger(L, it->second.status);
@@ -2516,49 +3775,29 @@ static int l_download_status(lua_State* L) {
     return 1;
 }
 static int l_plugin_from_net(lua_State* L) {
-    std::string url = luaL_checkstring(L, 1);
+    LumeString url = luaL_checkstring(L, 1);
     bool ok = Plugins::loadFromNet(url, g_curUrl, L);
     lua_pushboolean(L, ok ? 1 : 0);
     return 1;
 }
 static int l_load_lua(lua_State* L) {
     const char* url = luaL_checkstring(L, 1);
-    std::string fullUrl = resolveUrl(url, g_curUrl);
-    if (fullUrl.find("file://") == 0 && !isLocalAccessAllowed()) {
+    LumeString fullUrl = resolveUrl(url, g_curUrl);
+    if (fullUrl.find("http://") != 0 && fullUrl.find("https://") != 0 && !isLocalAccessAllowed()) {
         lua_pushboolean(L, 0);
-        lua_pushstring(L, "SECURITY_ERROR: Remote pages cannot load local scripts.");
+        lua_pushstring(L, "SECURITY_ERROR");
         return 2;
     }
-    std::string luaCode;
-    if (fullUrl.substr(0, 7) == "file://") {
-        std::string path = fullUrl.substr(7);
-        int len = MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, NULL, 0);
-        std::wstring wpath(len, 0);
-        MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, &wpath[0], len);
-        HANDLE hFile = CreateFileW(wpath.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-        if (hFile != INVALID_HANDLE_VALUE) {
-            DWORD size = GetFileSize(hFile, NULL);
-            if (size > 0 && size != INVALID_FILE_SIZE) {
-                luaCode.resize(size);
-                DWORD bytesRead = 0;
-                ReadFile(hFile, &luaCode[0], size, &bytesRead, NULL);
-            }
-            CloseHandle(hFile);
-        }
-    }
-    else {
-        auto r = Net::fetch(Net::URL::parse(fullUrl));
-        if (r.ok) luaCode = r.body;
-    }
+    LumeString luaCode = fetch_resource(fullUrl);
     if (luaCode.empty()) {
         lua_pushboolean(L, 0);
-        lua_pushstring(L, "Failed to load .lua (not found or network error)");
+        lua_pushstring(L, "File not found or network error");
         return 2;
     }
     if (luaL_dostring(L, luaCode.c_str()) != 0) {
-        const char* err = lua_tostring(L, -1);
+        const char* errMsg = lua_tostring(L, -1);
         lua_pushboolean(L, 0);
-        lua_pushstring(L, err);
+        lua_pushstring(L, errMsg);
         return 2;
     }
     lua_pushboolean(L, 1);
@@ -2566,47 +3805,34 @@ static int l_load_lua(lua_State* L) {
 }
 static int l_wasm_load(lua_State* L) {
     const char* url = luaL_checkstring(L, 1);
-    std::string fullUrl = resolveUrl(url, g_curUrl);
-    if (fullUrl.find("file://") == 0 && !isLocalAccessAllowed()) {
+    LumeString fullUrl = resolveUrl(url, g_curUrl);
+    if (fullUrl.find("http://") != 0 && fullUrl.find("https://") != 0 && !isLocalAccessAllowed()) {
         lua_pushnil(L);
-        lua_pushstring(L, "SECURITY_ERROR: Remote pages cannot load local WASM modules.");
+        lua_pushstring(L, "SECURITY_ERROR");
         return 2;
     }
-    std::string wasmBytes;
-    if (fullUrl.substr(0, 7) == "file://") {
-        std::string path = fullUrl.substr(7);
-        wasmBytes = fastReadFile(path);
-    }
-    else {
-        auto r = Net::fetch(Net::URL::parse(fullUrl));
-        if (r.ok) wasmBytes = r.body;
-    }
+    LumeString wasmBytes = fetch_resource(fullUrl);
     if (wasmBytes.empty()) {
         lua_pushnil(L);
-        lua_pushstring(L, "Failed to load WASM (not found or network error)");
+        lua_pushstring(L, "File not found");
         return 2;
     }
+
     int id = WasmEngine::load(wasmBytes);
-    if (id < 0) {
-        lua_pushnil(L);
-        lua_pushstring(L, "Failed to parse WASM module (invalid binary format)");
-        return 2;
-    }
-    lua_pushinteger(L, id);
-    return 1;
+    if (id < 0) { lua_pushnil(L); lua_pushstring(L, "Invalid WASM format"); return 2; }
+    lua_pushinteger(L, id); return 1;
 }
 static int l_wasm_load_raw(lua_State* L) {
     size_t len;
     const char* data = luaL_checklstring(L, 1, &len);
-    std::string bytes(data, len);
+    LumeString bytes(data, len);
     int id = WasmEngine::load(bytes);
     if (id < 0) {
         lua_pushnil(L);
         lua_pushstring(L, "Failed to parse RAW WASM module");
         return 2;
     }
-    lua_pushinteger(L, id);
-    return 1;
+    lua_pushinteger(L, id); return 1;
 }
 static int l_wasm_call(lua_State* L) {
     int id = (int)luaL_checkinteger(L, 1);
@@ -2621,8 +3847,8 @@ static int l_wasm_call(lua_State* L) {
         return 0;
     }
     int numArgs = m3_GetArgCount(func);
-    std::vector<uint64_t> argValues(numArgs, 0);
-    std::vector<const void*> argPtrs(numArgs, nullptr);
+    LumeVector<uint64_t> argValues(numArgs, 0);
+    LumeVector<const void*> argPtrs(numArgs, nullptr);
     for (int i = 0; i < numArgs; ++i) {
         int luaArgIdx = 3 + i;
         switch (m3_GetArgType(func, i)) {
@@ -2642,8 +3868,8 @@ static int l_wasm_call(lua_State* L) {
     }
     int numRets = m3_GetRetCount(func);
     if (numRets == 0) return 0;
-    std::vector<uint64_t> retValues(numRets, 0);
-    std::vector<const void*> retPtrs(numRets, nullptr);
+    LumeVector<uint64_t> retValues(numRets, 0);
+    LumeVector<const void*> retPtrs(numRets, nullptr);
     for (int i = 0; i < numRets; ++i) retPtrs[i] = &retValues[i];
     res = m3_GetResults(func, numRets, retPtrs.data());
     if (res) return 0;
@@ -2730,6 +3956,7 @@ void init() {
     lua_pushnil(g_L); lua_setfield(g_L, -2, "exit");
     lua_pushnil(g_L); lua_setfield(g_L, -2, "getenv");
     lua_register(g_L, "set_prop", l_set_prop);
+    lua_register(g_L, "get_node_prop", l_get_node_prop);
     lua_register(g_L, "set_inner_htp", l_set_inner_htp);
     lua_register(g_L, "set_text", l_set_text);
     lua_register(g_L, "get_text", l_get_text);
@@ -2800,7 +4027,10 @@ void init() {
     lua_register(g_L, "gl_bind_texture", l_gl_bind_texture);
     lua_register(g_L, "gl_text_coord2f", l_gl_text_coord2f);
     lua_register(g_L, "gl_load_texture", l_gl_load_texture);
+    lua_register(g_L, "json_parse", l_json_parse);
+    lua_register(g_L, "gl_load_bbmodel", l_gl_load_bbmodel);
     lua_register(g_L, "gl_load_obj", l_gl_load_obj);
+    lua_register(g_L, "load_ttf", l_load_ttf);
     lua_register(g_L, "gl_delete_texture", l_gl_delete_texture);
     lua_register(g_L, "gl_tex_parameteri", l_gl_tex_parameteri);
     lua_register(g_L, "gl_lightfv", l_gl_lightfv);
@@ -2827,7 +4057,7 @@ void init() {
     registerGLConstants(g_L);
     Plugins::initAllPlugins(g_L);
 }
-void exec(const std::string& code) {
+void exec(const LumeString& code) {
     if (!g_L) init();
     if (luaL_dostring(g_L, code.c_str()) != 0) {
         const char* e = lua_tostring(g_L, -1);
@@ -2837,7 +4067,7 @@ void exec(const std::string& code) {
         lua_pop(g_L, 1);
     }
 }
-void fireClick(const std::string& id) {
+void fireClick(const LumeString& id) {
     auto i = g_clicks.find(id);
     if (i != g_clicks.end()) i->second();
 }
@@ -2872,6 +4102,7 @@ void reset() {
     WasmEngine::clear();
     GLBuffers::clear();
     GLFont::clear();
+    GLModelCache::clear();
     if (g_L) {
         lua_close(g_L);
         g_L = nullptr;
@@ -2879,636 +4110,605 @@ void reset() {
 }
 }
 struct PendingPage {
-    std::string body;
-    std::string url;
+    LumeString body;
+    LumeString url;
     bool error = false;
     int navId = 0;
     bool isHistoryNav = false;
 };
-std::vector<PendingPage> g_pendingPages;
-std::mutex g_pageMutex;
+LumeVector<PendingPage> g_pendingPages;
+LumeMutex g_pageMutex;
 int g_currentNavId = 0;
-static std::string g_curUrl;
-std::string resolveUrl(const std::string& url, const std::string& baseUrl) {
-    if (url.find("://") != std::string::npos) return url;
+static LumeString g_curUrl;
+LumeString resolveUrl(const LumeString& url, const LumeString& baseUrl) {
+    if (url.find("://") != LumeString::npos) return url;
+    if (url.length() >= 2 && url[1] == ':') return url;
     if (url.find("about:") == 0) return url;
-    if (url.find("file://") == 0) return url;
-    char out[2048];
-    DWORD len = sizeof(out);
-    if (UrlCombineA(baseUrl.c_str(), url.c_str(), out, &len, 0) == S_OK) {
-        return std::string(out, len);
+    LumeString base = baseUrl;
+    bool hasFilePrefix = false;
+    if (base.find("file://") == 0) {
+        hasFilePrefix = true;
+        base = base.substr(7);
+    }
+    if (base.find('\\') != LumeString::npos || (base.length() >= 2 && base[1] == ':')) {
+        char baseBuf[MAX_PATH];
+        lstrcpynA(baseBuf, base.c_str(), MAX_PATH);
+        PathRemoveFileSpecA(baseBuf);
+        char out[MAX_PATH];
+        PathCombineA(out, baseBuf, url.c_str());
+        LumeString result = out;
+        if (hasFilePrefix) return "file://" + result;
+        return result;
+    }
+    wchar_t outW[2048];
+    DWORD lenW = 2048;
+    LumeWString wBase = utf8_to_wstring(base);
+    LumeWString wUrl = utf8_to_wstring(url);
+    if (UrlCombineW(wBase.c_str(), wUrl.c_str(), outW, &lenW, 0) == S_OK) {
+        return wstring_to_utf8(outW);
     }
     return "http://" + url;
 }
 namespace Render {
-struct Hit {
-    RECT r;
-    std::string url, action, elemId;
-    bool isInput = false, isBtn = false, isGLCanvas = false;
-    std::string canvasId;
-    int canvasW = 0, canvasH = 0;
-    int zIndex = 0;
-};
-class Engine {
-    struct RenderCmd {
-        int zIndex;
-        std::function<void()> drawCall;
+    struct Hit {
+        RECT r;
+        LumeString url, action, elemId;
+        bool isInput = false, isBtn = false, isGLCanvas = false;
+        LumeString canvasId;
+        int canvasW = 0, canvasH = 0;
+        int zIndex = 0;
+        bool autoCapture = true;
     };
-    std::vector<RenderCmd> renderQueue;
-    std::vector<int> blockHeights;
-    std::map<uint64_t, int> textHeightCache;
-    std::map<uint64_t, SIZE> textSizeCache;
-    std::map<const HTP::Elem*, int> frameEstCache;
-    int scrollY = 0, contentH = 0, curY = 0;
-    int viewportH = 0, lastW = 0;
-    std::vector<Hit>* pH = nullptr;
-    HDC refDC = nullptr;
-    inline bool isVis(int elemY, int elemH) const {
-        return (elemY + elemH >= -200 && elemY <= viewportH + 200);
-    }
-    inline const char* getRefPtr(const HTP::Props& p, const char* k) const {
-        return p.get(k, "");
-    }
-    uint64_t hashText(const char* str, int w, HFONT f) {
-        uint64_t h = 2166136261u;
-        while (*str) { h ^= (uint8_t)*str++; h *= 16777619u; }
-        h ^= (uint64_t)w; h *= 16777619u;
-        h ^= (uint64_t)(uintptr_t)f;
-        return h;
-    }
-    void fillRR(HDC dc, int x, int y, int w, int h, HTP::Color c, int rad = 5) {
-        HBRUSH b = CreateSolidBrush(c.cr());
-        HPEN p = CreatePen(PS_SOLID, 1, c.cr());
-        auto ob = SelectObject(dc, b);
-        auto op = SelectObject(dc, p);
-        RoundRect(dc, x, y, x + w, y + h, rad, rad);
-        SelectObject(dc, ob);
-        SelectObject(dc, op);
-        DeleteObject(b);
-        DeleteObject(p);
-    }
-    int estH(const std::shared_ptr<HTP::Elem>& e) {
-        if (!e) return 0;
-        auto it = frameEstCache.find(e.get());
-        if (it != frameEstCache.end()) return it->second;
-        int res = 20;
-        switch (e->type) {
-        case HTP::EType::TEXT:
-        case HTP::EType::ITEM: res = e->props.getInt("size", 16) + 8; break;
-        case HTP::EType::LINK: res = e->props.getInt("size", 16) + 8; break;
-        case HTP::EType::BUTTON: res = e->props.getInt("height", 35) + 8; break;
-        case HTP::EType::INPUT_FIELD: res = e->props.getInt("height", 28) + 8; break;
-        case HTP::EType::DIVIDER: res = e->props.getInt("margin", 10) * 2 + e->props.getInt("thickness", 1); break;
-        case HTP::EType::IMAGE: res = e->props.getInt("height", 100) + 8; break;
-        case HTP::EType::BR: res = e->props.getInt("size", 16); break;
-        case HTP::EType::CANVAS:
-        case HTP::EType::GL_CANVAS: res = e->props.getInt("height", 200) + 8; break;
-        case HTP::EType::SCRIPT: res = 0; break;
-        case HTP::EType::BLOCK:
-        case HTP::EType::COLUMN: {
-            int h = e->props.getInt("padding", 10) * 2 + e->props.getInt("margin", 5) * 2;
-            for (auto& c : e->children) h += estH(c);
-            res = h; break;
+    class Engine {
+    private:
+        struct RenderCmd {
+            int zIndex;
+            LumeAction drawCall;
+            RenderCmd() : zIndex(0) {}
+            template<typename F>
+            RenderCmd(int z, F f) : zIndex(z), drawCall(static_cast<F&&>(f)) {}
+        };
+        LumeVector<RenderCmd> renderQueue;
+        LumeVector<int> blockHeights;
+    private:
+        struct TH_Entry {
+            uint64_t k;
+            int v;
+            bool occ;
+        };
+        TH_Entry* th_tab = nullptr; size_t th_cap = 0, th_sz = 0;
+        struct TS_Entry {
+            uint64_t k;
+            SIZE v;
+            bool occ;
+        };
+        TS_Entry* ts_tab = nullptr; size_t ts_cap = 0, ts_sz = 0;
+        struct Est_Entry {
+            const HTP::Elem* k;
+            int v;
+            bool occ;
+        };
+        Est_Entry* est_tab = nullptr; size_t est_cap = 0, est_sz = 0;
+        void clear_th() {
+            if (th_tab) HeapFree(GetProcessHeap(), 0, th_tab);
+            th_tab = nullptr;
+            th_cap = th_sz = 0;
         }
-        case HTP::EType::ROW: {
-            int m = 0;
-            for (auto& c : e->children) m = (std::max)(m, estH(c));
-            res = m + e->props.getInt("margin", 5) * 2; break;
+        void clear_ts() {
+            if (ts_tab) HeapFree(GetProcessHeap(), 0, ts_tab);
+            ts_tab = nullptr;
+            ts_cap = ts_sz = 0;
         }
-        case HTP::EType::LIST: {
-            int h = 0;
-            for (auto& c : e->children) h += estH(c);
-            res = h; break;
+        void clear_est() {
+            if (est_tab) HeapFree(GetProcessHeap(), 0, est_tab);
+            est_tab = nullptr;
+            est_cap = est_sz = 0;
         }
-        default: break;
+        int* get_th(uint64_t k) {
+            if (!th_cap) return nullptr;
+            size_t idx = (k ^ (k >> 32)) & (th_cap - 1);
+            while (th_tab[idx].occ) {
+                if (th_tab[idx].k == k) return &th_tab[idx].v;
+                idx = (idx + 1) & (th_cap - 1);
+            }
+            return nullptr;
+        }
+        void set_th(uint64_t k, int v) {
+            if (th_sz >= th_cap / 2) {
+                size_t oCap = th_cap;
+                TH_Entry* oTab = th_tab;
+                th_cap = oCap == 0 ? 16 : oCap * 2;
+                th_tab = (TH_Entry*)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, th_cap * sizeof(TH_Entry));
+                th_sz = 0;
+                if (oTab) {
+                    for (size_t j = 0; j < oCap; ++j) if (oTab[j].occ) set_th(oTab[j].k, oTab[j].v);
+                    HeapFree(GetProcessHeap(), 0, oTab);
+                }
+            }
+            size_t idx = (k ^ (k >> 32)) & (th_cap - 1);
+            while (th_tab[idx].occ) {
+                if (th_tab[idx].k == k) {
+                    th_tab[idx].v = v;
+                    return;
+                } idx = (idx + 1) & (th_cap - 1);
+            }
+            th_tab[idx] = {k, v, true}; th_sz++;
+        }
+        SIZE* get_ts(uint64_t k) {
+            if (!ts_cap) return nullptr;
+            size_t idx = (k ^ (k >> 32)) & (ts_cap - 1);
+            while (ts_tab[idx].occ) {
+                if (ts_tab[idx].k == k) return &ts_tab[idx].v;
+                idx = (idx + 1) & (ts_cap - 1);
+            }
+            return nullptr;
+        }
+        void set_ts(uint64_t k, SIZE v) {
+            if (ts_sz >= ts_cap / 2) {
+                size_t oCap = ts_cap; TS_Entry* oTab = ts_tab;
+                ts_cap = oCap == 0 ? 16 : oCap * 2;
+                ts_tab = (TS_Entry*)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, ts_cap * sizeof(TS_Entry));
+                ts_sz = 0;
+                if (oTab) {
+                    for (size_t j = 0; j < oCap; ++j) if (oTab[j].occ) set_ts(oTab[j].k, oTab[j].v);
+                    HeapFree(GetProcessHeap(), 0, oTab);
+                }
+            }
+            size_t idx = (k ^ (k >> 32)) & (ts_cap - 1);
+            while (ts_tab[idx].occ) {if (ts_tab[idx].k == k) {ts_tab[idx].v = v; return;} idx = (idx + 1) & (ts_cap - 1);}
+            ts_tab[idx] = {k, v, true}; ts_sz++;
         }
 
-        frameEstCache[e.get()] = res;
-        return res;
-    }
-    int estW(const std::shared_ptr<HTP::Elem>& e, int mw) {
-        if (!e) return mw;
-        int w = e->props.getInt("width", 0);
-        if (w > 0) return w;
-        switch (e->type) {
-        case HTP::EType::BUTTON: return 120;
-        case HTP::EType::INPUT_FIELD: return 250;
-        case HTP::EType::IMAGE: return 100;
-        case HTP::EType::CANVAS:
-        case HTP::EType::GL_CANVAS: return 400;
-        case HTP::EType::ROW: {
-            int rowW = 0;
-            int gap = e->props.getInt("gap", 10);
-            int nc = 0;
-            for (auto& c : e->children) {
-                rowW += estW(c, mw);
-                nc++;
-            }
-            if (nc > 1) rowW += gap * (nc - 1);
-            rowW += e->props.getInt("margin", 5) * 2 + e->props.getInt("padding", 0) * 2;
-            return rowW;
+        int* get_est(const HTP::Elem* k) {
+            if (!est_cap) return nullptr;
+            uint64_t ptr = (uint64_t)k; size_t idx = (ptr ^ (ptr >> 32)) & (est_cap - 1);
+            while (est_tab[idx].occ) {if (est_tab[idx].k == k) return &est_tab[idx].v; idx = (idx + 1) & (est_cap - 1);}
+            return nullptr;
         }
-        case HTP::EType::COLUMN: {
-            int maxW = 0;
-            for (auto& c : e->children) {
-                int cw = estW(c, mw);
-                if (cw > maxW) maxW = cw;
-            }
-            maxW += e->props.getInt("padding", 5) * 2;
-            return maxW;
-        }
-        case HTP::EType::BLOCK: {
-            int maxW = 0;
-            for (auto& c : e->children) {
-                int cw = estW(c, mw);
-                if (cw > maxW) maxW = cw;
-            }
-            maxW += e->props.getInt("padding", 10) * 2 + e->props.getInt("margin", 5) * 2;
-            return maxW;
-        }
-        default:
-            return mw;
-        }
-    }
-    void draw(HDC dc, const std::shared_ptr<HTP::Elem>& e, int x, int y, int mw, const std::string& parentAlign = "") {
-        if (!e) return;
-        const char* pAlign = getRefPtr(e->props, "align");
-        std::string currentAlign = (pAlign[0] == '\0') ? parentAlign : pAlign;
-        switch (e->type) {
-        case HTP::EType::PAGE:
-        case HTP::EType::UNKNOWN: {
-            int cy = y;
-            for (auto& c : e->children) { draw(dc, c, x, cy, mw); cy = curY; }
-            break;
-        }
-        case HTP::EType::SCRIPT:
-            curY = y;
-            break;
-        case HTP::EType::ROW: {
-            int mar = e->props.getInt("margin", 5);
-            int pad = e->props.getInt("padding", 0);
-            int gap = e->props.getInt("gap", 10);
-            int nc = 0;
-            int fw = 0;
-            int fc = 0;
-            int totalContentWidth = 0;
-            for (auto& c : e->children) {
-                nc++;
-                int w = c->props.getInt("width", 0);
-                if (w > 0) {
-                    fw += w;
-                    totalContentWidth += w;
-                }
-                else {
-                    fc++;
-                    int est = estW(c, 0);
-                    if (est > 0) {
-                        fw += est;
-                        totalContentWidth += est;
-                    }
+        void set_est(const HTP::Elem* k, int v) {
+            if (est_sz >= est_cap / 2) {
+                size_t oCap = est_cap;
+                Est_Entry* oTab = est_tab;
+                est_cap = oCap == 0 ? 16 : oCap * 2;
+                est_tab = (Est_Entry*)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, est_cap * sizeof(Est_Entry));
+                est_sz = 0;
+                if (oTab) {
+                    for (size_t j = 0; j < oCap; ++j) if (oTab[j].occ) set_est(oTab[j].k, oTab[j].v);
+                    HeapFree(GetProcessHeap(), 0, oTab);
                 }
             }
-            if (nc > 1) totalContentWidth += gap * (nc - 1);
-            int avail = mw - mar * 2 - pad * 2;
-            int flexW = 0;
-            if (fc > 0 && avail > fw) flexW = (avail - fw) / fc;
-            if (flexW < 50 && fc > 0) flexW = 50;
-            int cx = x + mar + pad;
-            if (currentAlign == "center" && totalContentWidth < avail) {
-                cx = x + mar + pad + (avail - totalContentWidth) / 2;
+            uint64_t ptr = (uint64_t)k; size_t idx = (ptr ^ (ptr >> 32)) & (est_cap - 1);
+            while (est_tab[idx].occ) {
+                if (est_tab[idx].k == k) {
+                    est_tab[idx].v = v;
+                    return;
+                } idx = (idx + 1) & (est_cap - 1);
             }
-            else if (currentAlign == "right" && totalContentWidth < avail) {
-                cx = x + mar + pad + (avail - totalContentWidth);
-            }
-            int ry = y + mar;
-            int maxH = 0;
-            for (auto& c : e->children) {
-                int cw = c->props.getInt("width", 0);
-                if (cw == 0) cw = estW(c, flexW > 0 ? flexW : 100);
-                int sv = curY;
-                curY = ry;
-                draw(dc, c, cx, ry, cw, "left");
-                int ch = curY - ry;
-                if (ch > maxH) maxH = ch;
-
-                cx += cw + gap;
-                curY = sv;
-            }
-            curY = ry + maxH + mar;
-            break;
+            est_tab[idx] = {k, v, true};
+            est_sz++;
         }
-        case HTP::EType::COLUMN: {
-            int pad = e->props.getInt("padding", 5);
-            int rad = e->props.getInt("border-radius", 4);
-            int z = e->props.getInt("z-index", 0);
-            const char* pBg = getRefPtr(e->props, "background");
-            int heightIdx = blockHeights.size();
-            blockHeights.push_back(0);
-            if (pBg[0] != '\0') {
-                HTP::Color bgColor = HTP::Color::fromHex(pBg);
-                renderQueue.push_back({ z, [=]() {
-                    int h = blockHeights[heightIdx];
-                    if (isVis(y - scrollY, h)) fillRR(dc, x, y - scrollY, mw, h, bgColor, rad);
-                } });
-            }
-            curY = y + pad;
-            for (auto& c : e->children) {
-                int cmw = mw - pad * 2;
-                int cx = x + pad;
-                int cwToPass = cmw;
-                if (currentAlign == "center") {
-                    int ew = estW(c, cmw);
-                    if (ew < cmw) { cx += (cmw - ew) / 2; cwToPass = ew; }
-                }
-                else if (currentAlign == "right") {
-                    int ew = estW(c, cmw);
-                    if (ew < cmw) { cx += (cmw - ew); cwToPass = ew; }
-                }
-                draw(dc, c, cx, curY, cwToPass, currentAlign);
-            }
-            blockHeights[heightIdx] = (curY - y) + pad;
-            curY += pad;
-            break;
+        int scrollY = 0, contentH = 0, curY = 0;
+        int viewportH = 0;
+        struct GLCache { LumeString id; int x, y, w, h; };
+        LumeVector<GLCache> glCanvases;
+        LumeVector<Hit> docHits;
+        LumeVector<Hit>* pH = nullptr;
+        inline const char* getRefPtr(const HTP::Props& p, const char* k) const { return p.get(k, ""); }
+        uint64_t hashText(const char* str, int w, HFONT f) {
+            uint64_t h = 2166136261u;
+            while (*str) { h ^= (uint8_t)*str++; h *= 16777619u; }
+            h ^= (uint64_t)w; h *= 16777619u;
+            h ^= (uint64_t)(uintptr_t)f;
+            return h;
         }
-        case HTP::EType::BLOCK: {
-            int pad = e->props.getInt("padding", 10);
-            int mar = e->props.getInt("margin", 5);
-            int rad = e->props.getInt("border-radius", 6);
-            int z = e->props.getInt("z-index", 0);
-            const char* pBg = getRefPtr(e->props, "background");
-            int heightIdx = blockHeights.size();
-            blockHeights.push_back(0);
-            int startY = y + mar;
-            if (pBg[0] != '\0') {
-                HTP::Color bgColor = HTP::Color::fromHex(pBg);
-                renderQueue.push_back({ z, [=]() {
-                    int h = blockHeights[heightIdx];
-                    if (isVis(startY - scrollY, h)) fillRR(dc, x + mar, startY - scrollY, mw - mar * 2, h, bgColor, rad);
-                } });
+        void fillRR(HDC dc, int x, int y, int w, int h, HTP::Color c, int rad = 5) {
+            HBRUSH b = CreateSolidBrush(c.cr());
+            HPEN p = CreatePen(PS_SOLID, 1, c.cr());
+            auto ob = SelectObject(dc, b);
+            auto op = SelectObject(dc, p);
+            RoundRect(dc, x, y, x + w, y + h, rad, rad);
+            SelectObject(dc, ob); SelectObject(dc, op);
+            DeleteObject(b); DeleteObject(p);
+        }
+        int estH(const LumeSharedPtr<HTP::Elem>& e) {
+            if (!e) return 0;
+            int* cached = get_est(e.get());
+            if (cached) return *cached;
+            int res = 20;
+            switch (e->type) {
+            case HTP::EType::TEXT: case HTP::EType::ITEM: res = e->props.getInt("size", 16) + 8; break;
+            case HTP::EType::LINK: res = e->props.getInt("size", 16) + 8; break;
+            case HTP::EType::BUTTON: res = e->props.getInt("height", 35) + 8; break;
+            case HTP::EType::INPUT_FIELD: res = e->props.getInt("height", 28) + 8; break;
+            case HTP::EType::DIVIDER: res = e->props.getInt("margin", 10) * 2 + e->props.getInt("thickness", 1); break;
+            case HTP::EType::IMAGE: res = e->props.getInt("height", 100) + 8; break;
+            case HTP::EType::BR: res = e->props.getInt("size", 16); break;
+            case HTP::EType::CANVAS: case HTP::EType::GL_CANVAS: res = e->props.getInt("height", 200) + 8; break;
+            case HTP::EType::SCRIPT: res = 0; break;
+            case HTP::EType::BLOCK: case HTP::EType::COLUMN: {
+                int h = e->props.getInt("padding", 10) * 2 + e->props.getInt("margin", 5) * 2;
+                for (auto& c : e->children) h += estH(c);
+                res = h; break;
             }
-            curY = startY + pad;
-            for (auto& c : e->children) {
-                int cmw = mw - (mar + pad) * 2;
+            case HTP::EType::ROW: {
+                int m = 0; for (auto& c : e->children) m = lume_max(m, estH(c));
+                res = m + e->props.getInt("margin", 5) * 2; break;
+            }
+            case HTP::EType::LIST: {
+                int h = 0; for (auto& c : e->children) h += estH(c);
+                res = h; break;
+            }
+            default: break;
+            }
+            set_est(e.get(), res);
+            return res;
+        }
+        int estW(const LumeSharedPtr<HTP::Elem>& e, int mw) {
+            if (!e) return mw;
+            int w = e->props.getInt("width", 0);
+            if (w > 0) return w;
+            switch (e->type) {
+            case HTP::EType::BUTTON: return 120;
+            case HTP::EType::INPUT_FIELD: return 250;
+            case HTP::EType::IMAGE: return 100;
+            case HTP::EType::CANVAS: case HTP::EType::GL_CANVAS: return 400;
+            case HTP::EType::ROW: {
+                int rowW = 0, gap = e->props.getInt("gap", 10), nc = 0;
+                for (auto& c : e->children) { rowW += estW(c, mw); nc++; }
+                if (nc > 1) rowW += gap * (nc - 1);
+                return rowW + e->props.getInt("margin", 5) * 2 + e->props.getInt("padding", 0) * 2;
+            }
+            case HTP::EType::COLUMN: {
+                int maxW = 0;
+                for (auto& c : e->children) { int cw = estW(c, mw); if (cw > maxW) maxW = cw; }
+                return maxW + e->props.getInt("padding", 5) * 2;
+            }
+            case HTP::EType::BLOCK: {
+                int maxW = 0;
+                for (auto& c : e->children) { int cw = estW(c, mw); if (cw > maxW) maxW = cw; }
+                return maxW + e->props.getInt("padding", 10) * 2 + e->props.getInt("margin", 5) * 2;
+            }
+            default: return mw;
+            }
+        }
+        void draw(HDC refDC, const LumeSharedPtr<HTP::Elem>& e, int x, int y, int mw, const LumeString& parentAlign = "") {
+            if (!e) return;
+            const char* pAlign = getRefPtr(e->props, "align");
+            LumeString currentAlign = (pAlign[0] == '\0') ? parentAlign : pAlign;
+            switch (e->type) {
+            case HTP::EType::PAGE: case HTP::EType::UNKNOWN: {
+                int cy = y;
+                for (auto& c : e->children) {
+                    draw(refDC, c, x, cy, mw);
+                    cy = curY;
+                }
+                break;
+            }
+            case HTP::EType::SCRIPT:
+                curY = y;
+                break;
+            case HTP::EType::ROW: {
+                int mar = e->props.getInt("margin", 5), pad = e->props.getInt("padding", 0), gap = e->props.getInt("gap", 10);
+                int nc = 0, fw = 0, fc = 0, totalContentWidth = 0;
+                for (auto& c : e->children) {
+                    nc++; int w = c->props.getInt("width", 0);
+                    if (w > 0) { fw += w; totalContentWidth += w; }
+                    else { fc++; int est = estW(c, 0); if (est > 0) { fw += est; totalContentWidth += est; } }
+                }
+                if (nc > 1) totalContentWidth += gap * (nc - 1);
+                int avail = mw - mar * 2 - pad * 2, flexW = 0;
+                if (fc > 0 && avail > fw) flexW = (avail - fw) / fc;
+                if (flexW < 50 && fc > 0) flexW = 50;
                 int cx = x + mar + pad;
-                int cwToPass = cmw;
-                if (currentAlign == "center") {
-                    int ew = estW(c, cmw);
-                    if (ew < cmw) { cx += (cmw - ew) / 2; cwToPass = ew; }
+                if (currentAlign == "center" && totalContentWidth < avail) cx = x + mar + pad + (avail - totalContentWidth) / 2;
+                else if (currentAlign == "right" && totalContentWidth < avail) cx = x + mar + pad + (avail - totalContentWidth);
+                int ry = y + mar, maxH = 0;
+                for (auto& c : e->children) {
+                    int cw = c->props.getInt("width", 0);
+                    if (cw == 0) cw = estW(c, flexW > 0 ? flexW : 100);
+                    int sv = curY; curY = ry;
+                    draw(refDC, c, cx, ry, cw, "left");
+                    int ch = curY - ry; if (ch > maxH) maxH = ch;
+                    cx += cw + gap; curY = sv;
                 }
-                else if (currentAlign == "right") {
-                    int ew = estW(c, cmw);
-                    if (ew < cmw) { cx += (cmw - ew); cwToPass = ew; }
+                curY = ry + maxH + mar; break;
+            }
+            case HTP::EType::COLUMN: {
+                int pad = e->props.getInt("padding", 5), rad = e->props.getInt("border-radius", 4), z = e->props.getInt("z-index", 0);
+                const char* pBg = getRefPtr(e->props, "background");
+                int heightIdx = blockHeights.size(); blockHeights.push_back(0);
+                int startY = y;
+                if (pBg[0] != '\0') {
+                    HTP::Color bgColor = HTP::Color::fromHex(pBg);
+                    renderQueue.push_back({ z, [this, x, startY, mw, bgColor, rad, heightIdx]() {
+                        fillRR(this->docDC, x, startY, mw, blockHeights[heightIdx], bgColor, rad);
+                    } });
                 }
-                draw(dc, c, cx, curY, cwToPass, currentAlign);
+                curY = y + pad;
+                for (auto& c : e->children) {
+                    int cmw = mw - pad * 2, cx = x + pad, cwToPass = cmw;
+                    if (currentAlign == "center") { int ew = estW(c, cmw); if (ew < cmw) { cx += (cmw - ew) / 2; cwToPass = ew; } }
+                    else if (currentAlign == "right") { int ew = estW(c, cmw); if (ew < cmw) { cx += (cmw - ew); cwToPass = ew; } }
+                    draw(refDC, c, cx, curY, cwToPass, currentAlign);
+                }
+                blockHeights[heightIdx] = (curY - y) + pad; curY += pad; break;
             }
-            blockHeights[heightIdx] = (curY - startY) + pad;
-            curY += pad + mar;
-            break;
-        }
-        case HTP::EType::TEXT: {
-            const char* pId = getRefPtr(e->props, "id");
-            const char* pCt = getRefPtr(e->props, "content");
-            if (pId[0] != '\0') {
-                auto i = Script::g_texts.find(pId);
-                if (i != Script::g_texts.end()) pCt = i->second.c_str();
-                else { Script::g_texts[pId] = pCt; pCt = Script::g_texts[pId].c_str(); }
+            case HTP::EType::BLOCK: {
+                int pad = e->props.getInt("padding", 10), mar = e->props.getInt("margin", 5), rad = e->props.getInt("border-radius", 6), z = e->props.getInt("z-index", 0);
+                const char* pBg = getRefPtr(e->props, "background");
+                int heightIdx = blockHeights.size(); blockHeights.push_back(0);
+                int startY = y + mar;
+                if (pBg[0] != '\0') {
+                    HTP::Color bgColor = HTP::Color::fromHex(pBg);
+                    renderQueue.push_back({ z, [this, x, mar, startY, mw, bgColor, rad, heightIdx]() {
+                        fillRR(this->docDC, x + mar, startY, mw - mar * 2, blockHeights[heightIdx], bgColor, rad);
+                    } });
+                }
+                curY = startY + pad;
+                for (auto& c : e->children) {
+                    int cmw = mw - (mar + pad) * 2, cx = x + mar + pad, cwToPass = cmw;
+                    if (currentAlign == "center") { int ew = estW(c, cmw); if (ew < cmw) { cx += (cmw - ew) / 2; cwToPass = ew; } }
+                    else if (currentAlign == "right") { int ew = estW(c, cmw); if (ew < cmw) { cx += (cmw - ew); cwToPass = ew; } }
+                    draw(refDC, c, cx, curY, cwToPass, currentAlign);
+                }
+                blockHeights[heightIdx] = (curY - startY) + pad; curY += pad + mar; break;
             }
-            int sz = e->props.getInt("size", 16);
-            auto col = e->props.getColor("color", { 255,255,255 });
-            const char* pGrad = getRefPtr(e->props, "gradient");
-            int offset_y = 0;
-            float shimmer = 0.0f;
-            if (pId[0] != '\0') {
-                auto oi = Script::g_offsets_y.find(pId);
-                if (oi != Script::g_offsets_y.end()) offset_y = oi->second;
-                auto si = Script::g_shimmer_offsets.find(pId);
-                if (si != Script::g_shimmer_offsets.end()) shimmer = si->second;
-            }
-            int z = e->props.getInt("z-index", 0);
-            const char* pFontName = getRefPtr(e->props, "font");
-            HFONT f = FontCache::get(sz, e->props.getBool("bold"), e->props.getBool("italic"), (pFontName[0] == '\0') ? "Segoe UI" : pFontName);
-            int drawY = y - scrollY + offset_y;
-            int th = 0;
-            UINT dtFormat = DT_WORDBREAK;
-            if (currentAlign == "center") dtFormat |= DT_CENTER;
-            else if (currentAlign == "right") dtFormat |= DT_RIGHT;
-            uint64_t mKey = hashText(pCt, mw, f);
-            auto tIt = textHeightCache.find(mKey);
-            if (tIt != textHeightCache.end()) {
-                th = tIt->second;
-            } else {
-                auto of = SelectObject(dc, f);
-                RECT rcCalc = { x, 0, x + mw, 1000 };
-                DrawTextU(dc, pCt, -1, &rcCalc, dtFormat | DT_CALCRECT);
-                th = rcCalc.bottom - rcCalc.top;
-                SelectObject(dc, of);
-                textHeightCache[mKey] = th;
-            }
-            if (isVis(drawY, th)) {
-                HTP::Color gradColor;
-                if (pGrad[0] != '\0') gradColor = HTP::Color::fromHex(pGrad);
-                renderQueue.push_back({ z, [=]() {
+            case HTP::EType::TEXT: {
+                const char* pId = getRefPtr(e->props, "id");
+                const char* pCt = getRefPtr(e->props, "content");
+                if (pId[0] != '\0') {
+                    auto i = Script::g_texts.find(pId);
+                    if (i != Script::g_texts.end()) pCt = i->second.c_str();
+                    else { Script::g_texts[pId] = pCt; pCt = Script::g_texts[pId].c_str(); }
+                }
+                int sz = e->props.getInt("size", 16);
+                auto col = e->props.getColor("color", { 255,255,255 });
+                const char* pGrad = getRefPtr(e->props, "gradient");
+                int offset_y = 0; float shimmer = 0.0f;
+                if (pId[0] != '\0') {
+                    auto oi = Script::g_offsets_y.find(pId); if (oi != Script::g_offsets_y.end()) offset_y = oi->second;
+                    auto si = Script::g_shimmer_offsets.find(pId); if (si != Script::g_shimmer_offsets.end()) shimmer = si->second;
+                }
+                int z = e->props.getInt("z-index", 0);
+                const char* pFontName = getRefPtr(e->props, "font");
+                HFONT f = FontCache::get(sz, e->props.getBool("bold"), e->props.getBool("italic"), (pFontName[0] == '\0') ? "Segoe UI" : pFontName);
+                int drawY = y + offset_y;
+                int th = 0;
+                UINT dtFormat = DT_WORDBREAK;
+                if (currentAlign == "center") dtFormat |= DT_CENTER;
+                else if (currentAlign == "right") dtFormat |= DT_RIGHT;
+                uint64_t mKey = hashText(pCt, mw, f);
+                int* tIt = get_th(mKey);
+                if (tIt) {th = *tIt;}
+                else {
+                    auto of = SelectObject(refDC, f);
+                    RECT rcCalc = {x, 0, x + mw, 10000};
+                    DrawTextU(refDC, pCt, -1, &rcCalc, dtFormat | DT_CALCRECT);
+                    th = rcCalc.bottom - rcCalc.top;
+                    SelectObject(refDC, of);
+                    set_th(mKey, th);
+                }
+                HTP::Color gradColor; if (pGrad[0] != '\0') gradColor = HTP::Color::fromHex(pGrad);
+                LumeString textStr = pCt;
+                renderQueue.push_back({ z, [this, x, drawY, mw, th, f, textStr, dtFormat, col, pGrad, gradColor, shimmer, currentAlign]() {
+                    HDC dc = this->docDC;
                     if (pGrad[0] != '\0') {
                         int drawX = x;
                         if (currentAlign == "center" || currentAlign == "right") {
-                            SIZE ts;
-                            auto of = SelectObject(dc, f);
-                            GetTextExtentPoint32U(dc, pCt, lstrlenA(pCt), &ts);
+                            SIZE ts; auto of = SelectObject(dc, f);
+                            GetTextExtentPoint32U(dc, textStr.c_str(), lstrlenA(textStr.c_str()), &ts);
                             SelectObject(dc, of);
                             if (currentAlign == "center") drawX = x + (mw - ts.cx) / 2;
                             else if (currentAlign == "right") drawX = x + (mw - ts.cx);
                         }
-                        GradientText::draw(dc, pCt, f, drawX, drawY, col, gradColor, shimmer);
-                    } else {
+                        GradientText::draw(dc, textStr.c_str(), f, drawX, drawY, col, gradColor, shimmer);
+                    }
+                    else {
                         auto of = SelectObject(dc, f);
-                        SetTextColor(dc, col.cr());
-                        SetBkMode(dc, TRANSPARENT);
+                        SetTextColor(dc, col.cr()); SetBkMode(dc, TRANSPARENT);
                         RECT rcDraw = { x, drawY, x + mw, drawY + th };
-                        DrawTextU(dc, pCt, -1, &rcDraw, dtFormat);
+                        DrawTextU(dc, textStr.c_str(), -1, &rcDraw, dtFormat);
                         SelectObject(dc, of);
                     }
                 } });
+                curY = y + ((pGrad[0] == '\0') ? th : sz) + 4;
+                break;
             }
-            curY = y + ((pGrad[0] == '\0') ? th : sz) + 4;
-            break;
-        }
-        case HTP::EType::LINK: {
-            const char* pCt = getRefPtr(e->props, "content");
-            if (pCt[0] == '\0') pCt = "[link]";
-            int sz = e->props.getInt("size", 16);
-            auto col = e->props.getColor("color", { 10,189,227 });
-            int z = e->props.getInt("z-index", 0);
-            HFONT f = FontCache::get(sz);
-            SIZE ts = { 0, 0 };
-            uint64_t mKey = hashText(pCt, 0, f);
-            auto tIt = textSizeCache.find(mKey);
-            if (tIt != textSizeCache.end()) {
-                ts = tIt->second;
-            }
-            else {
-                auto of = SelectObject(dc, f);
-                GetTextExtentPoint32U(dc, pCt, lstrlenA(pCt), &ts);
-                SelectObject(dc, of);
-                textSizeCache[mKey] = ts;
-            }
-            int drawY = y - scrollY;
-            if (isVis(drawY, ts.cy)) {
-                std::string url = resolveUrl(getRefPtr(e->props, "url"), g_curUrl);
-                renderQueue.push_back({ z, [=]() {
-                    auto of2 = SelectObject(dc, f);
-                    SetTextColor(dc, col.cr());
-                    SetBkMode(dc, TRANSPARENT);
-                    RECT rc = { x, drawY, x + ts.cx, drawY + ts.cy };
-                    DrawTextU(dc, pCt, -1, &rc, 0);
-                    HPEN p = CreatePen(PS_SOLID, 1, col.cr());
-                    auto op = SelectObject(dc, p);
-                    MoveToEx(dc, x, drawY + ts.cy - 1, 0);
-                    LineTo(dc, x + ts.cx, drawY + ts.cy - 1);
-                    SelectObject(dc, op);
-                    DeleteObject(p);
-                    SelectObject(dc, of2);
-                } });
-                if (pH) {
-                    Hit h;
-                    h.r = { x, drawY, x + ts.cx, drawY + ts.cy };
-                    h.url = url;
-                    h.zIndex = z;
-                    pH->push_back(h);
-                }
-            }
-            curY = y + ts.cy + 4;
-            break;
-        }
-        case HTP::EType::BUTTON: {
-            int bw = e->props.getInt("width", 120);
-            int bh = e->props.getInt("height", 35);
-            int by = y - scrollY;
-            if (isVis(by, bh)) {
-                const char* pId = getRefPtr(e->props, "id");
+            case HTP::EType::LINK: {
                 const char* pCt = getRefPtr(e->props, "content");
-                if (pCt[0] == '\0') pCt = "Button";
-                const char* pAct = getRefPtr(e->props, "action");
-                const char* pUrl = getRefPtr(e->props, "url");
-                std::string url = (pUrl[0] == '\0') ? pAct : pUrl;
-                if (!url.empty()) url = resolveUrl(url, g_curUrl);
-                int sz = e->props.getInt("size", 14);
-                int rad = e->props.getInt("border-radius", 6);
-                auto bg = e->props.getColor("background", { 233,69,96 });
-                auto col = e->props.getColor("color", { 255,255,255 });
+                if (pCt[0] == '\0') pCt = "[link]";
+                int sz = e->props.getInt("size", 16);
+                auto col = e->props.getColor("color", { 10,189,227 });
                 int z = e->props.getInt("z-index", 0);
-                int bx = x;
-                renderQueue.push_back({ z, [=]() {
-                    fillRR(dc, bx, by, bw, bh, bg, rad);
-                    HFONT f = FontCache::get(sz, true);
+                HFONT f = FontCache::get(sz);
+                SIZE ts = {0, 0};
+                uint64_t mKey = hashText(pCt, 0, f);
+                SIZE* tIt = get_ts(mKey);
+                if (tIt) ts = *tIt;
+                else {
+                    auto of = SelectObject(refDC, f);
+                    GetTextExtentPoint32U(refDC, pCt, lstrlenA(pCt), &ts);
+                    SelectObject(refDC, of);
+                    set_ts(mKey, ts);
+                }
+                int drawY = y;
+                LumeString url = resolveUrl(getRefPtr(e->props, "url"), g_curUrl);
+                LumeString textStr = pCt;
+                renderQueue.push_back({ z, [this, x, drawY, ts, f, col, textStr]() {
+                    HDC dc = this->docDC;
+                    auto of2 = SelectObject(dc, f);
+                    SetTextColor(dc, col.cr()); SetBkMode(dc, TRANSPARENT);
+                    RECT rc = { x, drawY, x + ts.cx, drawY + ts.cy };
+                    DrawTextU(dc, textStr.c_str(), -1, &rc, 0);
+                    HPEN p = CreatePen(PS_SOLID, 1, col.cr()); auto op = SelectObject(dc, p);
+                    MoveToEx(dc, x, drawY + ts.cy - 1, 0); LineTo(dc, x + ts.cx, drawY + ts.cy - 1);
+                    SelectObject(dc, op); DeleteObject(p); SelectObject(dc, of2);
+                } });
+                if (pH) { Hit h; h.r = { x, drawY, x + ts.cx, drawY + ts.cy }; h.url = url; h.zIndex = z; pH->push_back(h); }
+                curY = y + ts.cy + 4; break;
+            }
+            case HTP::EType::BUTTON: {
+                int bw = e->props.getInt("width", 120), bh = e->props.getInt("height", 35), by = y;
+                const char* pId = getRefPtr(e->props, "id"), * pCt = getRefPtr(e->props, "content");
+                if (pCt[0] == '\0') pCt = "Button";
+                const char* pAct = getRefPtr(e->props, "action"), * pUrl = getRefPtr(e->props, "url");
+                LumeString url = (pUrl[0] == '\0') ? pAct : pUrl;
+                if (!url.empty()) url = resolveUrl(url, g_curUrl);
+                int sz = e->props.getInt("size", 14), rad = e->props.getInt("border-radius", 6), z = e->props.getInt("z-index", 0);
+                auto bg = e->props.getColor("background", { 233,69,96 }), col = e->props.getColor("color", { 255,255,255 });
+                LumeString textStr = pCt;
+                renderQueue.push_back({ z, [this, x, by, bw, bh, bg, rad, f = FontCache::get(sz, true), col, textStr]() {
+                    HDC dc = this->docDC;
+                    fillRR(dc, x, by, bw, bh, bg, rad);
                     auto of = SelectObject(dc, f);
-                    SetTextColor(dc, col.cr());
-                    SetBkMode(dc, TRANSPARENT);
-                    RECT rc = { bx, by, bx + bw, by + bh };
-                    DrawTextU(dc, pCt, -1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                    SetTextColor(dc, col.cr()); SetBkMode(dc, TRANSPARENT);
+                    RECT rc = { x, by, x + bw, by + bh };
+                    DrawTextU(dc, textStr.c_str(), -1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
                     SelectObject(dc, of);
                 } });
-                if (pH) {
-                    Hit h;
-                    h.r = { bx, by, bx + bw, by + bh };
-                    h.url = url;
-                    h.action = pAct;
-                    h.elemId = pId;
-                    h.isBtn = true;
-                    h.zIndex = z;
-                    pH->push_back(h);
-                }
+                if (pH) { Hit h; h.r = { x, by, x + bw, by + bh }; h.url = url; h.action = pAct; h.elemId = pId; h.isBtn = true; h.zIndex = z; pH->push_back(h); }
+                curY = y + bh + 8; break;
             }
-            curY = y + bh + 8;
-            break;
-        }
-        case HTP::EType::INPUT_FIELD: {
-            int ih = e->props.getInt("height", 28);
-            int iy = y - scrollY;
-            if (isVis(iy, ih)) {
-                const char* pId = getRefPtr(e->props, "id");
-                std::string id = (pId[0] == '\0') ? ("inp_" + std::to_string(y)) : pId;
-                const char* pPh = getRefPtr(e->props, "placeholder");
-                int iw = e->props.getInt("width", 250);
-                int z = e->props.getInt("z-index", 0);
+            case HTP::EType::INPUT_FIELD: {
+                int ih = e->props.getInt("height", 28), iy = y, iw = e->props.getInt("width", 250), z = e->props.getInt("z-index", 0);
+                const char* pId = getRefPtr(e->props, "id"), * pPh = getRefPtr(e->props, "placeholder");
+                LumeString id = (pId[0] == '\0') ? ("inp_" + lume_to_string(y)) : pId;
                 auto& inp = Script::g_inputs[id];
                 if (inp.placeholder.empty() && pPh[0] != '\0') inp.placeholder = pPh;
                 inp.x = x; inp.y = iy; inp.w = iw; inp.h = ih;
-                int ix = x;
                 bool foc = (Script::g_focusId == id);
-                int cursorToDraw = inp.cursor;
-                const char* pTextDraw = inp.text.c_str();
-                const char* pPhDraw = inp.placeholder.c_str();
-                renderQueue.push_back({ z, [=]() {
+                int cursorToDraw = inp.cursor; LumeString textStr = inp.text, phStr = inp.placeholder;
+                renderQueue.push_back({ z, [this, x, iy, iw, ih, foc, textStr, phStr, cursorToDraw]() {
+                    HDC dc = this->docDC;
                     HBRUSH br = CreateSolidBrush(foc ? RGB(50, 50, 80) : RGB(40, 40, 60));
                     HPEN pn = CreatePen(PS_SOLID, foc ? 2 : 1, foc ? RGB(10, 189, 227) : RGB(100, 100, 140));
                     auto ob = SelectObject(dc, br);
                     auto op = SelectObject(dc, pn);
-                    RoundRect(dc, ix, iy, ix + iw, iy + ih, 4, 4);
+                    RoundRect(dc, x, iy, x + iw, iy + ih, 4, 4);
                     SelectObject(dc, ob);
                     SelectObject(dc, op);
                     DeleteObject(br);
                     DeleteObject(pn);
-                    HFONT f = FontCache::get(14);
-                    auto of = SelectObject(dc, f);
-                    SetBkMode(dc, TRANSPARENT);
-                    if (pTextDraw[0] != '\0') {
+                    auto of = SelectObject(dc, FontCache::get(14)); SetBkMode(dc, TRANSPARENT);
+                    if (textStr[0] != '\0') {
                         SetTextColor(dc, RGB(230, 230, 240));
-                        RECT rc = { ix + 6, iy + 2, ix + iw - 4, iy + ih - 2 };
-                        DrawTextU(dc, pTextDraw, -1, &rc, DT_VCENTER | DT_SINGLELINE);
+                        RECT rc = {x + 6, iy + 2, x + iw - 4, iy + ih - 2};
+                        DrawTextU(dc, textStr.c_str(), -1, &rc, DT_VCENTER | DT_SINGLELINE);
                         if (foc) {
-                            int cp = (std::min)(cursorToDraw, lstrlenA(pTextDraw));
+                            int cp = lume_min(cursorToDraw, (int)textStr.length());
                             SIZE ts;
-                            GetTextExtentPoint32U(dc, pTextDraw, cp, &ts);
+                            GetTextExtentPoint32U(dc, textStr.c_str(), cp, &ts);
                             HPEN cpen = CreatePen(PS_SOLID, 1, RGB(255, 255, 255));
                             auto ocp = SelectObject(dc, cpen);
-                            MoveToEx(dc, ix + 6 + ts.cx, iy + 4, 0);
-                            LineTo(dc, ix + 6 + ts.cx, iy + ih - 4);
+                            MoveToEx(dc, x + 6 + ts.cx, iy + 4, 0);
+                            LineTo(dc, x + 6 + ts.cx, iy + ih - 4);
                             SelectObject(dc, ocp);
                             DeleteObject(cpen);
                         }
                     }
-                    else if (pPhDraw[0] != '\0') {
+                    else if (phStr[0] != '\0') {
                         SetTextColor(dc, RGB(120, 120, 140));
-                        RECT rc = { ix + 6, iy + 2, ix + iw - 4, iy + ih - 2 };
-                        DrawTextU(dc, pPhDraw, -1, &rc, DT_VCENTER | DT_SINGLELINE);
+                        RECT rc = {x + 6, iy + 2, x + iw - 4, iy + ih - 2};
+                        DrawTextU(dc, phStr.c_str(), -1, &rc, DT_VCENTER | DT_SINGLELINE);
                     }
                     SelectObject(dc, of);
                 } });
                 if (pH) {
-                    Hit h;
-                    h.r = { ix, iy, ix + iw, iy + ih };
+                    Hit h; h.r = {x, iy, x + iw, iy + ih};
                     h.elemId = id;
                     h.isInput = true;
                     h.zIndex = z;
                     pH->push_back(h);
                 }
+                curY = y + ih + 8; break;
             }
-            curY = y + ih + 8;
-            break;
-        }
-        case HTP::EType::CANVAS: {
-            int ch = e->props.getInt("height", 200);
-            int cy = y - scrollY;
-            if (isVis(cy, ch)) {
+            case HTP::EType::CANVAS: {
+                int ch = e->props.getInt("height", 200), cy = y, cw = e->props.getInt("width", 400), z = e->props.getInt("z-index", 0);
                 const char* pId = getRefPtr(e->props, "id");
-                std::string id = (pId[0] == '\0') ? ("cv_" + std::to_string(y)) : pId;
-                int cw = e->props.getInt("width", 400);
-                auto bdr = e->props.getColor("border-color", { 80,80,100 });
-                int z = e->props.getInt("z-index", 0);
-                auto cb = Canvas::get(id, refDC, cw, ch);
-                int cx = x;
-                renderQueue.push_back({ z, [=]() {
-                    HPEN p = CreatePen(PS_SOLID, 1, bdr.cr());
-                    auto op = SelectObject(dc, p);
-                    auto nb = (HBRUSH)GetStockObject(NULL_BRUSH);
-                    auto ob = SelectObject(dc, nb);
-                    Rectangle(dc, cx - 1, cy - 1, cx + cw + 1, cy + ch + 1);
-                    SelectObject(dc, ob);
-                    SelectObject(dc, op);
-                    DeleteObject(p);
-                    if (cb->dc) BitBlt(dc, cx, cy, cw, ch, cb->dc, 0, 0, SRCCOPY);
-                } });
-            }
-            curY = y + ch + 8;
-            break;
-        }
-        case HTP::EType::GL_CANVAS: {
-            int ch = e->props.getInt("height", 200);
-            int cw = e->props.getInt("width", 400);
-            int cy = y - scrollY;
-            const char* pId = getRefPtr(e->props, "id");
-            std::string id = (pId[0] == '\0') ? ("glcv_" + std::to_string(y)) : pId;
-            int cx = x;
-            if (isVis(cy, ch)) {
+                LumeString id = (pId[0] == '\0') ? ("cv_" + lume_to_string(y)) : pId;
                 auto bdr = e->props.getColor("border-color", {80,80,100});
-                int z = e->props.getInt("z-index", 0);
-                renderQueue.push_back({ z, [=]() {
-                    HPEN p = CreatePen(PS_SOLID, 1, bdr.cr());
-                    auto op = SelectObject(dc, p);
-                    auto nb = (HBRUSH)GetStockObject(NULL_BRUSH);
-                    auto ob = SelectObject(dc, nb);
-                    Rectangle(dc, cx - 1, cy - 1, cx + cw + 1, cy + ch + 1);
+                auto cb = Canvas::get(id, refDC, cw, ch);
+                renderQueue.push_back({z, [this, x, cy, cw, ch, bdr, cb]() {
+                    HDC dc = this->docDC;
+                    HPEN p = CreatePen(PS_SOLID, 1, bdr.cr()); auto op = SelectObject(dc, p);
+                    auto ob = SelectObject(dc, GetStockObject(NULL_BRUSH));
+                    Rectangle(dc, x - 1, cy - 1, x + cw + 1, cy + ch + 1);
+                    SelectObject(dc, ob); SelectObject(dc, op); DeleteObject(p);
+                    if (cb->dc) BitBlt(dc, x, cy, cw, ch, cb->dc, 0, 0, SRCCOPY);
+                }});
+                curY = y + ch + 8; break;
+            }
+            case HTP::EType::GL_CANVAS: {
+                int ch = e->props.getInt("height", 200), cw = e->props.getInt("width", 400), cy = y, z = e->props.getInt("z-index", 0);
+                const char* pId = getRefPtr(e->props, "id");
+                LumeString id = (pId[0] == '\0') ? ("glcv_" + lume_to_string(y)) : pId;
+                auto bdr = e->props.getColor("border-color", {80,80,100});
+                bool autoCapture = e->props.getBool("capture", true);
+                renderQueue.push_back({z, [this, x, cy, cw, ch, bdr]() {
+                    HDC dc = this->docDC;
+                    HPEN p = CreatePen(PS_SOLID, 1, bdr.cr()); auto op = SelectObject(dc, p);
+                    auto ob = SelectObject(dc, GetStockObject(NULL_BRUSH));
+                    Rectangle(dc, x - 1, cy - 1, x + cw + 1, cy + ch + 1);
                     SelectObject(dc, ob);
                     SelectObject(dc, op);
                     DeleteObject(p);
-                    if (!GLLoader::available()) {
+                    if (!g_opt_gpu || !GLLoader::available()) {
                         HBRUSH fb = CreateSolidBrush(RGB(40, 40, 60));
-                        RECT fr = { cx, cy, cx + cw, cy + ch };
+                        RECT fr = {x, cy, x + cw, cy + ch};
                         FillRect(dc, &fr, fb);
                         DeleteObject(fb);
-                        HFONT f = FontCache::get(14);
-                        auto of = SelectObject(dc, f);
+                        auto of = SelectObject(dc, FontCache::get(14));
                         SetTextColor(dc, RGB(150, 150, 170));
                         SetBkMode(dc, TRANSPARENT);
-                        RECT rc = { cx, cy, cx + cw, cy + ch };
-                        DrawTextU(dc, "No OpenGL", -1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                        RECT rc = {x, cy, x + cw, cy + ch};
+                        DrawTextU(dc, "GPU Disabled", -1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
                         SelectObject(dc, of);
                     }
                 }});
+                glCanvases.push_back({id, x, cy, cw, ch});
                 if (pH) {
-                    Hit h;
-                    h.r = { cx,cy,cx + cw,cy + ch };
-                    h.isGLCanvas = true;
-                    h.canvasId = id;
+                    Hit h; h.r = {x, cy, x + cw, cy + ch};
+                    h.isGLCanvas = true; h.canvasId = id;
                     h.canvasW = cw;
                     h.canvasH = ch;
                     h.zIndex = z;
+                    h.autoCapture = autoCapture;
                     pH->push_back(h);
                 }
+                GLCanvas::ensure(id, cw, ch);
+                curY = y + ch + 8;
+                break;
             }
-            auto glv = GLCanvas::ensure(id, cw, ch);
-            if (glv && glv->valid) GLCanvas::place(id, cx, TOOLBAR_H + cy, cw, ch, scrollY, TOOLBAR_H);
-            curY = y + ch + 8;
-            break;
-        }
-        case HTP::EType::DIVIDER: {
-            int t = e->props.getInt("thickness", 1);
-            int m = e->props.getInt("margin", 10);
-            int drawY = y + m - scrollY;
-            if (isVis(drawY, t)) {
+            case HTP::EType::DIVIDER: {
+                int t = e->props.getInt("thickness", 1), m = e->props.getInt("margin", 10), drawY = y + m, z = e->props.getInt("z-index", 0);
                 auto col = e->props.getColor("color", { 60,60,80 });
-                int z = e->props.getInt("z-index", 0);
-                renderQueue.push_back({ z, [=]() {
-                    HPEN p = CreatePen(PS_SOLID, t, col.cr());
-                    auto op = SelectObject(dc, p);
-                    MoveToEx(dc, x, drawY, 0);
-                    LineTo(dc, x + mw, drawY);
-                    SelectObject(dc, op);
-                    DeleteObject(p);
-                }});
+                renderQueue.push_back({ z, [this, x, mw, drawY, t, col]() {
+                    HDC dc = this->docDC;
+                    HPEN p = CreatePen(PS_SOLID, t, col.cr()); auto op = SelectObject(dc, p);
+                    MoveToEx(dc, x, drawY, 0); LineTo(dc, x + mw, drawY);
+                    SelectObject(dc, op); DeleteObject(p);
+                } });
+                curY = y + m * 2 + t; break;
             }
-            curY = y + m * 2 + t;
-            break;
-        }
-        case HTP::EType::LIST: {
-            int cy = y;
-            for (auto& c : e->children) {draw(dc, c, x + 20, cy, mw - 20); cy = curY;}
-            break;
-        }
-        case HTP::EType::ITEM: {
-            const char* pCt = getRefPtr(e->props, "content");
-            int sz = e->props.getInt("size", 14);
-            int by = y - scrollY + sz / 2 - 2;
-            HFONT f = FontCache::get(sz);
-
-            int th = 0;
-            uint64_t mKey = hashText(pCt, mw, f);
-            auto tIt = textHeightCache.find(mKey);
-            if (tIt != textHeightCache.end()) {
-                th = tIt->second;
-            }
-            else {
-                auto of = SelectObject(dc, f);
-                RECT rcCalc = { x, 0, x + mw, 200 };
-                DrawTextU(dc, pCt, -1, &rcCalc, DT_WORDBREAK | DT_CALCRECT);
-                th = rcCalc.bottom - rcCalc.top;
-                SelectObject(dc, of);
-                textHeightCache[mKey] = th;
-            }
-            if (isVis(y - scrollY, th)) {
+            case HTP::EType::ITEM: {
+                const char* pCt = getRefPtr(e->props, "content");
+                int sz = e->props.getInt("size", 14), by = y + sz / 2 - 2, z = e->props.getInt("z-index", 0), drawY = y;
+                HFONT f = FontCache::get(sz); int th = 0;
+                uint64_t mKey = hashText(pCt, mw, f);
+                int* tIt = get_th(mKey);
+                if (tIt) th = *tIt;
+                else {
+                    auto of = SelectObject(refDC, f);
+                    RECT rcCalc = {x, 0, x + mw, 200};
+                    DrawTextU(refDC, pCt, -1, &rcCalc, DT_WORDBREAK | DT_CALCRECT);
+                    th = rcCalc.bottom - rcCalc.top;
+                    SelectObject(refDC, of);
+                    set_th(mKey, th);
+                }
                 auto col = e->props.getColor("color", { 200,200,200 });
-                int z = e->props.getInt("z-index", 0);
-                renderQueue.push_back({ z, [=]() {
+                LumeString textStr = pCt;
+                renderQueue.push_back({ z, [this, x, by, drawY, mw, th, col, f, textStr]() {
+                    HDC dc = this->docDC;
                     HBRUSH b = CreateSolidBrush(col.cr());
                     HPEN pn = CreatePen(PS_SOLID, 1, col.cr());
                     auto ob = SelectObject(dc, b);
@@ -3521,41 +4721,43 @@ class Engine {
                     auto of2 = SelectObject(dc, f);
                     SetTextColor(dc, col.cr());
                     SetBkMode(dc, TRANSPARENT);
-                    RECT rcDraw = { x, y - scrollY, x + mw, y - scrollY + th };
-                    DrawTextU(dc, pCt, -1, &rcDraw, DT_WORDBREAK);
+                    RECT rcDraw = {x, drawY, x + mw, drawY + th};
+                    DrawTextU(dc, textStr.c_str(), -1, &rcDraw, DT_WORDBREAK);
                     SelectObject(dc, of2);
                 }});
+                curY = y + th + 4; break;
             }
-            curY = y + th + 4;
-            break;
-        }
-        case HTP::EType::BR:
-            curY = y + e->props.getInt("size", 16);
-            break;
-        case HTP::EType::IMAGE: {
-            int ih = e->props.getInt("height", 100);
-            if (isVis(y - scrollY, ih)) {
+            case HTP::EType::LIST: {
+                int cy = y;
+                for (auto& c : e->children) {
+                    draw(refDC, c, x + 20, cy, mw - 20);
+                    cy = curY;
+                }
+                break;
+            }
+            case HTP::EType::BR:
+                curY = y + e->props.getInt("size", 16);
+                break;
+            case HTP::EType::IMAGE: {
+                int ih = e->props.getInt("height", 100);
                 int iw = e->props.getInt("width", 100);
+                int z = e->props.getInt("z-index", 0);
+                int drawY = y;
                 const char* pSrc = getRefPtr(e->props, "src");
                 const char* pAlt = getRefPtr(e->props, "alt");
                 if (pAlt[0] == '\0') pAlt = "[image]";
-                auto bdr = e->props.getColor("border-color", { 80,80,100 });
-                int z = e->props.getInt("z-index", 0);
-                Gdiplus::Image* pImg = nullptr;
-                if (pSrc[0] != '\0') {
-                    std::string fullUrl = resolveUrl(pSrc, g_curUrl);
-                    auto imgSp = ImageCache::get(fullUrl);
-                    if (imgSp) pImg = imgSp.get();
-                }
-                renderQueue.push_back({ z, [=]() {
-                    if (pImg) {
+                auto bdr = e->props.getColor("border-color", {80,80,100});
+                auto imgSp = (pSrc[0] != '\0') ? ImageCache::get(resolveUrl(pSrc, g_curUrl)) : nullptr;
+                LumeString altStr = pAlt;
+                renderQueue.push_back({ z, [this, x, drawY, iw, ih, bdr, imgSp, altStr]() {
+                    HDC dc = this->docDC;
+                    if (imgSp && imgSp.get()) {
                         Gdiplus::Graphics g(dc);
-                        g.DrawImage(pImg, x, y - scrollY, iw, ih);
+                        g.DrawImage(imgSp.get(), x, drawY, iw, ih);
                         HPEN p = CreatePen(PS_SOLID, 1, bdr.cr());
                         auto op = SelectObject(dc, p);
-                        auto nb = (HBRUSH)GetStockObject(NULL_BRUSH);
-                        auto ob = SelectObject(dc, nb);
-                        Rectangle(dc, x, y - scrollY, x + iw, y - scrollY + ih);
+                        auto ob = SelectObject(dc, GetStockObject(NULL_BRUSH));
+                        Rectangle(dc, x, drawY, x + iw, drawY + ih);
                         SelectObject(dc, ob);
                         SelectObject(dc, op);
                         DeleteObject(p);
@@ -3565,65 +4767,81 @@ class Engine {
                         HPEN p = CreatePen(PS_SOLID, 1, bdr.cr());
                         auto ob = SelectObject(dc, b);
                         auto op = SelectObject(dc, p);
-                        Rectangle(dc, x, y - scrollY, x + iw, y - scrollY + ih);
+                        Rectangle(dc, x, drawY, x + iw, drawY + ih);
                         SelectObject(dc, ob);
                         SelectObject(dc, op);
                         DeleteObject(b);
                         DeleteObject(p);
-                        HFONT f = FontCache::get(12);
-                        auto of = SelectObject(dc, f);
+                        auto of = SelectObject(dc, FontCache::get(12));
                         SetTextColor(dc, RGB(150, 150, 170));
                         SetBkMode(dc, TRANSPARENT);
-                        RECT rc = {x + 4, y - scrollY + 4, x + iw - 4, y - scrollY + ih - 4};
-                        DrawTextU(dc, pAlt, -1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                        RECT rc = {x + 4, drawY + 4, x + iw - 4, drawY + ih - 4};
+                        DrawTextU(dc, altStr.c_str(), -1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
                         SelectObject(dc, of);
                     }
                 }});
+                curY = y + ih + 8;
+                break;
             }
-            curY = y + ih + 8;
-            break;
+            default: break;
+            }
+            if (curY > contentH) contentH = curY;
         }
-        default:
-            break;
+    public:
+        int lastW = 0;
+        HDC docDC = nullptr;
+        LumeVector<Hit> hits;
+        ~Engine() {
+            clear_th();
+            clear_ts();
+            clear_est();
         }
-        if (curY > contentH) contentH = curY;
-    }
-public:
-    int totalH() const {return contentH;}
-    void setScroll(int y) {scrollY = (std::max)(0, y);}
-    int getScroll() const {return scrollY;}
-    std::vector<Hit> hits;
-    void render(HDC tdc, int w, int h, HTP::Doc& doc) {
-        if (w != lastW) {
-            textHeightCache.clear();
-            textSizeCache.clear();
-            lastW = w;
+        int totalH() const {return contentH;}
+        void setScroll(int y) {scrollY = lume_max(0, y);}
+        int getScroll() const {return scrollY;}
+        void updateLayout(HDC tdc, int w, HTP::Doc& doc) {
+            if (w != lastW) {
+                clear_th();
+                clear_ts();
+                lastW = w;
+            }
+            clear_est();
+            contentH = 0; curY = 10;
+            docHits.clear(); glCanvases.clear();
+            pH = &docHits;
+            renderQueue.clear(); blockHeights.clear();
+            draw(tdc, doc.root, 10, 10, w - 20, "left");
+            LumeStableSort(renderQueue.begin(), renderQueue.end(), [](const RenderCmd& a, const RenderCmd& b) {
+                return a.zIndex < b.zIndex;
+                });
+            LumeStableSort(docHits.begin(), docHits.end(), [](const Hit& a, const Hit& b) {
+                return a.zIndex > b.zIndex;
+                });
         }
-        frameEstCache.clear();
-        viewportH = h;
-        contentH = 0;
-        curY = 10;
-        hits.clear();
-        pH = &hits;
-        refDC = tdc;
-        renderQueue.clear();
-        blockHeights.clear();
-        HBRUSH bg = CreateSolidBrush(doc.bg.cr());
-        RECT r = { 0,0,w,h };
-        FillRect(tdc, &r, bg);
-        DeleteObject(bg);
-        draw(tdc, doc.root, 10, 10, w - 20, "left");
-        std::stable_sort(hits.begin(), hits.end(), [](const Hit& a, const Hit& b) {
-            return a.zIndex > b.zIndex;
-            });
-        for (auto& cmd : renderQueue) {
-            cmd.drawCall();
+        void drawToScreen(HDC targetDC, int w, int h) {
+            HBRUSH bgBrush = CreateSolidBrush(g_doc.bg.cr());
+            RECT r = {0, 0, w, h};
+            FillRect(targetDC, &r, bgBrush);
+            DeleteObject(bgBrush);
+            POINT oldOrg;
+            SetViewportOrgEx(targetDC, 0, -scrollY, &oldOrg);
+            this->docDC = targetDC;
+            for (auto& cmd : renderQueue) cmd.drawCall();
+            this->docDC = nullptr;
+            SetViewportOrgEx(targetDC, oldOrg.x, oldOrg.y, NULL);
+            hits = docHits;
+            for (auto& hit : hits) {
+                hit.r.top -= scrollY;
+                hit.r.bottom -= scrollY;
+            }
+            for (auto& gl : glCanvases) {
+                GLCanvas::place(gl.id, gl.x, gl.y - scrollY + TOOLBAR_H, gl.w, gl.h, scrollY, TOOLBAR_H);
+            }
         }
-    }
-};
-};
-std::string escapeHtp(const std::string& s) {
-    std::string res;
+    };
+}
+LumeString escapeHtp(const LumeString& s) {
+    LumeString res;
     for (char c : s) {
         if (c == '"') res += "\\\"";
         else if (c == '\\') res += "\\\\";
@@ -3632,14 +4850,14 @@ std::string escapeHtp(const std::string& s) {
     return res;
 }
 namespace Pages {
-    std::string readF(const std::string& p) {return fastReadFile(p);}
-    std::string home() {
+    LumeString readF(const LumeString& p) {return fastReadFile(p);}
+    LumeString home() {
         auto c = readF("home.htp");
         if (!c.empty()) return c;
         return R"htp(
 @page {title:"Lume - Start"; background:"#09090b";}
 @block {align:"center"; padding:50; background:"#09090b"; margin:0;
-  @br{size:20;}
+  @br{size:10;}
   @text {id:"logo"; content:"LUME"; size:86; color:"#ff0000"; gradient:"#0000ff"; bold:"true"; align:"center";}
   @br {size:5;}
   @text {content:"The Custom Lightweight Engine"; size:18; color:"#71717a"; italic:"true"; align:"center";}
@@ -3733,7 +4951,7 @@ namespace Pages {
 }
 )htp";
     }
-    std::string about() {
+    LumeString about() {
         auto c = readF("about_browser.htp");
         if (!c.empty()) return c;
         return R"htp(
@@ -3774,7 +4992,7 @@ namespace Pages {
 }
 )htp";
     }
-    std::string glDemo() {
+    LumeString glDemo() {
         return R"htp(
 @page {title:"Lume - 3D Engine"; background:"#09090b";}
 @block {align:"center"; padding:30; background:"#09090b"; margin:0;
@@ -3886,42 +5104,103 @@ namespace Pages {
 }
 )htp";
     }
-    std::string pluginDemo() {
+    LumeString pluginDemo() {
         return R"htp(
 @page {title:"Lume - Plugins"; background:"#09090b";}
-@block {align:"center"; padding:40; background:"#09090b"; margin:0;
-  @text {content:"Native Plugin Bridge"; size:36; color:"#fafafa"; bold:"true"; align:"center";}
+@block {align:"center"; padding:30; background:"#09090b"; margin:0;
+  @text {content:"Native DLL Integrations"; size:36; color:"#fafafa"; bold:"true"; align:"center";}
   @br {size:5;}
-  @text {content:"Triggering OS-level calls via dynamically loaded C++ DLLs."; size:15; color:"#71717a"; align:"center";}
+  @text {content:"Dynamically loaded C++ extensions with direct memory and OS API access."; size:15; color:"#71717a"; align:"center";}
 }
 @block {align:"center"; padding:0; margin:10; background:"#09090b";
-  @column {align:"center"; background:"#18181b"; padding:30; border-radius:12; width:450;
-    @text {content:"Test Windows Message Box"; size:18; color:"#fafafa"; bold:"true"; align:"center";}
-    @divider {color:"#27272a"; thickness:1; margin:15;}
-    @text {content:"This button uses Lua to call a C++ plugin function that interacts with the Windows API natively."; size:14; color:"#a1a1aa"; align:"center";}
-    @br {size:25;}
-    @button {id:"btn_yesno"; content:"Execute Plugin"; width:200; height:40; background:"#3b82f6"; color:"#ffffff"; border-radius:6; size:15;}
-    @br {size:20;}
-    @text {id:"result"; content:"Waiting for input..."; size:14; color:"#f59e0b"; align:"center";}
+  @row {align:"center"; gap:20;
+    @column {background:"#18181b"; padding:25; border-radius:12; width:320;
+      @text {content:"1. Cloud Plugin Loader"; size:20; color:"#3b82f6"; bold:"true";}
+      @divider {color:"#27272a"; thickness:1; margin:15;}
+      @text {content:"Click below to download and inject the official 'SystemMon' plugin directly into RAM without restarting the engine."; size:14; color:"#a1a1aa";}
+      @br {size:20;}
+      @button {id:"btn_load_plg"; content:"Inject SystemMon"; width:220; height:35; background:"#2563eb"; color:"#ffffff"; border-radius:6;}
+      @br {size:10;}
+      @text {id:"plg_status"; content:"Status: Not Loaded"; size:13; color:"#f59e0b";}
+    }
+    @column {background:"#18181b"; padding:25; border-radius:12; width:320;
+      @text {content:"2. Hardware Monitor"; size:20; color:"#10b981"; bold:"true";}
+      @divider {color:"#27272a"; thickness:1; margin:15;}
+      @row {align:"left"; gap:10;
+        @text {content:"CPU Usage:"; size:14; color:"#a1a1aa"; width:90;}
+        @text {id:"txt_cpu"; content:"0%"; size:15; color:"#fafafa"; bold:"true";}
+      }
+      @br {size:5;}
+      @row {align:"left"; gap:10;
+        @text {content:"RAM Free:"; size:14; color:"#a1a1aa"; width:90;}
+        @text {id:"txt_ram"; content:"0 MB"; size:15; color:"#fafafa"; bold:"true";}
+      }
+      @br {size:15;}
+      @glcanvas {id:"gl_graph"; width:270; height:80; border-color:"#27272a";}
+    }
+
   }
-  @br { size:30; }
+  @br {size:30;}
   @button {content:"Back to Home"; width:180; height:40; background:"#27272a"; color:"#fafafa"; border-radius:6; url:"about:home"; size:15;}
 }
 @script {
-  on_click('btn_yesno', function()
-    if msgBox then
-      msgBox('Lume Engine', 'Do you want to proceed with this native action?', {
-        yes = function() set_text('result', 'Result: User clicked YES') end,
-        no = function() set_text('result', 'Result: User clicked NO') end
-      })
-    else 
-      set_text('result', 'Error: Plugin DLL not found in /plugins folder.') 
+  local history = {}
+  for i=1, 50 do history[i] = 0 end
+  local function draw_graph()
+    if not gl_available() then return end
+    if not gl_begin_render('gl_graph', 270, 80) then return end
+    gl_viewport(0, 0, 270, 80)
+    gl_matrix_mode(GL_PROJECTION)
+    gl_load_identity()
+    gl_ortho(0, 50, 0, 100, -1, 1)
+    gl_clear(0.06, 0.06, 0.08, 1)
+    gl_color(0.2, 0.2, 0.25, 1)
+    gl_begin(GL_LINES)
+    for i=0, 100, 25 do
+       gl_vertex2f(0, i) gl_vertex2f(50, i)
+    end
+    gl_end()
+    gl_color(0.1, 0.8, 0.5, 1)
+    gl_line_width(2.0)
+    gl_begin(GL_LINE_STRIP)
+    for i=1, 50 do
+       gl_vertex2f(i, history[i])
+    end
+    gl_end()
+    gl_end_render('gl_graph') 
+  end
+  local timer_id = nil
+  on_click('btn_load_plg', function()
+    local ok = plugin_from_net("https://raw.githubusercontent.com/Lume-corp/LumeSources/refs/heads/main/plugins/aaOfficial/V0.6/sysmon.dll")
+    if ok then
+      set_text('plg_status', 'Status: Loaded & Active!')
+      set_prop('plg_status', 'color', '#10b981')
+      if sysmon_get_cpu then
+         if not timer_id then
+             timer_id = set_timer(200, function()
+                 local cpu = sysmon_get_cpu()
+                 local ram = sysmon_get_ram()
+                 set_text('txt_cpu', math.floor(cpu) .. "%")
+                 set_text('txt_ram', math.floor(ram) .. " MB")
+                 for i=1, 49 do history[i] = history[i+1] end
+                 history[50] = cpu
+                 draw_graph()
+             end)
+         end
+      else
+         set_text('plg_status', 'Status: Plugin loaded, but API missing.')
+         set_prop('plg_status', 'color', '#ef4444')
+      end
+    else
+      set_text('plg_status', 'Status: Injection Failed')
+      set_prop('plg_status', 'color', '#ef4444')
     end
   end)
+  draw_graph()
 }
 )htp";
     }
-    std::string wasmDemo() {
+    LumeString wasmDemo() {
         return R"htp(
 @page {title:"Lume - WebAssembly"; background:"#09090b";}
 @block {align:"center"; padding:40; background:"#09090b"; margin:0;
@@ -3961,7 +5240,7 @@ namespace Pages {
 }
 )htp";
     }
-    std::string error(const std::string& e, const std::string& u) {
+    LumeString error(const LumeString& e, const LumeString& u) {
         return "@page{title:\"Error\";background:#1a0000;}\n"
             "@block{align:center;padding:40;margin:30;background:#2a1010;border-radius:10;\n"
             "  @text{content:\"Error\";size:32;color:#ff4444;bold:true; align:\"center\";}\n"
@@ -3974,18 +5253,18 @@ namespace Pages {
 }
 HTP::Doc g_doc;
 Render::Engine g_ren;
-std::vector<std::string> g_hist;
+LumeVector<LumeString> g_hist;
 int g_histPos = -1;
-std::string buildTextHtp(const std::string& rawText) {
-    std::string htp = "@page {title:\"Text Document\"; background:\"#1e1e1e\";}\n";
+LumeString buildTextHtp(const LumeString& rawText) {
+    LumeString htp = "@page {title:\"Text Document\"; background:\"#1e1e1e\";}\n";
     htp += "@column {padding:10; background:\"#1e1e1e\";}\n";
     size_t pos = 0;
     while (pos < rawText.length()) {
         size_t next = rawText.find('\n', pos);
-        std::string line = (next == std::string::npos) ? rawText.substr(pos) : rawText.substr(pos, next - pos);
-        pos = (next == std::string::npos) ? rawText.length() : next + 1;
+        LumeString line = (next == LumeString::npos) ? rawText.substr(pos) : rawText.substr(pos, next - pos);
+        pos = (next == LumeString::npos) ? rawText.length() : next + 1;
         if (!line.empty() && line.back() == '\r') line.pop_back();
-        std::string escaped;
+        LumeString escaped;
         for (char c : line) {
             if (c == '"') escaped += "\\\"";
             else if (c == '\\') escaped += "\\\\";
@@ -4002,28 +5281,28 @@ std::string buildTextHtp(const std::string& rawText) {
     }
     return htp;
 }
-std::string parseMarkdown(const std::string& mdText) {
-    std::string htp = "@page {title:\"Markdown Document\"; background:\"#09090b\";}\n";
+LumeString parseMarkdown(const LumeString& mdText) {
+    LumeString htp = "@page {title:\"Markdown Document\"; background:\"#09090b\";}\n";
     htp += "@column {padding:20; background:\"#09090b\"; align:\"left\";}\n";
     bool inCodeBlock = false;
     bool inDetails = false;
     bool inList = false;
-    auto formatInline = [](std::string text) {
+    auto formatInline = [](LumeString text) {
         bool bold = false, italic = false;
-        if (text.find("**") != std::string::npos && text.rfind("**") != text.find("**")) {
+        if (text.find("**") != LumeString::npos && text.rfind("**") != text.find("**")) {
             bold = true;
             size_t pos;
-            while ((pos = text.find("**")) != std::string::npos) text.erase(pos, 2);
+            while ((pos = text.find("**")) != LumeString::npos) text.erase(pos, 2);
         }
-        else if (text.find("*") != std::string::npos && text.rfind("*") != text.find("*")) {
+        else if (text.find("*") != LumeString::npos && text.rfind("*") != text.find("*")) {
             italic = true;
             size_t pos;
-            while ((pos = text.find("*")) != std::string::npos) text.erase(pos, 1);
+            while ((pos = text.find("*")) != LumeString::npos) text.erase(pos, 1);
         }
-        std::string props;
+        LumeString props;
         if (bold) props += "bold:\"true\"; ";
         if (italic) props += "italic:\"true\"; ";
-        return std::make_pair(text, props);
+        return LumePair<LumeString, LumeString>(text, props);
         };
     auto closeList = [&]() {
         if (inList) { htp += "  }\n"; inList = false; }
@@ -4031,8 +5310,8 @@ std::string parseMarkdown(const std::string& mdText) {
     size_t pos = 0;
     while (pos < mdText.length()) {
         size_t next = mdText.find('\n', pos);
-        std::string line = (next == std::string::npos) ? mdText.substr(pos) : mdText.substr(pos, next - pos);
-        pos = (next == std::string::npos) ? mdText.length() : next + 1;
+        LumeString line = (next == LumeString::npos) ? mdText.substr(pos) : mdText.substr(pos, next - pos);
+        pos = (next == LumeString::npos) ? mdText.length() : next + 1;
         if (!line.empty() && line.back() == '\r') line.pop_back();
 
         if (line.empty()) {
@@ -4051,21 +5330,21 @@ std::string parseMarkdown(const std::string& mdText) {
             htp += "    @text {content:\"" + escapeHtp(line) + "\"; size:14; color:\"#cccccc\"; font:\"Consolas\";}\n";
             continue;
         }
-        if (line.find("<details>") != std::string::npos) {
+        if (line.find("<details>") != LumeString::npos) {
             closeList();
             inDetails = true;
             htp += "  @block {background:\"#18181b\"; padding:15; border-radius:8; margin:5; align:\"left\";\n";
             continue;
         }
-        if (line.find("</details>") != std::string::npos) {
+        if (line.find("</details>") != LumeString::npos) {
             inDetails = false;
             htp += "  }\n";
             continue;
         }
-        if (inDetails && line.find("<summary>") != std::string::npos) {
+        if (inDetails && line.find("<summary>") != LumeString::npos) {
             size_t s1 = line.find("<summary>") + 9;
             size_t s2 = line.find("</summary>");
-            std::string summary = (s2 != std::string::npos) ? line.substr(s1, s2 - s1) : line.substr(s1);
+            LumeString summary = (s2 != LumeString::npos) ? line.substr(s1, s2 - s1) : line.substr(s1);
             htp += "    @text {content:\"► " + escapeHtp(summary) + "\"; size:16; color:\"#10b981\"; bold:\"true\";}\n";
             htp += "    @divider {color:\"#27272a\"; thickness:1; margin:5;}\n";
             continue;
@@ -4074,9 +5353,9 @@ std::string parseMarkdown(const std::string& mdText) {
         while (hLevel < line.length() && line[hLevel] == '#') hLevel++;
         if (hLevel > 0 && hLevel <= 6 && line[hLevel] == ' ') {
             closeList();
-            std::string text = line.substr(hLevel + 1);
+            LumeString text = line.substr(hLevel + 1);
             int size = 32 - (hLevel * 3);
-            htp += "  @text {content:\"" + escapeHtp(text) + "\"; size:" + std::to_string(size) + "; color:\"#ffffff\"; bold:\"true\";}\n";
+            htp += "  @text {content:\"" + escapeHtp(text) + "\"; size:" + lume_to_string(size) + "; color:\"#ffffff\"; bold:\"true\";}\n";
             if (hLevel <= 2) htp += "  @divider {color:\"#3f3f46\"; thickness:1; margin:8;}\n";
             continue;
         }
@@ -4097,14 +5376,30 @@ std::string parseMarkdown(const std::string& mdText) {
     htp += "}\n";
     return htp;
 }
-void loadContent(const std::string& content, const std::string& url, bool isInternalHtp = false) {
-    std::string finalContent = content;
-    if (Plugins::g_activeCustomEngine && Plugins::g_activeCustomPageContext) {
-        Plugins::g_activeCustomEngine->free_page(Plugins::g_activeCustomPageContext);
-        Plugins::g_activeCustomEngine = nullptr;
+void loadContent(const LumeString& content, const LumeString& url, bool isInternalHtp = false) {
+    LumeString finalContent = content;
+    LumeString displayUrl = url;
+    if (Plugins::g_activeProtocol && Plugins::g_activeCustomPageContext) {
+        Plugins::g_activeProtocol->free_page(Plugins::g_activeCustomPageContext);
+        Plugins::g_activeProtocol = nullptr;
         Plugins::g_activeCustomPageContext = nullptr;
     }
-    std::string displayUrl = url;
+    Script::reset();
+    Script::init();
+    Plugins::initAllPlugins(Script::g_L);
+    LumeString scheme = displayUrl.substr(0, displayUrl.find("://"));
+    if (Plugins::g_protocols.find(scheme) != Plugins::g_protocols.end() && !content.empty() && content[0] >= '0' && content[0] <= '9') {
+        unsigned long long ptrVal = 0;
+        for (char c : content) { if (c >= '0' && c <= '9') ptrVal = ptrVal * 10 + (c - '0'); }
+        Plugins::g_activeProtocol = &Plugins::g_protocols[scheme];
+        Plugins::g_activeCustomPageContext = (void*)ptrVal;
+        g_curUrl = displayUrl;
+        g_ren.setScroll(0);
+        SetWindowTextU(g_mainWnd, (LumeString("Lume [") + scheme + LumeString("] - ") + displayUrl).c_str());
+        SetWindowTextU(g_addressBar, url.c_str());
+        invalidateDOM();
+        return;
+    }
     bool forceRaw = false;
     bool forceHtp = false;
     if (displayUrl.length() > 5 && displayUrl.substr(displayUrl.length() - 5) == " !raw") {
@@ -4115,9 +5410,9 @@ void loadContent(const std::string& content, const std::string& url, bool isInte
         forceHtp = true;
         displayUrl = displayUrl.substr(0, displayUrl.length() - 5);
     }
-    std::string ext;
+    LumeString ext;
     auto dot = displayUrl.find_last_of('.');
-    if (dot != std::string::npos) {
+    if (dot != LumeString::npos) {
         ext = displayUrl.substr(dot);
         CharLowerBuffA(&ext[0], (DWORD)ext.length());
     }
@@ -4126,10 +5421,9 @@ void loadContent(const std::string& content, const std::string& url, bool isInte
         Plugins::g_activeCustomEngine = &customEngineIt->second;
         Plugins::g_activeCustomPageContext = Plugins::g_activeCustomEngine->load_page(
             displayUrl.c_str(), content.c_str(), content.length());
-
         g_curUrl = displayUrl;
         g_ren.setScroll(0);
-        SetWindowTextU(g_mainWnd, (std::string("Lume (Custom Render) - ") + displayUrl).c_str());
+        SetWindowTextU(g_mainWnd, (LumeString("Lume (Custom Render) - ") + displayUrl).c_str());
         SetWindowTextU(g_addressBar, url.c_str());
         invalidateContent();
         return;
@@ -4143,29 +5437,28 @@ void loadContent(const std::string& content, const std::string& url, bool isInte
             isText = false;
         }
         else {
-            std::string path = displayUrl;
+            LumeString path = displayUrl;
             auto q = path.find('?');
-            if (q != std::string::npos) path = path.substr(0, q);
+            if (q != LumeString::npos) path = path.substr(0, q);
             auto slash = path.find_last_of('/');
-            if (slash != std::string::npos) path = path.substr(slash + 1);
-
+            if (slash != LumeString::npos) path = path.substr(slash + 1);
             if (!path.empty()) {
-                auto dot = path.find_last_of('.');
-                if (dot == std::string::npos) {
+                auto p_dot = path.find_last_of('.');
+                if (p_dot == LumeString::npos) {
                     isText = true;
                 }
                 else {
-                    std::string ext = path.substr(dot);
-                    CharLowerBuffA(&ext[0], (DWORD)ext.length());
-                    if (ext == ".txt" || ext == ".json" || ext == ".log" || ext == ".cpp" || ext == ".h") {
+                    LumeString p_ext = path.substr(p_dot);
+                    CharLowerBuffA(&p_ext[0], (DWORD)p_ext.length());
+                    if (p_ext == ".txt" || p_ext == ".json" || p_ext == ".log" || p_ext == ".cpp" || p_ext == ".h") {
                         isText = true;
                     }
-                    else if (ext == ".md") {
+                    else if (p_ext == ".md") {
                         finalContent = parseMarkdown(content);
                         isText = false;
                     }
-                    else if (ext == ".wasm") {
-                        finalContent = "@page{title:\"WASM Module\";background:\"#09090b\";}@block{align:\"center\";padding:50;@text{content:\"WebAssembly Binary Module\";size:30;color:\"#10b981\";bold:\"true\";}@br{size:10;}@text{content:\"Size: " + std::to_string(content.size()) + " bytes\";size:16;color:\"#a1a1aa\";}}";
+                    else if (p_ext == ".wasm") {
+                        finalContent = "@page{title:\"WASM Module\";background:\"#09090b\";}@block{align:\"center\";padding:50;@text{content:\"WebAssembly Binary Module\";size:30;color:\"#10b981\";bold:\"true\";}@br{size:10;}@text{content:\"Size: " + lume_to_string(content.size()) + " bytes\";size:16;color:\"#a1a1aa\";}}";
                         isText = false;
                     }
                 }
@@ -4174,40 +5467,41 @@ void loadContent(const std::string& content, const std::string& url, bool isInte
         if (isText) finalContent = buildTextHtp(content);
     }
     Plugins::checkDynamicUnloads(displayUrl);
-    Script::reset();
-    Plugins::initAllPlugins(Script::g_L);
     HTP::Parser p;
     g_doc = p.parse(finalContent);
     g_curUrl = displayUrl;
     g_ren.setScroll(0);
-    std::function<void(std::shared_ptr<HTP::Elem>)> run;
-    run = [&](std::shared_ptr<HTP::Elem> e) {
-        if (!e) return;
-        if (e->type == HTP::EType::SCRIPT && !e->scriptCode.empty()) Script::exec(e->scriptCode);
-        for (auto& c : e->children) run(c);
-        };
-    run(g_doc.root);
+
+    struct Runner {
+        void run(LumeSharedPtr<HTP::Elem> e) {
+            if (!e) return;
+            if (e->type == HTP::EType::SCRIPT && !e->scriptCode.empty()) Script::exec(e->scriptCode.c_str());
+            for (auto& c : e->children) run(c);
+        }
+    } runner;
+    runner.run(g_doc.root);
     SetWindowTextU(g_mainWnd, (g_doc.title + " - Lume").c_str());
     SetWindowTextU(g_addressBar, url.c_str());
     invalidateContent();
 }
-void loadFile(const std::string& fp) {
-    std::string originalUrl = fp;
-    std::string path = fp;
+void loadFile(const LumeString& fp) {
+    LumeString originalUrl = fp;
+    LumeString path = fp;
     if (path.length() > 5 && path.substr(path.length() - 5) == " !raw") path = path.substr(0, path.length() - 5);
     else if (path.length() > 5 && path.substr(path.length() - 5) == " !htp") path = path.substr(0, path.length() - 5);
     if (path.length() > 7 && path.substr(0, 7) == "file://") {
-        char outPath[MAX_PATH];
-        DWORD len = MAX_PATH;
-        if (PathCreateFromUrlA(path.c_str(), outPath, &len, 0) == S_OK) {
-            path = outPath;
+        wchar_t outPathW[MAX_PATH];
+        DWORD lenW = MAX_PATH;
+        LumeWString wpath = utf8_to_wstring(path);
+        if (PathCreateFromUrlW(wpath.c_str(), outPathW, &lenW, 0) == S_OK) {
+            path = wstring_to_utf8(outPathW);
         }
         else {
             path = path.substr(7);
             if (!path.empty() && path[0] == '/') path = path.substr(1);
         }
     }
-    std::string content = fastReadFile(path);
+    LumeString content = fastReadFile(path);
     if (content.empty()) {
         loadContent(Pages::error("Not found", path), originalUrl, true);
         return;
@@ -4215,11 +5509,11 @@ void loadFile(const std::string& fp) {
     loadContent(content, originalUrl);
     setStatus("Loaded: " + path);
 }
-void navigateTo(const std::string& url) {
+void navigateTo(const LumeString& url) {
     g_currentNavId++;
     int myNavId = g_currentNavId;
-    std::string rawUrl = url;
-    std::string flags = "";
+    LumeString rawUrl = url;
+    LumeString flags = "";
     if (rawUrl.length() > 5 && rawUrl.substr(rawUrl.length() - 5) == " !raw") {
         flags = " !raw";
         rawUrl = rawUrl.substr(0, rawUrl.length() - 5);
@@ -4228,11 +5522,11 @@ void navigateTo(const std::string& url) {
         flags = " !htp";
         rawUrl = rawUrl.substr(0, rawUrl.length() - 5);
     }
-    std::string u = resolveUrl(rawUrl, g_curUrl);
-    std::string urlWithFlags = u + flags;
+    LumeString u = resolveUrl(rawUrl, g_curUrl);
+    LumeString urlWithFlags = u + flags;
     if (g_histPos >= 0 && g_histPos < (int)g_hist.size() - 1)
         g_hist.resize(g_histPos + 1);
-    auto nav = [&](const std::string& c, const std::string& nu) {
+    auto nav = [&](const LumeString& c, const LumeString& nu) {
         g_hist.push_back(nu);
         if (g_hist.size() > 50) {
             g_hist.erase(g_hist.begin());
@@ -4253,7 +5547,7 @@ void navigateTo(const std::string& url) {
         loadFile(urlWithFlags);
         return;
     }
-    if (u.find("://") == std::string::npos) {
+    if (u.find("://") == LumeString::npos) {
         if (u.length() > 4 && u.substr(u.length() - 4) == ".htp") {
             if (GetFileAttributesA(u.c_str()) != INVALID_FILE_ATTRIBUTES) {
                 g_hist.push_back("file://" + urlWithFlags);
@@ -4265,9 +5559,36 @@ void navigateTo(const std::string& url) {
         u = "http://" + u;
         urlWithFlags = u + flags;
     }
+    LumeString scheme = u.substr(0, u.find("://"));
+    auto protoIt = Plugins::g_protocols.find(scheme);
+    if (protoIt != Plugins::g_protocols.end()) {
+        setStatus("Loading via plugin...");
+        LumeThread::RunAsync([u, urlWithFlags, myNavId, scheme]() {
+            auto handler = Plugins::g_protocols[scheme];
+            void* ctx = handler.fetch_and_parse(u.c_str());
+            PendingPage pp;
+            pp.url = urlWithFlags;
+            pp.navId = myNavId;
+            if (ctx) {
+                char ptrStr[64];
+                wsprintfA(ptrStr, "%I64u", (unsigned long long)ctx);
+                pp.body = ptrStr;
+            }
+            else {
+                pp.error = true;
+                pp.body = Pages::error("Protocol plugin failed to fetch/parse", u);
+            }
+            {
+                LumeLockGuard<LumeMutex> lock(g_pageMutex);
+                g_pendingPages.push_back(pp);
+            }
+            PostMessage(g_mainWnd, WM_PAGE_LOADED, 0, 0);
+            });
+        return;
+    }
     if ((u.length() > 7 && u.substr(0, 7) == "http://") || (u.length() > 8 && u.substr(0, 8) == "https://")) {
         setStatus("Loading...");
-        std::thread([u, urlWithFlags, myNavId]() {
+        LumeThread::RunAsync([u, urlWithFlags, myNavId]() {
             auto r = Net::fetch(Net::URL::parse(u), true);
             PendingPage pp;
             pp.url = urlWithFlags;
@@ -4280,18 +5601,18 @@ void navigateTo(const std::string& url) {
                 pp.body = Pages::error(r.error, u);
             }
             {
-                std::lock_guard<std::mutex> lock(g_pageMutex);
+                LumeLockGuard<LumeMutex> lock(g_pageMutex);
                 g_pendingPages.push_back(pp);
             }
             PostMessage(g_mainWnd, WM_PAGE_LOADED, 0, 0);
 
-            }).detach();
+            });
         return;
     }
     loadContent(Pages::error("Unknown protocol", u), urlWithFlags, true);
 }
-void histNav(const std::string& u) {
-    std::string cleanU = u;
+void histNav(const LumeString& u) {
+    LumeString cleanU = u;
     if (cleanU.length() > 5 && cleanU.substr(cleanU.length() - 5) == " !raw") cleanU = cleanU.substr(0, cleanU.length() - 5);
     else if (cleanU.length() > 5 && cleanU.substr(cleanU.length() - 5) == " !htp") cleanU = cleanU.substr(0, cleanU.length() - 5);
     g_currentNavId++;
@@ -4303,8 +5624,36 @@ void histNav(const std::string& u) {
     else if (cleanU == "about:wasm") loadContent(Pages::wasmDemo(), u, true);
     else if (cleanU.length() > 7 && cleanU.substr(0, 7) == "file://") loadFile(u);
     else {
+        LumeString scheme = cleanU.substr(0, cleanU.find("://"));
+        auto protoIt = Plugins::g_protocols.find(scheme);
+        if (protoIt != Plugins::g_protocols.end()) {
+            setStatus("Loading history via plugin...");
+            LumeThread::RunAsync([cleanU, u, myNavId, scheme]() {
+                auto handler = Plugins::g_protocols[scheme];
+                void* ctx = handler.fetch_and_parse(cleanU.c_str());
+                PendingPage pp;
+                pp.url = u;
+                pp.navId = myNavId;
+                pp.isHistoryNav = true;
+                if (ctx) {
+                    char ptrStr[64];
+                    wsprintfA(ptrStr, "%I64u", (unsigned long long)ctx);
+                    pp.body = ptrStr;
+                }
+                else {
+                    pp.error = true;
+                    pp.body = Pages::error("Protocol plugin failed to fetch/parse", cleanU);
+                }
+                {
+                    LumeLockGuard<LumeMutex> lock(g_pageMutex);
+                    g_pendingPages.push_back(pp);
+                }
+                PostMessage(g_mainWnd, WM_PAGE_LOADED, 0, 0);
+                });
+            return;
+        }
         setStatus("Loading history...");
-        std::thread([cleanU, u, myNavId]() {
+        LumeThread([cleanU, u, myNavId]() {
             auto r = Net::fetch(Net::URL::parse(cleanU), true);
             PendingPage pp;
             pp.url = u;
@@ -4316,7 +5665,7 @@ void histNav(const std::string& u) {
                 pp.body = Pages::error(r.error, cleanU);
             }
             {
-                std::lock_guard<std::mutex> lock(g_pageMutex);
+                LumeLockGuard<LumeMutex> lock(g_pageMutex);
                 g_pendingPages.push_back(pp);
             }
             PostMessage(g_mainWnd, WM_PAGE_LOADED, 0, 0);
@@ -4340,18 +5689,17 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
     case WM_CREATE: {
         Script::g_hwnd = hw;
-
         CreateWindowW(L"BUTTON", L"<", WS_CHILD | WS_VISIBLE, 4, 6, 30, 28, hw, (HMENU)ID_BACK, 0, 0);
         CreateWindowW(L"BUTTON", L">", WS_CHILD | WS_VISIBLE, 38, 6, 30, 28, hw, (HMENU)ID_FWD, 0, 0);
         CreateWindowW(L"BUTTON", L"R", WS_CHILD | WS_VISIBLE, 72, 6, 30, 28, hw, (HMENU)ID_REF, 0, 0);
         g_addressBar = CreateWindowW(L"EDIT", L"about:home", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL, 108, 8, 500, 24, hw, (HMENU)ID_ADDR, 0, 0);
-        CreateWindowW(L"BUTTON", L"Go", WS_CHILD | WS_VISIBLE, 614, 6, 40, 28, hw, (HMENU)ID_GO, 0, 0);
+        CreateWindowW(L"BUTTON", L"Go", WS_CHILD | WS_VISIBLE, 0, 0, 40, 28, hw, (HMENU)ID_GO, 0, 0);
+        g_menuBtn = CreateWindowW(L"BUTTON", L"\x2630", WS_CHILD | WS_VISIBLE, 0, 0, 30, 28, hw, (HMENU)ID_MENU_BTN, 0, 0);
         g_statusBar = CreateWindowW(L"STATIC", L"Ready", WS_CHILD | WS_VISIBLE | SS_LEFT, 0, 0, 800, STATUS_H, hw, 0, 0, 0);
-
         HFONT uf = CreateFontW(-14, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, L"Segoe UI");
         SendMessage(g_addressBar, WM_SETFONT, (WPARAM)uf, 1);
         SendMessage(g_statusBar, WM_SETFONT, (WPARAM)uf, 1);
-
+        SendMessage(g_menuBtn, WM_SETFONT, (WPARAM)uf, 1);
         g_origAddr = (WNDPROC)SetWindowLongPtrW(g_addressBar, GWLP_WNDPROC, (LONG_PTR)AddrProc);
         navigateTo("about:home");
         return 0;
@@ -4364,11 +5712,15 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
             return 0;
         }
         int w = LOWORD(lp), h = HIWORD(lp);
-        int aw = w - 108 - 50 - 10;
-        if (aw < 100) aw = 100;
-        MoveWindow(g_addressBar, 108, 8, aw, 24, TRUE);
+        int menuW = 30, goW = 40, pad = 4;
+        int menuX = w - pad - menuW;
+        int goX = menuX - pad - goW;
+        int addrW = goX - pad - 108;
+        if (addrW < 100) addrW = 100;
+        MoveWindow(g_addressBar, 108, 8, addrW, 24, TRUE);
         HWND gb = GetDlgItem(hw, ID_GO);
-        if (gb) MoveWindow(gb, 108 + aw + 4, 6, 40, 28, TRUE);
+        if (gb) MoveWindow(gb, goX, 6, goW, 28, TRUE);
+        MoveWindow(g_menuBtn, menuX, 6, menuW, 28, TRUE);
         MoveWindow(g_statusBar, 0, h - STATUS_H, w, STATUS_H, TRUE);
         g_contentDirty = true;
         InvalidateRect(hw, nullptr, FALSE);
@@ -4397,7 +5749,7 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
             if (ps.rcPaint.bottom > TOOLBAR_H) {
                 ensureBackbuffer(hdc, w, h);
                 if (g_contentDirty) {
-                    if (Plugins::g_activeCustomEngine && Plugins::g_activeCustomPageContext) {
+                    if (g_opt_plugins && Plugins::g_activeCustomEngine && Plugins::g_activeCustomPageContext) {
                         HBRUSH bg = CreateSolidBrush(RGB(26, 26, 46));
                         RECT r = { 0, 0, w, h };
                         FillRect(g_backDC, &r, bg);
@@ -4408,17 +5760,30 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
                         }
                         GLCanvas::beginLayoutPass();
                     }
+                    else if (g_opt_plugins && Plugins::g_activeProtocol && Plugins::g_activeCustomPageContext) {
+                        HBRUSH bg = CreateSolidBrush(RGB(20, 20, 30));
+                        RECT r = { 0, 0, w, h };
+                        FillRect(g_backDC, &r, bg);
+                        DeleteObject(bg);
+                        if (Plugins::g_activeProtocol->render_page) {
+                            Plugins::g_activeProtocol->render_page(Plugins::g_activeCustomPageContext, g_backDC, w, h, g_ren.getScroll());
+                        }
+                    }
                     else {
-                        GLCanvas::beginLayoutPass();
-                        g_ren.render(g_backDC, w, h, g_doc);
-                        GLCanvas::endLayoutPass();
+                        if (g_domDirty || g_ren.lastW != w) {
+                            GLCanvas::beginLayoutPass();
+                            g_ren.updateLayout(g_backDC, w, g_doc);
+                            GLCanvas::endLayoutPass();
+                            g_domDirty = false;
+                        }
+                        g_ren.drawToScreen(g_backDC, w, h);
                     }
                     g_contentDirty = false;
                 }
-                int srcTop = (std::max)(0, (int)ps.rcPaint.top - TOOLBAR_H);
-                int srcBot = (std::min)(h, (int)ps.rcPaint.bottom - TOOLBAR_H);
-                int srcLeft = (std::max)(0, (int)ps.rcPaint.left);
-                int srcRight = (std::min)(w, (int)ps.rcPaint.right);
+                int srcTop = lume_max(0, (int)ps.rcPaint.top - TOOLBAR_H);
+                int srcBot = lume_min(h, (int)ps.rcPaint.bottom - TOOLBAR_H);
+                int srcLeft = lume_max(0, (int)ps.rcPaint.left);
+                int srcRight = lume_min(w, (int)ps.rcPaint.right);
                 if (srcBot > srcTop && srcRight > srcLeft) {
                     BitBlt(hdc, srcLeft, TOOLBAR_H + srcTop, srcRight - srcLeft, srcBot - srcTop,
                         g_backDC, srcLeft, srcTop, SRCCOPY);
@@ -4463,6 +5828,12 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
             Plugins::g_activeCustomEngine->on_mouse_move(Plugins::g_activeCustomPageContext, mx, my);
             return 0;
         }
+        else if (Plugins::g_activeProtocol && Plugins::g_activeCustomPageContext && Plugins::g_activeProtocol->on_mouse_move) {
+            int mx = (short)LOWORD(lp);
+            int my = (short)HIWORD(lp) - TOOLBAR_H;
+            Plugins::g_activeProtocol->on_mouse_move(Plugins::g_activeCustomPageContext, mx, my);
+            return 0;
+        }
         return 0;
     }
     case WM_MOUSEWHEEL: {
@@ -4475,6 +5846,9 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
         int totalH = g_ren.totalH();
         if (Plugins::g_activeCustomEngine && Plugins::g_activeCustomPageContext && Plugins::g_activeCustomEngine->get_document_height) {
             totalH = Plugins::g_activeCustomEngine->get_document_height(Plugins::g_activeCustomPageContext);
+        }
+        else if (Plugins::g_activeProtocol && Plugins::g_activeCustomPageContext && Plugins::g_activeProtocol->get_document_height) {
+            totalH = Plugins::g_activeProtocol->get_document_height(Plugins::g_activeCustomPageContext);
         }
         int mx = totalH - (cr.bottom - TOOLBAR_H - STATUS_H);
         if (mx < 0) mx = 0;
@@ -4492,9 +5866,16 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
         }
         int mx = LOWORD(lp);
         int my = HIWORD(lp) - TOOLBAR_H;
-        if (Plugins::g_activeCustomEngine && Plugins::g_activeCustomPageContext) {
+        if (g_opt_plugins && Plugins::g_activeCustomEngine && Plugins::g_activeCustomPageContext) {
             if (Plugins::g_activeCustomEngine->on_mouse_down) {
                 Plugins::g_activeCustomEngine->on_mouse_down(Plugins::g_activeCustomPageContext, mx, my, 1);
+            }
+            SetFocus(hw);
+            return 0;
+        }
+        else if (g_opt_plugins && Plugins::g_activeProtocol && Plugins::g_activeCustomPageContext) {
+            if (Plugins::g_activeProtocol->on_mouse_down) {
+                Plugins::g_activeProtocol->on_mouse_down(Plugins::g_activeCustomPageContext, mx, my, 1);
             }
             SetFocus(hw);
             return 0;
@@ -4514,7 +5895,9 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
                 int localX = mx - clickedHit.r.left;
                 int localY = my - clickedHit.r.top;
                 Script::fireCanvasClick(clickedHit.canvasId, localX, localY, 1);
-                captureCanvasMouse(clickedHit.canvasId);
+                if (clickedHit.autoCapture) {
+                    captureCanvasMouse(clickedHit.canvasId);
+                }
                 SetFocus(hw);
                 return 0;
             }
@@ -4547,7 +5930,7 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
     }
     case WM_CHAR: {
-        if (Plugins::g_activeCustomEngine && Plugins::g_activeCustomPageContext) {
+        if (g_opt_plugins && Plugins::g_activeCustomEngine && Plugins::g_activeCustomPageContext) {
             if (Plugins::g_activeCustomEngine->on_char) {
                 Plugins::g_activeCustomEngine->on_char(Plugins::g_activeCustomPageContext, (unsigned int)wp);
             }
@@ -4573,12 +5956,12 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
                 Script::g_focusId.clear();
             }
             else if (wc >= 32) {
-                std::wstring ws(1, wc);
-                std::string utf8_char = wstring_to_utf8(ws);
+                LumeWString ws(1, wc);
+                LumeString utf8_char = wstring_to_utf8(ws);
                 inp.text.insert(inp.cursor, utf8_char);
                 inp.cursor += (int)utf8_char.length();
             }
-            invalidateContent();
+            invalidateDOM();
             return 0;
         }
         break;
@@ -4597,7 +5980,7 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
             }
             return 0;
         }
-        if (Plugins::g_activeCustomEngine && Plugins::g_activeCustomPageContext) {
+        if (g_opt_plugins && Plugins::g_activeCustomEngine && Plugins::g_activeCustomPageContext) {
             if (Plugins::g_activeCustomEngine->on_key_down) {
                 Plugins::g_activeCustomEngine->on_key_down(Plugins::g_activeCustomPageContext, (int)wp);
             }
@@ -4622,7 +6005,7 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
                         inp.cursor--;
                         if ((inp.text[inp.cursor] & 0xC0) != 0x80) break;
                     }
-                    invalidateContent();
+                    invalidateDOM();
                     return 0;
                 }
                 if (wp == VK_RIGHT) {
@@ -4630,15 +6013,15 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
                         inp.cursor++;
                         if (inp.cursor >= (int)inp.text.length() || (inp.text[inp.cursor] & 0xC0) != 0x80) break;
                     }
-                    invalidateContent();
+                    invalidateDOM();
                     return 0;
                 }
-                if (wp == VK_HOME) { inp.cursor = 0; invalidateContent(); return 0; }
-                if (wp == VK_END) { inp.cursor = (int)inp.text.length(); invalidateContent(); return 0; }
+                if (wp == VK_HOME) { inp.cursor = 0; invalidateDOM(); return 0; }
+                if (wp == VK_END) { inp.cursor = (int)inp.text.length(); invalidateDOM(); return 0; }
                 if (wp == VK_DELETE) {
                     if (inp.cursor < (int)inp.text.length()) {
                         inp.text.erase(inp.cursor, 1);
-                        invalidateContent();
+                        invalidateDOM();
                     }
                     return 0;
                 }
@@ -4648,9 +6031,9 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
                         if (h) {
                             const char* cl = (const char*)GlobalLock(h);
                             if (cl) {
-                                std::string p = cl;
-                                p.erase(std::remove(p.begin(), p.end(), '\r'), p.end());
-                                p.erase(std::remove(p.begin(), p.end(), '\n'), p.end());
+                                LumeString p = cl;
+                                p.remove_char('\r');
+                                p.remove_char('\n');
                                 inp.text.insert(inp.cursor, p);
                                 inp.cursor += (int)p.length();
                                 GlobalUnlock(h);
@@ -4658,7 +6041,7 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
                         }
                         CloseClipboard();
                     }
-                    invalidateContent();
+                    invalidateDOM();
                     return 0;
                 }
             }
@@ -4674,8 +6057,11 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
             return TRUE;
         }
         if (LOWORD(lp) == HTCLIENT) {
-            if (Plugins::g_activeCustomEngine && Plugins::g_activeCustomPageContext) {
+            if (g_opt_plugins && Plugins::g_activeCustomEngine && Plugins::g_activeCustomPageContext) {
                 SetCursor(LoadCursor(0, IDC_ARROW));
+                return TRUE;
+            }
+            if (Plugins::g_activeProtocol && Plugins::g_activeCustomPageContext) {
                 return TRUE;
             }
             POINT pt;
@@ -4698,6 +6084,71 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
         break;
     case WM_COMMAND: {
         int id = LOWORD(wp);
+        if (id == ID_MENU_BTN) {
+            HMENU hMenu = CreatePopupMenu();
+            HMENU hHistMenu = CreatePopupMenu();
+            int histCount = 0;
+            for (int i = (int)g_hist.size() - 1; i >= 0 && histCount < 15; --i) {
+                LumeWString wurl = utf8_to_wstring(g_hist[i]);
+                AppendMenuW(hHistMenu, MF_STRING, IDM_HIST_START + i, wurl.c_str());
+                histCount++;
+            }
+            if (histCount == 0) AppendMenuW(hHistMenu, MF_STRING | MF_DISABLED, 0, L"No History");
+            AppendMenuW(hMenu, MF_POPUP, (UINT_PTR)hHistMenu, L"History");
+            HMENU hLuaMenu = CreatePopupMenu();
+            AppendMenuW(hLuaMenu, MF_STRING | (g_opt_lua_http ? MF_CHECKED : MF_UNCHECKED), IDM_LUA_HTTP, L"Allow HTTP Requests (Lua)");
+            AppendMenuW(hLuaMenu, MF_STRING | (g_opt_lua_mouse ? MF_CHECKED : MF_UNCHECKED), IDM_LUA_MOUSE, L"Allow Mouse Tracking (Lua)");
+            AppendMenuW(hMenu, MF_POPUP, (UINT_PTR)hLuaMenu, L"Lua Bindings");
+            AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
+            HMENU hPlugMenu = CreatePopupMenu();
+            int pIdx = 0;
+            for (auto& p : Plugins::g_plugins) {
+                UINT flags = MF_STRING | (p.enabled ? MF_CHECKED : MF_UNCHECKED);
+                AppendMenuW(hPlugMenu, flags, IDM_PLUGIN_START + pIdx, utf8_to_wstring(p.name).c_str());
+                pIdx++;
+            }
+            if (!Plugins::g_dynPlugins.empty() && pIdx > 0) AppendMenuW(hPlugMenu, MF_SEPARATOR, 0, NULL);
+            for (auto& dp : Plugins::g_dynPlugins) {
+                UINT flags = MF_STRING | (dp.enabled ? MF_CHECKED : MF_UNCHECKED);
+                LumeString shortName = dp.url.substr(dp.url.find_last_of('/') + 1);
+                AppendMenuW(hPlugMenu, flags, IDM_PLUGIN_START + pIdx, utf8_to_wstring("[Net] " + shortName).c_str());
+                pIdx++;
+            }
+            if (pIdx == 0) AppendMenuW(hPlugMenu, MF_STRING | MF_DISABLED, 0, L"No plugins loaded");
+            AppendMenuW(hMenu, MF_POPUP, (UINT_PTR)hPlugMenu, L"Plugins");
+            AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
+            AppendMenuW(hMenu, MF_STRING | (g_opt_gpu ? MF_CHECKED : MF_UNCHECKED), IDM_GPU_TOGGLE, L"Enable GPU (OpenGL)");
+            RECT r; GetWindowRect(g_menuBtn, &r);
+            int cmd = TrackPopupMenu(hMenu, TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTALIGN | TPM_TOPALIGN, r.right, r.bottom, 0, hw, NULL);
+            DestroyMenu(hMenu);
+            if (cmd >= IDM_HIST_START && cmd < IDM_HIST_START + 1000) {
+                int idx = cmd - IDM_HIST_START;
+                if (idx >= 0 && idx < g_hist.size()) {
+                    g_histPos = idx;
+                    histNav(g_hist[idx]);
+                }
+            }
+            else if (cmd >= IDM_PLUGIN_START && cmd < IDM_PLUGIN_START + 1000) {
+                int pId = cmd - IDM_PLUGIN_START;
+                if (pId < Plugins::g_plugins.size()) Plugins::g_plugins[pId].enabled = !Plugins::g_plugins[pId].enabled;
+                else Plugins::g_dynPlugins[pId - Plugins::g_plugins.size()].enabled = !Plugins::g_dynPlugins[pId - Plugins::g_plugins.size()].enabled;
+                Script::reset();
+                Plugins::reboot();
+                navigateTo(g_curUrl);
+            }
+            else if (cmd == IDM_LUA_HTTP) g_opt_lua_http = !g_opt_lua_http;
+            else if (cmd == IDM_LUA_MOUSE) g_opt_lua_mouse = !g_opt_lua_mouse;
+            else if (cmd == IDM_GPU_TOGGLE) {
+                g_opt_gpu = !g_opt_gpu;
+                if (g_opt_gpu) GLLoader::load();
+                else {
+                    GLCanvas::destroyAll();
+                    GLLoader::unload();
+                }
+                invalidateContent();
+            }
+            return 0;
+        }
         if (id == ID_GO) {
             wchar_t b[2048] = {};
             GetWindowTextW(g_addressBar, b, 2048);
@@ -4710,19 +6161,20 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
     }
     case WM_DROPFILES: {
         HDROP hd = (HDROP)wp;
-        char fp[MAX_PATH] = {};
-        DragQueryFileA(hd, 0, fp, MAX_PATH);
+        wchar_t wfp[MAX_PATH] = {};
+        DragQueryFileW(hd, 0, wfp, MAX_PATH);
         DragFinish(hd);
-        loadFile(fp);
+        loadFile(wstring_to_utf8(wfp));
         return 0;
     }
     case WM_TIMER:
         return 0;
     case WM_DESTROY:
+        InterlockedExchange(&g_isShuttingDown, 1);
         releaseMouse();
         if (g_fullscreenCanvas) exitFullscreenCanvas();
         Script::reset();
-        if (Plugins::g_activeCustomEngine && Plugins::g_activeCustomPageContext) {
+        if (g_opt_plugins && Plugins::g_activeCustomEngine && Plugins::g_activeCustomPageContext) {
             Plugins::g_activeCustomEngine->free_page(Plugins::g_activeCustomPageContext);
             Plugins::g_activeCustomEngine = nullptr;
             Plugins::g_activeCustomPageContext = nullptr;
@@ -4735,10 +6187,11 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
     case WM_UPDATE_CONTENT:
         g_contentDirty = true;
+        g_domDirty = true;
         InvalidateRect(hw, nullptr, FALSE);
         return 0;
     case WM_PAGE_LOADED: {
-        std::lock_guard<std::mutex> lock(g_pageMutex);
+        LumeLockGuard<LumeMutex> lock(g_pageMutex);
         for (const auto& pp : g_pendingPages) {
             if (pp.navId != g_currentNavId) continue;
             if (!pp.isHistoryNav) {
@@ -4758,11 +6211,19 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
         g_pendingPages.clear();
         return 0;
     }
+    case WM_NAVIGATE_DEFERRED: {
+        LumeString* url = (LumeString*)wp;
+        if (url) {
+            navigateTo(*url);
+            delete url;
+        }
+        return 0;
+    }
     }
     return DefWindowProcW(hw, msg, wp, lp);
 }
 int WINAPI WinMain(HINSTANCE hI, HINSTANCE, LPSTR cmd, int show) {
-    INITCOMMONCONTROLSEX ic = { sizeof(ic),ICC_STANDARD_CLASSES };
+    INITCOMMONCONTROLSEX ic = {sizeof(ic), ICC_STANDARD_CLASSES};
     InitCommonControlsEx(&ic);
     initHighResTimer();
     Gdiplus::GdiplusStartupInput gdiplusStartupInput;
@@ -4791,8 +6252,8 @@ int WINAPI WinMain(HINSTANCE hI, HINSTANCE, LPSTR cmd, int show) {
     if (!g_mainWnd) return 1;
     ShowWindow(g_mainWnd, show);
     UpdateWindow(g_mainWnd);
-    if (cmd && strlen(cmd) > 0) {
-        std::string a = cmd;
+    if (cmd && lstrlenA(cmd) > 0) {
+        LumeString a = cmd;
         if (!a.empty() && a.front() == '"') a.erase(a.begin());
         if (!a.empty() && a.back() == '"') a.pop_back();
         if (!a.empty()) navigateTo(a);
