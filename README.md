@@ -11,6 +11,8 @@ A light ~~web~~-browser on C++ ~~without using chromium\electron~~
 
 All pages\plugins has been moved to https://github.com/Lume-corp/LumeSources
 
+content of /lib/ folder: https://github.com/Lume-corp/LumeLibs
+
 ---
 
 example code:
