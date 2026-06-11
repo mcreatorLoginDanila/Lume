@@ -1,4 +1,4 @@
-A light ~~web~~-browser on C++ ~~without using chromium\electron~~
+A light ~~web~~- alternative browser on C++
 
 ### Why Lume?
 * **Insanely Small:** exe size is less than 1 MB.
