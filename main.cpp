@@ -1564,6 +1564,46 @@ namespace AsyncNet {
 namespace WasmEngine {
     int load(const LumeString& wasmBytes);
 }
+namespace Bindings {
+    extern LumeMap<LumeString, LumeString> g_texts;
+    void alert(const char* msg);
+    void navigate(const char* url);
+    void refresh();
+    bool is_fullscreen();
+    void fullscreen_canvas(const char* id, int enter);
+    void set_prop(const char* id, const char* prop, const char* val);
+    const char* get_node_prop(const char* id, const char* prop, const char* def);
+    void set_inner_htp(const char* id, const char* htp);
+    void set_text(const char* id, const char* t);
+    const char* get_text(const char* id);
+    void set_offset_y(const char* id, int o);
+    int get_offset_y(const char* id);
+    void set_shimmer(const char* id, float s);
+    void on_click(const char* id, LumeAction action);
+    void on_right_click(const char* id, LumeAction action);
+    void fire_click(const char* id);
+    void fire_right_click(const char* id);
+    bool is_key_pressed(int vk);
+    bool is_key_released(int vk);
+    bool key_down(int vk);
+    void get_mouse(int* x, int* y);
+    void get_mouse_delta(int* dx, int* dy);
+    int get_mouse_wheel();
+    bool capture_mouse(const char* id, int mode);
+    void get_canvas_mouse(const char* id, int* x, int* y);
+    void release_mouse();
+    bool is_mouse_captured();
+    bool window_active();
+    const char* get_input(const char* id);
+    void set_input(const char* id, const char* t);
+    void http_request(const char* url, LumeString& out_body, int& out_code);
+    void cv_clear(const char* id, const char* color_hex);
+    void cv_rect(const char* id, int x, int y, int w, int h, const char* color_hex);
+    void cv_circle(const char* id, int cx, int cy, int r, const char* color_hex);
+    void cv_line(const char* id, int x1, int y1, int x2, int y2, const char* color_hex, int t);
+    void cv_text(const char* id, int x, int y, const char* txt, int sz, const char* color_hex);
+    void reset();
+}
 namespace Script {
     extern lua_State* g_L;
 }
@@ -1573,6 +1613,12 @@ namespace Plugins {
     CustomProtocolHandler* g_activeProtocol = nullptr;
     void hostRegisterProtocolEngine(CustomProtocolHandler handler) {
         g_protocols[handler.scheme] = handler;
+    }
+    LumeMap<LumeString, void(*)(const char*)> g_scriptEngines;
+    void hostRegisterScriptEngine(const char* lang, void (*exec_fn)(const char*)) {
+        if (lang && exec_fn) {
+            g_scriptEngines[lang] = exec_fn;
+        }
     }
     struct LoadedPlugin {
         LumeString name, path;
@@ -1590,6 +1636,20 @@ namespace Plugins {
     static LumeVector<DynamicPlugin> g_dynPlugins;
     static LumeHostAPI g_hostAPI = {};
     static HWND hostGetMainHwnd() {return g_mainWnd;}
+    static LumeString g_currentPluginNamespace;
+    static LumeString extractPluginNamespace(const LumeString& filename) {
+        LumeString id = filename;
+        size_t dot = id.find_last_of('.');
+        if (dot != LumeString::npos) id = id.substr(0, dot);
+        for (size_t i = 0; i < id.length(); ++i) {
+            char c = id[i];
+            if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_')) {
+                id[i] = '_';
+            }
+        }
+        if (id.empty() || (id[0] >= '0' && id[0] <= '9')) id = "plugin_" + id;
+        return id;
+    }
     static void hostInvalidateContent() {invalidateContent();}
     static void hostSetStatus(const char* t) {setStatus(t ? t : "");}
     static void hostNavigateTo(const char* u) { if (u) navigateTo(u); }
@@ -1646,6 +1706,7 @@ namespace Plugins {
         if (g_activeProtocol && g_activeCustomPageContext) {
             g_activeProtocol->free_page(g_activeCustomPageContext);
         }
+        g_scriptEngines.clear();
         g_activeCustomEngine = nullptr;
         g_activeProtocol = nullptr;
         g_activeCustomPageContext = nullptr;
@@ -1695,28 +1756,71 @@ namespace Plugins {
         auto e = (HTP::Elem*)node;
         bool found = false;
         for (auto& pair : e->props.d) {
-            if (pair.first == key) { pair.second = val; found = true; break; }
+            if (pair.first == key) {
+                pair.second = val;
+                found = true;
+                break;
+            }
         }
         if (!found) e->props.d.push_back({ key, val });
+        if (fast_streq(key, "content")) {
+            const char* id = e->props.get("id", "");
+            if (id[0] != '\0') {
+                Bindings::g_texts[id] = val;
+            }
+        }
+    }
+    /* ---------- Безопасные обертки для C API (JS/Python/C плагины) ---------- */
+    static void host_http_request(const char* url, char** out_body, int* out_code) {
+        LumeString body;
+        Bindings::http_request(url, body, *out_code);
+        if (!body.empty()) {
+            *out_body = (char*)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, body.length() + 1);
+            lstrcpyA(*out_body, body.c_str());
+        }
+        else {
+            *out_body = nullptr;
+        }
+    }
+    static void host_free_string(char* s) {if (s) HeapFree(GetProcessHeap(), 0, s);}
+    static int host_is_key_pressed(int vk) {return Bindings::is_key_pressed(vk) ? 1 : 0;}
+    static int host_is_key_released(int vk) {return Bindings::is_key_released(vk) ? 1 : 0;}
+    static int host_key_down(int vk) {return Bindings::key_down(vk) ? 1 : 0;}
+    static int host_capture_mouse(const char* id, int mode) {return Bindings::capture_mouse(id, mode) ? 1 : 0;}
+    static int host_is_mouse_captured() {return Bindings::is_mouse_captured() ? 1 : 0;}
+    static int host_is_fullscreen() {return Bindings::is_fullscreen() ? 1 : 0;}
+    static int host_window_active() {return Bindings::window_active() ? 1 : 0;}
+    static void host_register_click_handler(const char* id, void(*cb)(void*), void* ctx) {
+        LumeString sid = id;
+        Bindings::on_click(id, LumeAction([sid, cb, ctx]() {if (cb) cb(ctx);}));
+    }
+    static void host_register_right_click_handler(const char* id, void(*cb)(void*), void* ctx) {
+        LumeString sid = id;
+        Bindings::on_right_click(id, LumeAction([sid, cb, ctx]() { if (cb) cb(ctx); }));
+    }
+    static void host_lua_setglobal(lua_State* L, const char* name) {
+        if (!g_currentPluginNamespace.empty()) {
+            const char* ns = g_currentPluginNamespace.c_str();
+            lua_getglobal(L, ns);
+            if (!lua_istable(L, -1)) {
+                lua_pop(L, 1);
+                lua_newtable(L);
+                lua_pushvalue(L, -1);
+                lua_setglobal(L, ns);
+            }
+            lua_pushvalue(L, -2);
+            lua_setfield(L, -2, name);
+            lua_pop(L, 1);
+        }
+        lua_setglobal(L, name);
     }
     void initHostAPI() {
         g_hostAPI.get_main_hwnd = hostGetMainHwnd;
-        g_hostAPI.invalidate_content = hostInvalidateContent;
+        g_hostAPI.invalidate_content = Bindings::refresh;
         g_hostAPI.set_status = hostSetStatus;
-        g_hostAPI.navigate_to = hostNavigateTo;
+        g_hostAPI.navigate_to = Bindings::navigate;
+        g_hostAPI.alert = Bindings::alert;
         g_hostAPI.api_version = 3;
-        g_hostAPI.get_node_prop = hostGetNodeProp;
-        g_hostAPI.get_node_prop_int = hostGetNodePropInt;
-        g_hostAPI.register_tag = hostRegisterTag;
-        g_hostAPI.register_page_engine = hostRegisterPageEngine;
-        g_hostAPI.alert = hostAlert;
-        g_hostAPI.gl_begin_render = hostGlBegin;
-        g_hostAPI.gl_end_render = hostGlEnd;
-        g_hostAPI.gl_place = hostGlPlace;
-        g_hostAPI.wasm_load = hostWasmLoad;
-        g_hostAPI.register_on_reset = hostRegisterOnReset;
-        g_hostAPI.register_protocol_engine = hostRegisterProtocolEngine;
-        g_hostAPI.gl_get_context = hostGlGetContext;
         g_hostAPI.p_luaL_checknumber = luaL_checknumber;
         g_hostAPI.p_luaL_checkinteger = luaL_checkinteger;
         g_hostAPI.p_luaL_optinteger = luaL_optinteger;
@@ -1727,17 +1831,68 @@ namespace Plugins {
         g_hostAPI.p_lua_pushboolean = lua_pushboolean;
         g_hostAPI.p_lua_pushstring = lua_pushstring;
         g_hostAPI.p_lua_pushcclosure = lua_pushcclosure;
-        g_hostAPI.p_lua_setglobal = lua_setglobal;
+        g_hostAPI.p_lua_pushnil = lua_pushnil;
+        g_hostAPI.p_lua_pushvalue = lua_pushvalue;
+        g_hostAPI.p_lua_pushlightuserdata = lua_pushlightuserdata;
+        g_hostAPI.p_lua_setglobal = host_lua_setglobal;
         g_hostAPI.p_lua_type = lua_type;
         g_hostAPI.p_lua_rawgeti = lua_rawgeti;
         g_hostAPI.p_lua_tonumberx = lua_tonumberx;
+        g_hostAPI.p_lua_toboolean = lua_toboolean;
+        g_hostAPI.p_lua_touserdata = lua_touserdata;
         g_hostAPI.p_lua_settop = lua_settop;
+        g_hostAPI.p_lua_gettop = lua_gettop;
         g_hostAPI.p_lua_createtable = lua_createtable;
         g_hostAPI.p_lua_setfield = lua_setfield;
+        g_hostAPI.get_node_prop = hostGetNodeProp;
+        g_hostAPI.get_node_prop_int = hostGetNodePropInt;
+        g_hostAPI.set_node_prop = hostSetNodeProp;
         g_hostAPI.get_dom_root = hostGetDomRoot;
         g_hostAPI.get_node_children_count = hostGetNodeChildrenCount;
         g_hostAPI.get_node_child = hostGetNodeChild;
-        g_hostAPI.set_node_prop = hostSetNodeProp;
+        g_hostAPI.register_tag = hostRegisterTag;
+        g_hostAPI.register_page_engine = hostRegisterPageEngine;
+        g_hostAPI.register_protocol_engine = hostRegisterProtocolEngine;
+        g_hostAPI.register_on_reset = hostRegisterOnReset;
+        g_hostAPI.register_script_engine = hostRegisterScriptEngine;
+        g_hostAPI.gl_begin_render = hostGlBegin;
+        g_hostAPI.gl_end_render = hostGlEnd;
+        g_hostAPI.gl_place = hostGlPlace;
+        g_hostAPI.gl_get_context = hostGlGetContext;
+        g_hostAPI.wasm_load = hostWasmLoad;
+        g_hostAPI.b_set_prop = Bindings::set_prop;
+        g_hostAPI.b_set_inner_htp = Bindings::set_inner_htp;
+        g_hostAPI.b_set_text = Bindings::set_text;
+        g_hostAPI.b_get_text = Bindings::get_text;
+        g_hostAPI.b_set_offset_y = Bindings::set_offset_y;
+        g_hostAPI.b_get_offset_y = Bindings::get_offset_y;
+        g_hostAPI.b_set_shimmer = Bindings::set_shimmer;
+        g_hostAPI.b_fire_click = Bindings::fire_click;
+        g_hostAPI.b_fire_right_click = Bindings::fire_right_click;
+        g_hostAPI.b_register_click_handler = host_register_click_handler;
+        g_hostAPI.b_register_right_click_handler = host_register_right_click_handler;
+        g_hostAPI.b_is_key_pressed = host_is_key_pressed;
+        g_hostAPI.b_is_key_released = host_is_key_released;
+        g_hostAPI.b_key_down = host_key_down;
+        g_hostAPI.b_get_mouse = Bindings::get_mouse;
+        g_hostAPI.b_get_mouse_delta = Bindings::get_mouse_delta;
+        g_hostAPI.b_get_mouse_wheel = Bindings::get_mouse_wheel;
+        g_hostAPI.b_capture_mouse = host_capture_mouse;
+        g_hostAPI.b_get_canvas_mouse = Bindings::get_canvas_mouse;
+        g_hostAPI.b_release_mouse = Bindings::release_mouse;
+        g_hostAPI.b_is_mouse_captured = host_is_mouse_captured;
+        g_hostAPI.b_fullscreen_canvas = Bindings::fullscreen_canvas;
+        g_hostAPI.b_is_fullscreen = host_is_fullscreen;
+        g_hostAPI.b_window_active = host_window_active;
+        g_hostAPI.b_get_input = Bindings::get_input;
+        g_hostAPI.b_set_input = Bindings::set_input;
+        g_hostAPI.b_http_request = host_http_request;
+        g_hostAPI.b_free_string = host_free_string;
+        g_hostAPI.b_cv_clear = Bindings::cv_clear;
+        g_hostAPI.b_cv_rect = Bindings::cv_rect;
+        g_hostAPI.b_cv_circle = Bindings::cv_circle;
+        g_hostAPI.b_cv_line = Bindings::cv_line;
+        g_hostAPI.b_cv_text = Bindings::cv_text;
     }
     void discoverPlugins() {
         wchar_t ep[MAX_PATH] = {};
@@ -1773,14 +1928,23 @@ namespace Plugins {
             if (!p.enabled) continue;
             if (p.hModule) {
                 p.initFn = (lume_plugin_init_fn)GetProcAddress(p.hModule, "lume_plugin_init");
-                if (p.initFn) p.initFn(L, &g_hostAPI);
+                if (p.initFn) {
+                    g_currentPluginNamespace = extractPluginNamespace(p.name);
+                    p.initFn(L, &g_hostAPI);
+                    g_currentPluginNamespace.clear();
+                }
             }
         }
         for (auto& dp : g_dynPlugins) {
             if (!dp.enabled) continue;
             if (dp.hModule) {
                 auto initFn = (lume_plugin_init_fn)GetProcAddress(dp.hModule, "lume_plugin_init");
-                if (initFn) initFn(L, &g_hostAPI);
+                if (initFn) {
+                    LumeString shortName = dp.url.substr(dp.url.find_last_of('/') + 1);
+                    g_currentPluginNamespace = extractPluginNamespace(shortName);
+                    initFn(L, &g_hostAPI);
+                    g_currentPluginNamespace.clear();
+                }
             }
         }
     }
@@ -1968,6 +2132,9 @@ namespace ImageCache {
                         if (CreateStreamOnHGlobal(hMem, TRUE, &pStream) == S_OK) {
                             img = LumeSharedPtr<Gdiplus::Image>(Gdiplus::Image::FromStream(pStream));
                             pStream->Release();
+                        }
+                        else {
+                            GlobalFree(hMem);
                         }
                     }
                 }
@@ -2440,6 +2607,20 @@ namespace GradientText {
     };
     static CacheBuffer g_maskBuf;
     static CacheBuffer g_outBuf;
+    void cleanupBuffers() {
+        if (g_maskBuf.dc) {
+            SelectObject(g_maskBuf.dc, g_maskBuf.oldBmp);
+            DeleteObject(g_maskBuf.bmp);
+            DeleteDC(g_maskBuf.dc);
+            g_maskBuf.dc = nullptr; g_maskBuf.w = 0; g_maskBuf.h = 0;
+        }
+        if (g_outBuf.dc) {
+            SelectObject(g_outBuf.dc, g_outBuf.oldBmp);
+            DeleteObject(g_outBuf.bmp);
+            DeleteDC(g_outBuf.dc);
+            g_outBuf.dc = nullptr; g_outBuf.w = 0; g_outBuf.h = 0;
+        }
+    }
     static LumeVector<HTP::Color> g_gradLine;
     void draw(HDC dc, const LumeString& text, HFONT font, int x, int y, HTP::Color c1, HTP::Color c2, float shimmer_offset = 0.0f) {
         if (text.empty()) return;
@@ -2683,356 +2864,506 @@ namespace GLModelCache {
         lists.clear();
     }
 }
-namespace Script {
-struct InputState {
-    LumeString text, placeholder;
-    int x = 0, y = 0, w = 250, h = 28;
-    bool focused = false;
-    int cursor = 0;
-};
-LumeMap<LumeString, InputState> g_inputs;
-LumeMap<LumeString, LumeString> g_texts;
-LumeMap<LumeString, int> g_offsets_y;
-LumeMap<LumeString, float> g_shimmer_offsets;
-LumeMap<LumeString, LumeAction> g_clicks;
-LumeMap<LumeString, LumeAction> g_rightClicks;
-bool g_keyPressed[256] = {false};
-bool g_keyReleased[256] = {false};
-void fireRightClick(const LumeString& id) {
-    auto i = g_rightClicks.find(id);
-    if (i != g_rightClicks.end()) i->second();
-}
-LumeMap<int, int> g_timerRefs;
-LumeMap<LumeString, int> g_canvasClickRefs;
-LumeMap<LumeString, int> g_canvasMouseMoveRefs;
-int g_timerN = 9000;
-int g_keyDownRef = LUA_NOREF;
-lua_State* g_L = nullptr;
-HWND g_hwnd = nullptr;
-LumeString g_focusId;
-static int l_set_prop(lua_State* L) {
-    const char* id = luaL_checkstring(L, 1);
-    const char* prop = luaL_checkstring(L, 2);
-    const char* val = luaL_checkstring(L, 3);
-    auto e = HTP::findById(g_doc.root, id);
-    if (e) {
-        bool found = false;
-        for (auto& pair : e->props.d) {
-            if (pair.first == prop) { pair.second = val; found = true; break; }
+namespace GLBatcher {
+    static LumeVector<float> vertices;
+    static LumeVector<float> colors;
+    static LumeVector<float> texCoords;
+    static LumeVector<float> normals;
+    static GLenum currentMode = 0;
+    static float curR = 1, curG = 1, curB = 1, curA = 1;
+    static float curU = 0, curV = 0;
+    static float curNx = 0, curNy = 0, curNz = 1;
+    static bool useColor = false;
+    static bool useTex = false;
+    static bool useNormal = false;
+    void begin(GLenum mode) {
+        currentMode = mode;
+        vertices.clear();
+        colors.clear();
+        texCoords.clear();
+        normals.clear();
+        useColor = false;
+        useTex = false;
+        useNormal = false;
+    }
+    void color(float r, float g, float b, float a) {
+        curR = r;
+        curG = g;
+        curB = b;
+        curA = a;
+        useColor = true;
+    }
+    void texCoord(float u, float v) {
+        curU = u; curV = v;
+        useTex = true;
+    }
+    void normal(float x, float y, float z) {
+        curNx = x; curNy = y; curNz = z;
+        useNormal = true;
+    }
+    void vertex(float x, float y, float z) {
+        vertices.push_back(x); vertices.push_back(y); vertices.push_back(z);
+        if (useColor) {
+            colors.push_back(curR);
+            colors.push_back(curG);
+            colors.push_back(curB);
+            colors.push_back(curA);
         }
-        if (!found) e->props.d.push_back({ prop, val });
+        if (useTex) {
+            texCoords.push_back(curU);
+            texCoords.push_back(curV);
+        }
+        if (useNormal) {
+            normals.push_back(curNx);
+            normals.push_back(curNy);
+            normals.push_back(curNz);
+        }
+    }
+    void end() {
+        if (vertices.empty()) return;
+        glEnableClientState(GL_VERTEX_ARRAY);
+        glVertexPointer(3, GL_FLOAT, 0, vertices.data());
+        if (useColor && colors.size() == (vertices.size() / 3) * 4) {
+            glEnableClientState(GL_COLOR_ARRAY);
+            glColorPointer(4, GL_FLOAT, 0, colors.data());
+        }
+        if (useTex && texCoords.size() == (vertices.size() / 3) * 2) {
+            glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+            glTexCoordPointer(2, GL_FLOAT, 0, texCoords.data());
+        }
+        if (useNormal && normals.size() == vertices.size()) {
+            glEnableClientState(GL_NORMAL_ARRAY);
+            glNormalPointer(GL_FLOAT, 0, normals.data());
+        }
+        glDrawArrays(currentMode, 0, (GLsizei)(vertices.size() / 3));
+        glDisableClientState(GL_VERTEX_ARRAY);
+        if (useColor) glDisableClientState(GL_COLOR_ARRAY);
+        if (useTex) glDisableClientState(GL_TEXTURE_COORD_ARRAY);
+        if (useNormal) glDisableClientState(GL_NORMAL_ARRAY);
+    }
+}
+namespace Bindings {
+    struct InputState {
+        LumeString text, placeholder;
+        int x = 0, y = 0, w = 250, h = 28;
+        bool focused = false;
+        int cursor = 0;
+    };
+    LumeMap<LumeString, InputState> g_inputs;
+    LumeMap<LumeString, LumeString> g_texts;
+    LumeMap<LumeString, int> g_offsets_y;
+    LumeMap<LumeString, float> g_shimmer_offsets;
+    LumeMap<LumeString, LumeAction> g_clicks;
+    LumeMap<LumeString, LumeAction> g_rightClicks;
+    bool g_keyPressed[256] = {false};
+    bool g_keyReleased[256] = {false};
+    LumeString g_focusId;
+    void reset() {
+        g_clicks.clear();
+        g_rightClicks.clear();
+        memset(g_keyPressed, 0, sizeof(g_keyPressed));
+        memset(g_keyReleased, 0, sizeof(g_keyReleased));
+        g_texts.clear();
+        g_offsets_y.clear();
+        g_shimmer_offsets.clear();
+        g_inputs.clear();
+        g_focusId.clear();
+    }
+    void set_prop(const char* id, const char* prop, const char* val) {
+        auto e = HTP::findById(g_doc.root, id);
+        if (e) {
+            bool found = false;
+            for (auto& pair : e->props.d) {
+                if (pair.first == prop) { pair.second = val; found = true; break; }
+            }
+            if (!found) e->props.d.push_back({ prop, val });
+            invalidateDOM();
+        }
+    }
+    const char* get_node_prop(const char* id, const char* prop, const char* def) {
+        auto e = HTP::findById(g_doc.root, id);
+        if (e) return e->props.get(prop, def);
+        return def;
+    }
+    void set_inner_htp(const char* id, const char* htp) {
+        auto e = HTP::findById(g_doc.root, id);
+        if (e) {
+            HTP::Parser p;
+            HTP::Doc temp = p.parse(htp);
+            e->children = temp.root->children;
+            invalidateDOM();
+        }
+    }
+    void set_text(const char* id, const char* t) {
+        LumeString nv = t;
+        auto& c = g_texts[id];
+        if (c != nv) {
+            c = nv;
+            auto i = g_inputs.find(id);
+            if (i != g_inputs.end()) i->second.text = nv;
+            invalidateDOM();
+        }
+    }
+    const char* get_text(const char* id) {
+        auto i = g_texts.find(id);
+        if (i != g_texts.end()) return i->second.c_str();
+        auto j = g_inputs.find(id);
+        if (j != g_inputs.end()) return j->second.text.c_str();
+        return "";
+    }
+    void set_offset_y(const char* id, int o) {
+        auto& c = g_offsets_y[id];
+        if (c != o) {
+            c = o;
+            invalidateDOM();
+        }
+    }
+    int get_offset_y(const char* id) {
+        auto i = g_offsets_y.find(id);
+        return i != g_offsets_y.end() ? i->second : 0;
+    }
+    void set_shimmer(const char* id, float s) {
+        g_shimmer_offsets[id] = s;
         invalidateDOM();
     }
+    void on_click(const char* id, LumeAction action) {
+        g_clicks[id] = static_cast<LumeAction&&>(action);
+    }
+    void on_right_click(const char* id, LumeAction action) {
+        g_rightClicks[id] = static_cast<LumeAction&&>(action);
+    }
+    void fire_click(const char* id) {
+        auto i = g_clicks.find(id);
+        if (i != g_clicks.end()) i->second();
+    }
+    void fire_right_click(const char* id) {
+        auto i = g_rightClicks.find(id);
+        if (i != g_rightClicks.end()) i->second();
+    }
+    bool is_key_pressed(int vk) {
+        int key = vk & 0xFF;
+        bool res = g_keyPressed[key];
+        g_keyPressed[key] = false;
+        return res;
+    }
+    bool is_key_released(int vk) {
+        int key = vk & 0xFF;
+        bool res = g_keyReleased[key];
+        g_keyReleased[key] = false;
+        return res;
+    }
+    bool key_down(int vk) {
+        return (GetAsyncKeyState(vk) & 0x8000) != 0;
+    }
+    void get_mouse(int* x, int* y) {
+        if (!g_opt_lua_mouse) {
+            *x = 0;
+            *y = 0;
+            return;
+        }
+        POINT p; GetCursorPos(&p);
+        if (g_mainWnd) ScreenToClient(g_mainWnd, &p);
+        *x = p.x; *y = p.y - TOOLBAR_H;
+    }
+    void get_mouse_delta(int* dx, int* dy) {
+        if (!g_opt_lua_mouse) {*dx = 0; *dy = 0; return;}
+        *dx = g_mouseDeltaX;
+        *dy = g_mouseDeltaY;
+        g_mouseDeltaX = 0;
+        g_mouseDeltaY = 0;
+    }
+    int get_mouse_wheel() {
+        if (!g_opt_lua_mouse) return 0;
+        int res = g_mouseWheelDelta;
+        g_mouseWheelDelta = 0;
+        return res;
+    }
+    bool capture_mouse(const char* id, int mode) {
+        captureCanvasMouse(id, mode);
+        return g_mouseCaptured;
+    }
+    void get_canvas_mouse(const char* id, int* x, int* y) {
+        auto v = GLCanvas::find(id);
+        if (!v || !v->valid) { *x = 0; *y = 0; return; }
+        POINT p; GetCursorPos(&p);
+        ScreenToClient(v->hwnd, &p);
+        *x = p.x; *y = p.y;
+    }
+    void release_mouse() {::releaseMouse();}
+    bool is_mouse_captured() {return g_mouseCaptured;}
+    void fullscreen_canvas(const char* id, int enter) {
+        if (enter) enterFullscreenCanvas(id);
+        else exitFullscreenCanvas();
+    }
+    bool is_fullscreen() {return g_fullscreenCanvas;}
+    bool window_active() {
+        HWND fg = GetForegroundWindow();
+        return (fg == g_mainWnd) || (GetParent(fg) == g_mainWnd);
+    }
+    void navigate(const char* url) {
+        LumeString* u = new LumeString(url);
+        PostMessage(g_mainWnd, WM_NAVIGATE_DEFERRED, (WPARAM)u, 0);
+    }
+    void alert(const char* msg) {
+        MessageBoxU(g_mainWnd, msg, "Lume", MB_OK);
+    }
+    void refresh() {invalidateContent();}
+    const char* get_input(const char* id) {
+        auto i = g_inputs.find(id);
+        return i != g_inputs.end() ? i->second.text.c_str() : "";
+    }
+    void set_input(const char* id, const char* t) {
+        g_inputs[id].text = t;
+        g_inputs[id].cursor = lstrlenA(t);
+        invalidateContent();
+    }
+    bool isLocalAccessAllowed() {
+        return (g_curUrl.find("http://") != 0 && g_curUrl.find("https://") != 0);
+    }
+    void http_request(const char* url, LumeString& out_body, int& out_code) {
+        if (!g_opt_lua_http) {
+            out_body = "SECURITY_ERROR: HTTP requests are disabled by user.";
+            out_code = 403; return;
+        }
+        LumeString reqUrl = url;
+        if (reqUrl.find("file://") == 0 && !isLocalAccessAllowed()) {
+            out_body = "SECURITY_ERROR: Remote pages cannot access local files.";
+            out_code = 403; return;
+        }
+        auto r = Net::fetchUrl(reqUrl);
+        out_body = r.body;
+        out_code = r.code;
+    }
+    void cv_clear(const char* id, const char* color_hex) {
+        auto i = Canvas::g_bufs.find(id);
+        if (i != Canvas::g_bufs.end() && i->second->dc) {
+            auto c = HTP::Color::fromHex(color_hex);
+            HBRUSH b = CreateSolidBrush(c.cr());
+            RECT r = { 0,0,i->second->w,i->second->h };
+            FillRect(i->second->dc, &r, b);
+            DeleteObject(b);
+        }
+    }
+    void cv_rect(const char* id, int x, int y, int w, int h, const char* color_hex) {
+        auto i = Canvas::g_bufs.find(id);
+        if (i != Canvas::g_bufs.end() && i->second->dc) {
+            auto c = HTP::Color::fromHex(color_hex);
+            HBRUSH b = CreateSolidBrush(c.cr());
+            RECT r = { x,y,x + w,y + h };
+            FillRect(i->second->dc, &r, b);
+            DeleteObject(b);
+        }
+    }
+    void cv_circle(const char* id, int cx, int cy, int r, const char* color_hex) {
+        auto i = Canvas::g_bufs.find(id);
+        if (i != Canvas::g_bufs.end() && i->second->dc) {
+            auto c = HTP::Color::fromHex(color_hex);
+            HBRUSH b = CreateSolidBrush(c.cr());
+            HPEN p = CreatePen(PS_SOLID, 1, c.cr());
+            auto ob = SelectObject(i->second->dc, b);
+            auto op = SelectObject(i->second->dc, p);
+            Ellipse(i->second->dc, cx - r, cy - r, cx + r, cy + r);
+            SelectObject(i->second->dc, ob); SelectObject(i->second->dc, op);
+            DeleteObject(b); DeleteObject(p);
+        }
+    }
+    void cv_line(const char* id, int x1, int y1, int x2, int y2, const char* color_hex, int t) {
+        auto i = Canvas::g_bufs.find(id);
+        if (i != Canvas::g_bufs.end() && i->second->dc) {
+            auto c = HTP::Color::fromHex(color_hex);
+            HPEN p = CreatePen(PS_SOLID, t, c.cr());
+            auto op = SelectObject(i->second->dc, p);
+            MoveToEx(i->second->dc, x1, y1, 0);
+            LineTo(i->second->dc, x2, y2);
+            SelectObject(i->second->dc, op); DeleteObject(p);
+        }
+    }
+    void cv_text(const char* id, int x, int y, const char* txt, int sz, const char* color_hex) {
+        auto i = Canvas::g_bufs.find(id);
+        if (i != Canvas::g_bufs.end() && i->second->dc) {
+            auto c = HTP::Color::fromHex(color_hex);
+            HFONT f = FontCache::get(sz);
+            auto of = SelectObject(i->second->dc, f);
+            SetTextColor(i->second->dc, c.cr());
+            SetBkMode(i->second->dc, TRANSPARENT);
+            TextOutU(i->second->dc, x, y, txt, lstrlenA(txt));
+            SelectObject(i->second->dc, of);
+        }
+    }
+}
+namespace Script {
+    LumeMap<int, int> g_timerRefs;
+    LumeMap<LumeString, int> g_canvasClickRefs;
+    int g_timerN = 9000;
+    int g_keyDownRef = LUA_NOREF;
+    lua_State* g_L = nullptr;
+static int l_set_prop(lua_State* L) {
+    Bindings::set_prop(luaL_checkstring(L, 1), luaL_checkstring(L, 2), luaL_checkstring(L, 3));
     return 0;
 }
 static int l_get_node_prop(lua_State* L) {
-    const char* id = luaL_checkstring(L, 1);
-    const char* prop = luaL_checkstring(L, 2);
-    const char* def = luaL_optstring(L, 3, "");
-    auto e = HTP::findById(g_doc.root, id);
-    if (e) {
-        lua_pushstring(L, e->props.get(prop, def));
-    }
-    else {
-        lua_pushstring(L, def);
-    }
+    lua_pushstring(L, Bindings::get_node_prop(luaL_checkstring(L, 1), luaL_checkstring(L, 2), luaL_optstring(L, 3, "")));
     return 1;
 }
 static int l_set_inner_htp(lua_State* L) {
-    const char* id = luaL_checkstring(L, 1);
-    const char* htp = luaL_checkstring(L, 2);
-    auto e = HTP::findById(g_doc.root, id);
-    if (e) {
-        HTP::Parser p;
-        HTP::Doc temp = p.parse(htp);
-        e->children = temp.root->children;
-        invalidateDOM();
-    }
+    Bindings::set_inner_htp(luaL_checkstring(L, 1), luaL_checkstring(L, 2));
     return 0;
 }
 static int l_set_text(lua_State* L) {
-    const char* id = luaL_checkstring(L, 1);
-    const char* t = luaL_checkstring(L, 2);
-    LumeString nv = t;
-    auto& c = g_texts[id];
-    if (c != nv) {
-        c = nv;
-        auto i = g_inputs.find(id);
-        if (i != g_inputs.end()) i->second.text = nv;
-        invalidateDOM();
-    }
+    Bindings::set_text(luaL_checkstring(L, 1), luaL_checkstring(L, 2));
     return 0;
 }
 static int l_get_text(lua_State* L) {
-    const char* id = luaL_checkstring(L, 1);
-    auto i = g_texts.find(id);
-    if (i != g_texts.end()) lua_pushstring(L, i->second.c_str());
-    else {
-        auto j = g_inputs.find(id);
-        lua_pushstring(L, j != g_inputs.end() ? j->second.text.c_str() : "");
-    }
+    lua_pushstring(L, Bindings::get_text(luaL_checkstring(L, 1)));
     return 1;
 }
 static int l_set_offset_y(lua_State* L) {
-    const char* id = luaL_checkstring(L, 1);
-    int o = (int)luaL_checkinteger(L, 2);
-    auto& c = g_offsets_y[id];
-    if (c != o) {
-        c = o;
-        invalidateDOM();
-    }
+    Bindings::set_offset_y(luaL_checkstring(L, 1), (int)luaL_checkinteger(L, 2));
     return 0;
 }
 static int l_get_offset_y(lua_State* L) {
-    auto i = g_offsets_y.find(luaL_checkstring(L, 1));
-    lua_pushinteger(L, i != g_offsets_y.end() ? i->second : 0);
+    lua_pushinteger(L, Bindings::get_offset_y(luaL_checkstring(L, 1)));
     return 1;
 }
 static int l_set_shimmer(lua_State* L) {
-    g_shimmer_offsets[luaL_checkstring(L, 1)] = (float)luaL_checknumber(L, 2);
-    invalidateDOM();
+    Bindings::set_shimmer(luaL_checkstring(L, 1), (float)luaL_checknumber(L, 2));
     return 0;
 }
 static int l_on_click(lua_State* L) {
     const char* id = luaL_checkstring(L, 1);
     luaL_checktype(L, 2, LUA_TFUNCTION);
+    LumeString sid = id;
     lua_pushvalue(L, 2);
     int ref = luaL_ref(L, LUA_REGISTRYINDEX);
-    LumeString sid = id;
-    g_clicks[sid] = [sid, ref]() {
+    Bindings::on_click(id, LumeAction([sid, ref]() {
         if (!g_L) return;
         lua_rawgeti(g_L, LUA_REGISTRYINDEX, ref);
         if (lua_pcall(g_L, 0, 0, 0) != 0) {
             OutputDebugStringA(lua_tostring(g_L, -1));
             lua_pop(g_L, 1);
         }
-    };
+        }));
     return 0;
 }
 static int l_on_right_click(lua_State* L) {
     const char* id = luaL_checkstring(L, 1);
     luaL_checktype(L, 2, LUA_TFUNCTION);
+    LumeString sid = id;
     lua_pushvalue(L, 2);
     int ref = luaL_ref(L, LUA_REGISTRYINDEX);
-    LumeString sid = id;
-    g_rightClicks[sid] = [sid, ref]() {
+    Bindings::on_right_click(id, LumeAction([sid, ref]() {
         if (!g_L) return;
         lua_rawgeti(g_L, LUA_REGISTRYINDEX, ref);
         if (lua_pcall(g_L, 0, 0, 0) != 0) {
             OutputDebugStringA(lua_tostring(g_L, -1));
             lua_pop(g_L, 1);
         }
-    };
+        }));
     return 0;
 }
 static int l_is_key_pressed(lua_State* L) {
-    int vk = (int)luaL_checkinteger(L, 1) & 0xFF;
-    lua_pushboolean(L, g_keyPressed[vk] ? 1 : 0);
-    g_keyPressed[vk] = false;
+    lua_pushboolean(L, Bindings::is_key_pressed((int)luaL_checkinteger(L, 1)) ? 1 : 0);
     return 1;
 }
 static int l_is_key_released(lua_State* L) {
-    int vk = (int)luaL_checkinteger(L, 1) & 0xFF;
-    lua_pushboolean(L, g_keyReleased[vk] ? 1 : 0);
-    g_keyReleased[vk] = false;
+    lua_pushboolean(L, Bindings::is_key_released((int)luaL_checkinteger(L, 1)) ? 1 : 0);
     return 1;
 }
 static int l_get_mouse(lua_State* L) {
-    if (!g_opt_lua_mouse) {
-        lua_pushinteger(L, 0);
-        lua_pushinteger(L, 0);
-        return 2;
-    }
-    POINT p;
-    GetCursorPos(&p);
-    if (g_hwnd) ScreenToClient(g_hwnd, &p);
-    lua_pushinteger(L, p.x);
-    lua_pushinteger(L, p.y - TOOLBAR_H);
+    int x, y; Bindings::get_mouse(&x, &y);
+    lua_pushinteger(L, x);
+    lua_pushinteger(L, y);
     return 2;
 }
 static int l_get_mouse_delta(lua_State* L) {
-    if (!g_opt_lua_mouse) {
-        lua_pushinteger(L, 0);
-        lua_pushinteger(L, 0);
-        return 2;
-    }
-    lua_pushinteger(L, g_mouseDeltaX);
-    lua_pushinteger(L, g_mouseDeltaY);
-    g_mouseDeltaX = 0;
-    g_mouseDeltaY = 0;
+    int dx, dy; Bindings::get_mouse_delta(&dx, &dy);
+    lua_pushinteger(L, dx);
+    lua_pushinteger(L, dy);
     return 2;
 }
 static int l_get_mouse_wheel(lua_State* L) {
-    if (!g_opt_lua_mouse) {
-        lua_pushinteger(L, 0);
-        return 1;
-    }
-    lua_pushinteger(L, g_mouseWheelDelta);
-    g_mouseWheelDelta = 0;
+    lua_pushinteger(L, Bindings::get_mouse_wheel());
     return 1;
 }
 static int l_capture_mouse(lua_State* L) {
-    int mode = (int)luaL_optinteger(L, 2, 0);
-    captureCanvasMouse(luaL_checkstring(L, 1), mode);
-    lua_pushboolean(L, g_mouseCaptured ? 1 : 0);
+    lua_pushboolean(L, Bindings::capture_mouse(luaL_checkstring(L, 1), (int)luaL_optinteger(L, 2, 0)) ? 1 : 0);
     return 1;
 }
 static int l_get_canvas_mouse(lua_State* L) {
-    const char* id = luaL_checkstring(L, 1);
-    auto v = GLCanvas::find(id);
-    if (!v || !v->valid) {
-        lua_pushinteger(L, 0); lua_pushinteger(L, 0);
-        return 2;
-    }
-    POINT p;
-    GetCursorPos(&p);
-    ScreenToClient(v->hwnd, &p);
-    lua_pushinteger(L, p.x);
-    lua_pushinteger(L, p.y);
+    int x, y; Bindings::get_canvas_mouse(luaL_checkstring(L, 1), &x, &y); lua_pushinteger(L, x); lua_pushinteger(L, y);
     return 2;
 }
-static int l_release_mouse(lua_State* L) { (void)L; releaseMouse(); return 0; }
-static int l_is_mouse_captured(lua_State* L) { lua_pushboolean(L, g_mouseCaptured ? 1 : 0); return 1; }
+static int l_release_mouse(lua_State* L) {
+    Bindings::release_mouse();
+    return 0;
+}
+static int l_is_mouse_captured(lua_State* L) {
+    lua_pushboolean(L, Bindings::is_mouse_captured() ? 1 : 0);
+    return 1;
+}
 static int l_fullscreen_canvas(lua_State* L) {
-    const char* id = luaL_checkstring(L, 1);
-    bool enter = lua_toboolean(L, 2);
-    if (enter) enterFullscreenCanvas(id);
-    else exitFullscreenCanvas();
+    Bindings::fullscreen_canvas(luaL_checkstring(L, 1), lua_toboolean(L, 2));
     return 0;
 }
 static int l_is_fullscreen(lua_State* L) {
-    lua_pushboolean(L, g_fullscreenCanvas ? 1 : 0);
+    lua_pushboolean(L, Bindings::is_fullscreen() ? 1 : 0);
     return 1;
 }
 static int l_window_active(lua_State* L) {
-    HWND fg = GetForegroundWindow();
-    BOOL active = (fg == g_hwnd) || (GetParent(fg) == g_hwnd);
-    lua_pushboolean(L, active ? 1 : 0);
+    lua_pushboolean(L, Bindings::window_active() ? 1 : 0);
     return 1;
 }
 static bool isLocalAccessAllowed() {
     return (g_curUrl.find("http://") != 0 && g_curUrl.find("https://") != 0);
 }
 static int l_http(lua_State* L) {
-    if (!g_opt_lua_http) {
-        lua_pushstring(L, "SECURITY_ERROR: HTTP requests are disabled by user.");
-        lua_pushinteger(L, 403);
-        return 2;
-    }
-    LumeString reqUrl = luaL_checkstring(L, 1);
-    if (reqUrl.find("file://") == 0 && !isLocalAccessAllowed()) {
-        lua_pushstring(L, "SECURITY_ERROR: Remote pages cannot access local files.");
-        lua_pushinteger(L, 403);
-        return 2;
-    }
-    auto r = Net::fetchUrl(reqUrl);
-    lua_pushstring(L, r.body.c_str());
-    lua_pushinteger(L, r.code);
+    LumeString body; int code;
+    Bindings::http_request(luaL_checkstring(L, 1), body, code);
+    lua_pushstring(L, body.c_str()); lua_pushinteger(L, code);
     return 2;
 }
 static int l_navigate(lua_State* L) {
-    LumeString* url = new LumeString(luaL_checkstring(L, 1));
-    PostMessage(g_hwnd, WM_NAVIGATE_DEFERRED, (WPARAM)url, 0);
+    Bindings::navigate(luaL_checkstring(L, 1));
     return 0;
 }
 static int l_alert(lua_State* L) {
-    MessageBoxU(g_hwnd, luaL_checkstring(L, 1), "Lume", MB_OK);
+    Bindings::alert(luaL_checkstring(L, 1));
     return 0;
 }
 static int l_refresh(lua_State* L) {
-    (void)L;
-    invalidateContent();
+    Bindings::refresh();
     return 0;
 }
 static int l_get_input(lua_State* L) {
-    auto i = g_inputs.find(luaL_checkstring(L, 1));
-    lua_pushstring(L, i != g_inputs.end() ? i->second.text.c_str() : "");
+    lua_pushstring(L, Bindings::get_input(luaL_checkstring(L, 1)));
     return 1;
 }
 static int l_set_input(lua_State* L) {
-    const char* id = luaL_checkstring(L, 1);
-    const char* t = luaL_checkstring(L, 2);
-    g_inputs[id].text = t;
-    g_inputs[id].cursor = lstrlenA(t);
-    invalidateContent();
+    Bindings::set_input(luaL_checkstring(L, 1), luaL_checkstring(L, 2));
     return 0;
 }
 static int l_key_down(lua_State* L) {
-    int vk = (int)luaL_checkinteger(L, 1);
-    lua_pushboolean(L, (GetAsyncKeyState(vk) & 0x8000) ? 1 : 0);
+    lua_pushboolean(L, Bindings::key_down((int)luaL_checkinteger(L, 1)) ? 1 : 0);
     return 1;
 }
 static int l_cv_clear(lua_State* L) {
-    auto i = Canvas::g_bufs.find(luaL_checkstring(L, 1));
-    if (i != Canvas::g_bufs.end() && i->second->dc) {
-        auto c = HTP::Color::fromHex(luaL_optstring(L, 2, "#000000"));
-        HBRUSH b = CreateSolidBrush(c.cr());
-        RECT r = { 0,0,i->second->w,i->second->h };
-        FillRect(i->second->dc, &r, b);
-        DeleteObject(b);
-    }
+    Bindings::cv_clear(luaL_checkstring(L, 1), luaL_optstring(L, 2, "#000000"));
     return 0;
 }
 static int l_cv_rect(lua_State* L) {
-    auto i = Canvas::g_bufs.find(luaL_checkstring(L, 1));
-    if (i != Canvas::g_bufs.end() && i->second->dc) {
-        int x = (int)luaL_checkinteger(L, 2), y = (int)luaL_checkinteger(L, 3);
-        int w = (int)luaL_checkinteger(L, 4), h = (int)luaL_checkinteger(L, 5);
-        auto c = HTP::Color::fromHex(luaL_optstring(L, 6, "#ffffff"));
-        HBRUSH b = CreateSolidBrush(c.cr());
-        RECT r = { x,y,x + w,y + h };
-        FillRect(i->second->dc, &r, b);
-        DeleteObject(b);
-    }
+    Bindings::cv_rect(luaL_checkstring(L, 1), (int)luaL_checkinteger(L, 2), (int)luaL_checkinteger(L, 3), (int)luaL_checkinteger(L, 4), (int)luaL_checkinteger(L, 5), luaL_optstring(L, 6, "#ffffff"));
     return 0;
 }
 static int l_cv_circle(lua_State* L) {
-    auto i = Canvas::g_bufs.find(luaL_checkstring(L, 1));
-    if (i != Canvas::g_bufs.end() && i->second->dc) {
-        int cx = (int)luaL_checkinteger(L, 2), cy = (int)luaL_checkinteger(L, 3), r = (int)luaL_checkinteger(L, 4);
-        auto c = HTP::Color::fromHex(luaL_optstring(L, 5, "#ffffff"));
-        HBRUSH b = CreateSolidBrush(c.cr());
-        HPEN p = CreatePen(PS_SOLID, 1, c.cr());
-        auto ob = SelectObject(i->second->dc, b);
-        auto op = SelectObject(i->second->dc, p);
-        Ellipse(i->second->dc, cx - r, cy - r, cx + r, cy + r);
-        SelectObject(i->second->dc, ob);
-        SelectObject(i->second->dc, op);
-        DeleteObject(b);
-        DeleteObject(p);
-    }
+    Bindings::cv_circle(luaL_checkstring(L, 1), (int)luaL_checkinteger(L, 2), (int)luaL_checkinteger(L, 3), (int)luaL_checkinteger(L, 4), luaL_optstring(L, 5, "#ffffff"));
     return 0;
 }
 static int l_cv_line(lua_State* L) {
-    auto i = Canvas::g_bufs.find(luaL_checkstring(L, 1));
-    if (i != Canvas::g_bufs.end() && i->second->dc) {
-        int x1 = (int)luaL_checkinteger(L, 2), y1 = (int)luaL_checkinteger(L, 3);
-        int x2 = (int)luaL_checkinteger(L, 4), y2 = (int)luaL_checkinteger(L, 5);
-        auto c = HTP::Color::fromHex(luaL_optstring(L, 6, "#ffffff"));
-        int t = (int)luaL_optinteger(L, 7, 1);
-        HPEN p = CreatePen(PS_SOLID, t, c.cr());
-        auto op = SelectObject(i->second->dc, p);
-        MoveToEx(i->second->dc, x1, y1, 0);
-        LineTo(i->second->dc, x2, y2);
-        SelectObject(i->second->dc, op);
-        DeleteObject(p);
-    }
+    Bindings::cv_line(luaL_checkstring(L, 1), (int)luaL_checkinteger(L, 2), (int)luaL_checkinteger(L, 3), (int)luaL_checkinteger(L, 4), (int)luaL_checkinteger(L, 5), luaL_optstring(L, 6, "#ffffff"), (int)luaL_optinteger(L, 7, 1));
     return 0;
 }
 static int l_cv_text(lua_State* L) {
-    auto i = Canvas::g_bufs.find(luaL_checkstring(L, 1));
-    if (i != Canvas::g_bufs.end() && i->second->dc) {
-        int x = (int)luaL_checkinteger(L, 2), y = (int)luaL_checkinteger(L, 3);
-        const char* txt = luaL_checkstring(L, 4);
-        int sz = (int)luaL_optinteger(L, 5, 16);
-        auto c = HTP::Color::fromHex(luaL_optstring(L, 6, "#ffffff"));
-        HFONT f = FontCache::get(sz);
-        auto of = SelectObject(i->second->dc, f);
-        SetTextColor(i->second->dc, c.cr());
-        SetBkMode(i->second->dc, TRANSPARENT);
-        TextOutU(i->second->dc, x, y, txt, lstrlenA(txt));
-        SelectObject(i->second->dc, of);
-    }
+    Bindings::cv_text(luaL_checkstring(L, 1), (int)luaL_checkinteger(L, 2), (int)luaL_checkinteger(L, 3), luaL_checkstring(L, 4), (int)luaL_optinteger(L, 5, 16), luaL_optstring(L, 6, "#ffffff"));
     return 0;
 }
 static int l_gl_available(lua_State* L) {
@@ -3065,27 +3396,90 @@ static int l_gl_clear(lua_State* L) {
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     return 0;
 }
-static int l_gl_viewport(lua_State* L) { glViewport((int)luaL_checkinteger(L, 1), (int)luaL_checkinteger(L, 2), (int)luaL_checkinteger(L, 3), (int)luaL_checkinteger(L, 4)); return 0; }
-static int l_gl_color(lua_State* L) { glColor4f((float)luaL_checknumber(L, 1), (float)luaL_checknumber(L, 2), (float)luaL_checknumber(L, 3), (float)luaL_optnumber(L, 4, 1)); return 0; }
-static int l_gl_begin_prim(lua_State* L) { glBegin((GLenum)luaL_checkinteger(L, 1)); return 0; }
-static int l_gl_end_prim(lua_State* L) { (void)L; glEnd(); return 0; }
-static int l_gl_vertex2f(lua_State* L) { glVertex2f((float)luaL_checknumber(L, 1), (float)luaL_checknumber(L, 2)); return 0; }
-static int l_gl_vertex3f(lua_State* L) { glVertex3f((float)luaL_checknumber(L, 1), (float)luaL_checknumber(L, 2), (float)luaL_checknumber(L, 3)); return 0; }
-static int l_gl_ortho(lua_State* L) { glOrtho(luaL_checknumber(L, 1), luaL_checknumber(L, 2), luaL_checknumber(L, 3), luaL_checknumber(L, 4), luaL_checknumber(L, 5), luaL_checknumber(L, 6)); return 0; }
-static int l_gl_frustum(lua_State* L) { glFrustum(luaL_checknumber(L, 1), luaL_checknumber(L, 2), luaL_checknumber(L, 3), luaL_checknumber(L, 4), luaL_checknumber(L, 5), luaL_checknumber(L, 6)); return 0; }
-static int l_gl_load_identity(lua_State* L) { (void)L; glLoadIdentity(); return 0; }
-static int l_gl_matrix_mode(lua_State* L) { glMatrixMode((GLenum)luaL_checkinteger(L, 1)); return 0; }
-static int l_gl_push_matrix(lua_State* L) { (void)L; glPushMatrix(); return 0; }
-static int l_gl_pop_matrix(lua_State* L) { (void)L; glPopMatrix(); return 0; }
-static int l_gl_translatef(lua_State* L) { glTranslatef((float)luaL_checknumber(L, 1), (float)luaL_checknumber(L, 2), (float)luaL_checknumber(L, 3)); return 0; }
-static int l_gl_rotatef(lua_State* L) { glRotatef((float)luaL_checknumber(L, 1), (float)luaL_checknumber(L, 2), (float)luaL_checknumber(L, 3), (float)luaL_checknumber(L, 4)); return 0; }
-static int l_gl_scalef(lua_State* L) { glScalef((float)luaL_checknumber(L, 1), (float)luaL_checknumber(L, 2), (float)luaL_checknumber(L, 3)); return 0; }
-static int l_gl_enable(lua_State* L) { glEnable((GLenum)luaL_checkinteger(L, 1)); return 0; }
-static int l_gl_disable(lua_State* L) { glDisable((GLenum)luaL_checkinteger(L, 1)); return 0; }
-static int l_gl_line_width(lua_State* L) { glLineWidth((float)luaL_checknumber(L, 1)); return 0; }
-static int l_gl_point_size(lua_State* L) { glPointSize((float)luaL_checknumber(L, 1)); return 0; }
-static int l_gl_normal3f(lua_State* L) { glNormal3f((float)luaL_checknumber(L, 1), (float)luaL_checknumber(L, 2), (float)luaL_checknumber(L, 3)); return 0; }
-static int l_glu_perspective(lua_State* L) { gluPerspective_impl(luaL_checknumber(L, 1), luaL_checknumber(L, 2), luaL_checknumber(L, 3), luaL_checknumber(L, 4)); return 0; }
+static int l_gl_viewport(lua_State* L) {
+    glViewport((int)luaL_checkinteger(L, 1), (int)luaL_checkinteger(L, 2), (int)luaL_checkinteger(L, 3), (int)luaL_checkinteger(L, 4));
+    return 0;
+}
+static int l_gl_color(lua_State* L) {
+    GLBatcher::color((float)luaL_checknumber(L, 1), (float)luaL_checknumber(L, 2), (float)luaL_checknumber(L, 3), (float)luaL_optnumber(L, 4, 1.0f));
+    return 0;
+}
+static int l_gl_begin_prim(lua_State* L) {
+    GLBatcher::begin((GLenum)luaL_checkinteger(L, 1));
+    return 0;
+}
+static int l_gl_end_prim(lua_State* L) {
+    (void)L;
+    GLBatcher::end();
+    return 0;
+}
+static int l_gl_vertex2f(lua_State* L) {
+    GLBatcher::vertex((float)luaL_checknumber(L, 1), (float)luaL_checknumber(L, 2), 0.0f);
+    return 0;
+}
+static int l_gl_vertex3f(lua_State* L) {
+    GLBatcher::vertex((float)luaL_checknumber(L, 1), (float)luaL_checknumber(L, 2), (float)luaL_checknumber(L, 3));
+    return 0;
+}
+static int l_gl_ortho(lua_State* L) {
+    glOrtho(luaL_checknumber(L, 1), luaL_checknumber(L, 2), luaL_checknumber(L, 3), luaL_checknumber(L, 4), luaL_checknumber(L, 5), luaL_checknumber(L, 6));
+    return 0;
+}
+static int l_gl_frustum(lua_State* L) {
+    glFrustum(luaL_checknumber(L, 1), luaL_checknumber(L, 2), luaL_checknumber(L, 3), luaL_checknumber(L, 4), luaL_checknumber(L, 5), luaL_checknumber(L, 6));
+    return 0;
+}
+static int l_gl_load_identity(lua_State* L) {
+    (void)L; glLoadIdentity(); return 0; }
+static int l_gl_matrix_mode(lua_State* L) {
+    glMatrixMode((GLenum)luaL_checkinteger(L, 1));
+    return 0;
+}
+static int l_gl_push_matrix(lua_State* L) {
+    (void)L; glPushMatrix();
+    return 0;
+}
+static int l_gl_pop_matrix(lua_State* L) {
+    (void)L; glPopMatrix();
+    return 0;
+}
+static int l_gl_translatef(lua_State* L) {
+    glTranslatef((float)luaL_checknumber(L, 1), (float)luaL_checknumber(L, 2), (float)luaL_checknumber(L, 3));
+    return 0;
+}
+static int l_gl_rotatef(lua_State* L) {
+    glRotatef((float)luaL_checknumber(L, 1), (float)luaL_checknumber(L, 2), (float)luaL_checknumber(L, 3), (float)luaL_checknumber(L, 4));
+    return 0;
+}
+static int l_gl_scalef(lua_State* L) {
+    glScalef((float)luaL_checknumber(L, 1), (float)luaL_checknumber(L, 2), (float)luaL_checknumber(L, 3));
+    return 0;
+}
+static int l_gl_enable(lua_State* L) {
+    glEnable((GLenum)luaL_checkinteger(L, 1));
+    return 0;
+}
+static int l_gl_disable(lua_State* L) {
+    glDisable((GLenum)luaL_checkinteger(L, 1));
+    return 0;
+}
+static int l_gl_line_width(lua_State* L) {
+    glLineWidth((float)luaL_checknumber(L, 1));
+    return 0;
+}
+static int l_gl_point_size(lua_State* L) {
+    glPointSize((float)luaL_checknumber(L, 1));
+    return 0;
+}
+
+static int l_gl_normal3f(lua_State* L) {
+    GLBatcher::normal((float)luaL_checknumber(L, 1), (float)luaL_checknumber(L, 2), (float)luaL_checknumber(L, 3));
+    return 0;
+}
+static int l_glu_perspective(lua_State* L) {
+    gluPerspective_impl(luaL_checknumber(L, 1), luaL_checknumber(L, 2), luaL_checknumber(L, 3), luaL_checknumber(L, 4));
+    return 0;
+}
 static int l_glu_look_at(lua_State* L) {
     gluLookAt_impl(
         luaL_checknumber(L, 1), luaL_checknumber(L, 2), luaL_checknumber(L, 3),
@@ -3094,11 +3488,26 @@ static int l_glu_look_at(lua_State* L) {
     );
     return 0;
 }
-static int l_gl_gen_list(lua_State* L) { lua_pushinteger(L, (int)glGenLists(1)); return 1; }
-static int l_gl_new_list(lua_State* L) { glNewList((GLuint)luaL_checkinteger(L, 1), GL_COMPILE); return 0; }
-static int l_gl_end_list(lua_State* L) { (void)L; glEndList(); return 0; }
-static int l_gl_call_list(lua_State* L) { glCallList((GLuint)luaL_checkinteger(L, 1)); return 0; }
-static int l_gl_delete_list(lua_State* L) { glDeleteLists((GLuint)luaL_checkinteger(L, 1), 1); return 0; }
+static int l_gl_gen_list(lua_State* L) {
+    lua_pushinteger(L, (int)glGenLists(1));
+    return 1;
+}
+static int l_gl_new_list(lua_State* L) {
+    glNewList((GLuint)luaL_checkinteger(L, 1), GL_COMPILE);
+    return 0;
+}
+static int l_gl_end_list(lua_State* L) {
+    (void)L; glEndList();
+    return 0;
+}
+static int l_gl_call_list(lua_State* L) {
+    glCallList((GLuint)luaL_checkinteger(L, 1));
+    return 0;
+}
+static int l_gl_delete_list(lua_State* L) {
+    glDeleteLists((GLuint)luaL_checkinteger(L, 1), 1);
+    return 0;
+}
 static int l_set_timer(lua_State* L) {
     int ms = (int)luaL_checkinteger(L, 1);
     luaL_checktype(L, 2, LUA_TFUNCTION);
@@ -3106,34 +3515,28 @@ static int l_set_timer(lua_State* L) {
     int ref = luaL_ref(L, LUA_REGISTRYINDEX);
     int tid = ++g_timerN;
     g_timerRefs[tid] = ref;
-    SetTimer(g_hwnd, tid, ms, [](HWND, UINT, UINT_PTR id, DWORD) {
-        if (!g_hwnd || IsIconic(g_hwnd)) return;
-
+    SetTimer(g_mainWnd, tid, ms, [](HWND, UINT, UINT_PTR id, DWORD) {
+        if (!g_mainWnd || IsIconic(g_mainWnd)) return;
         auto i = g_timerRefs.find((int)id);
         if (i == g_timerRefs.end() || !g_L) return;
-
         lua_rawgeti(g_L, LUA_REGISTRYINDEX, i->second);
         if (lua_pcall(g_L, 0, 0, 0) != 0) {
             const char* err = lua_tostring(g_L, -1);
             OutputDebugStringA(err ? err : "Lua timer error\n");
-            KillTimer(g_hwnd, id);
-            MessageBoxU(g_hwnd, err ? err : "Unknown error", "Lua Timer Error", MB_OK | MB_ICONERROR);
+            KillTimer(g_mainWnd, id);
+            MessageBoxU(g_mainWnd, err ? err : "Unknown error", "Lua Timer Error", MB_OK | MB_ICONERROR);
             lua_pop(g_L, 1);
             luaL_unref(g_L, LUA_REGISTRYINDEX, i->second);
             g_timerRefs.erase(i);
         }
-    });
-    lua_pushinteger(L, tid);
-    return 1;
+        });
+    lua_pushinteger(L, tid); return 1;
 }
 static int l_kill_timer(lua_State* L) {
     int id = (int)luaL_checkinteger(L, 1);
-    KillTimer(g_hwnd, id);
+    KillTimer(g_mainWnd, id);
     auto it = g_timerRefs.find(id);
-    if (it != g_timerRefs.end()) {
-        if (g_L) luaL_unref(g_L, LUA_REGISTRYINDEX, it->second);
-        g_timerRefs.erase(it);
-    }
+    if (it != g_timerRefs.end()) { if (g_L) luaL_unref(g_L, LUA_REGISTRYINDEX, it->second); g_timerRefs.erase(it); }
     return 0;
 }
 static int l_on_key_down(lua_State* L) {
@@ -3149,7 +3552,7 @@ static int l_get_time(lua_State* L) {
 }
 static int l_get_window_size(lua_State* L) {
     RECT cr;
-    GetClientRect(g_hwnd, &cr);
+    GetClientRect(g_mainWnd, &cr);
     if (g_fullscreenCanvas) {
         lua_pushinteger(L, cr.right);
         lua_pushinteger(L, cr.bottom);
@@ -3167,19 +3570,14 @@ void fireCanvasClick(const LumeString& canvasId, int x, int y, int button) {
     lua_pushinteger(g_L, x);
     lua_pushinteger(g_L, y);
     lua_pushinteger(g_L, button);
-    if (lua_pcall(g_L, 3, 0, 0) != 0) {
-        OutputDebugStringA(lua_tostring(g_L, -1));
-        lua_pop(g_L, 1);
-    }
+    if (lua_pcall(g_L, 3, 0, 0) != 0) { OutputDebugStringA(lua_tostring(g_L, -1)); lua_pop(g_L, 1); }
 }
 static int l_on_canvas_click(lua_State* L) {
     const char* id = luaL_checkstring(L, 1);
     luaL_checktype(L, 2, LUA_TFUNCTION);
     LumeString sid = id;
     auto it = g_canvasClickRefs.find(sid);
-    if (it != g_canvasClickRefs.end()) {
-        luaL_unref(L, LUA_REGISTRYINDEX, it->second);
-    }
+    if (it != g_canvasClickRefs.end()) luaL_unref(L, LUA_REGISTRYINDEX, it->second);
     lua_pushvalue(L, 2);
     g_canvasClickRefs[sid] = luaL_ref(L, LUA_REGISTRYINDEX);
     return 0;
@@ -3204,7 +3602,8 @@ static int l_gl_bind_texture(lua_State* L) {
     return 0;
 }
 static int l_gl_text_coord2f(lua_State* L) {
-    glTexCoord2f((float)luaL_checknumber(L, 1), (float)luaL_checknumber(L, 2)); return 0;
+    GLBatcher::texCoord((float)luaL_checknumber(L, 1), (float)luaL_checknumber(L, 2));
+    return 0;
 }
 static int l_gl_load_texture(lua_State* L) {
     const char* path = luaL_checkstring(L, 1);
@@ -4143,10 +4542,15 @@ void init() {
     lua_register(g_L, "set_offset_y", l_set_offset_y);
     lua_register(g_L, "get_offset_y", l_get_offset_y);
     lua_register(g_L, "set_shimmer", l_set_shimmer);
+    lua_register(g_L, "get_input", l_get_input);
+    lua_register(g_L, "set_input", l_set_input);
     lua_register(g_L, "on_click", l_on_click);
     lua_register(g_L, "on_right_click", l_on_right_click);
+    lua_register(g_L, "on_key_down", l_on_key_down);
+    lua_register(g_L, "on_canvas_click", l_on_canvas_click);
     lua_register(g_L, "is_key_pressed", l_is_key_pressed);
     lua_register(g_L, "is_key_released", l_is_key_released);
+    lua_register(g_L, "key_down", l_key_down);
     lua_register(g_L, "get_mouse_pos", l_get_mouse);
     lua_register(g_L, "get_canvas_mouse", l_get_canvas_mouse);
     lua_register(g_L, "get_mouse_delta", l_get_mouse_delta);
@@ -4157,21 +4561,27 @@ void init() {
     lua_register(g_L, "fullscreen_canvas", l_fullscreen_canvas);
     lua_register(g_L, "is_fullscreen", l_is_fullscreen);
     lua_register(g_L, "window_active", l_window_active);
-    lua_register(g_L, "http_request", l_http);
     lua_register(g_L, "navigate", l_navigate);
     lua_register(g_L, "alert", l_alert);
     lua_register(g_L, "refresh", l_refresh);
-    lua_register(g_L, "get_input", l_get_input);
-    lua_register(g_L, "set_input", l_set_input);
-    lua_register(g_L, "key_down", l_key_down);
+    lua_register(g_L, "set_timer", l_set_timer);
+    lua_register(g_L, "kill_timer", l_kill_timer);
+    lua_register(g_L, "get_time", l_get_time);
+    lua_register(g_L, "get_window_size", l_get_window_size);
+    lua_register(g_L, "http_request", l_http);
+    lua_register(g_L, "download_async", l_download_async);
+    lua_register(g_L, "download_status", l_download_status);
+    lua_register(g_L, "json_parse", l_json_parse);
+    lua_register(g_L, "plugin_from_net", l_plugin_from_net);
+    lua_register(g_L, "load_lua", l_load_lua);
+    lua_register(g_L, "wasm_load", l_wasm_load);
+    lua_register(g_L, "wasm_load_raw", l_wasm_load_raw);
+    lua_register(g_L, "wasm_call", l_wasm_call);
     lua_register(g_L, "canvas_clear", l_cv_clear);
     lua_register(g_L, "canvas_rect", l_cv_rect);
     lua_register(g_L, "canvas_circle", l_cv_circle);
     lua_register(g_L, "canvas_line", l_cv_line);
     lua_register(g_L, "canvas_text", l_cv_text);
-    lua_register(g_L, "set_timer", l_set_timer);
-    lua_register(g_L, "kill_timer", l_kill_timer);
-    lua_register(g_L, "on_key_down", l_on_key_down);
     lua_register(g_L, "gl_available", l_gl_available);
     lua_register(g_L, "gl_begin_render", l_gl_begin);
     lua_register(g_L, "gl_end_render", l_gl_end);
@@ -4204,15 +4614,11 @@ void init() {
     lua_register(g_L, "gl_end_list", l_gl_end_list);
     lua_register(g_L, "gl_call_list", l_gl_call_list);
     lua_register(g_L, "gl_delete_list", l_gl_delete_list);
-    lua_register(g_L, "get_time", l_get_time);
-    lua_register(g_L, "get_window_size", l_get_window_size);
-    lua_register(g_L, "on_canvas_click", l_on_canvas_click);
     lua_register(g_L, "gl_blend_func", l_gl_blend_func);
     lua_register(g_L, "glu_sphere", l_glu_sphere);
     lua_register(g_L, "gl_bind_texture", l_gl_bind_texture);
     lua_register(g_L, "gl_text_coord2f", l_gl_text_coord2f);
     lua_register(g_L, "gl_load_texture", l_gl_load_texture);
-    lua_register(g_L, "json_parse", l_json_parse);
     lua_register(g_L, "gl_load_bbmodel", l_gl_load_bbmodel);
     lua_register(g_L, "gl_load_obj", l_gl_load_obj);
     lua_register(g_L, "load_ttf", l_load_ttf);
@@ -4232,13 +4638,6 @@ void init() {
     lua_register(g_L, "glu_build2d_mipmaps", l_glu_build2d_mipmaps);
     lua_register(g_L, "gl_load_texture_mipmapped", l_gl_load_texture_mipmapped);
     lua_register(g_L, "gl_print", l_gl_print);
-    lua_register(g_L, "download_async", l_download_async);
-    lua_register(g_L, "download_status", l_download_status);
-    lua_register(g_L, "plugin_from_net", l_plugin_from_net);
-    lua_register(g_L, "load_lua", l_load_lua);
-    lua_register(g_L, "wasm_load", l_wasm_load);
-    lua_register(g_L, "wasm_load_raw", l_wasm_load_raw);
-    lua_register(g_L, "wasm_call", l_wasm_call);
     registerGLConstants(g_L);
     Plugins::initAllPlugins(g_L);
 }
@@ -4246,15 +4645,10 @@ void exec(const LumeString& code) {
     if (!g_L) init();
     if (luaL_dostring(g_L, code.c_str()) != 0) {
         const char* e = lua_tostring(g_L, -1);
-        OutputDebugStringA(e ? e : "lua err");
-        OutputDebugStringA("\n");
-        MessageBoxU(g_hwnd, e ? e : "Unknown error", "Lua Error", MB_OK | MB_ICONERROR);
+        OutputDebugStringA(e ? e : "lua err\n");
+        MessageBoxU(g_mainWnd, e ? e : "Unknown error", "Lua Error", MB_OK | MB_ICONERROR);
         lua_pop(g_L, 1);
     }
-}
-void fireClick(const LumeString& id) {
-    auto i = g_clicks.find(id);
-    if (i != g_clicks.end()) i->second();
 }
 void reset() {
     for (auto cb : Plugins::g_onResetCallbacks) {
@@ -4264,7 +4658,7 @@ void reset() {
     releaseMouse();
     if (g_fullscreenCanvas) exitFullscreenCanvas();
     for (auto& kv : g_timerRefs) {
-        KillTimer(g_hwnd, kv.first);
+        KillTimer(g_mainWnd, kv.first);
         if (g_L) luaL_unref(g_L, LUA_REGISTRYINDEX, kv.second);
     }
     for (auto& kv : g_canvasClickRefs) {
@@ -4273,19 +4667,11 @@ void reset() {
     g_canvasClickRefs.clear();
     g_timerRefs.clear();
     g_timerN = 9000;
-    g_clicks.clear();
-    g_rightClicks.clear();
-    memset(g_keyPressed, 0, sizeof(g_keyPressed));
-    memset(g_keyReleased, 0, sizeof(g_keyReleased));
-    g_texts.clear();
-    g_offsets_y.clear();
-    g_shimmer_offsets.clear();
-    g_inputs.clear();
-    g_focusId.clear();
     g_mouseWheelDelta = 0;
     g_mouseDeltaX = 0;
     if (g_keyDownRef != LUA_NOREF && g_L) luaL_unref(g_L, LUA_REGISTRYINDEX, g_keyDownRef);
     g_keyDownRef = LUA_NOREF;
+    Bindings::reset();
     Canvas::g_bufs.clear();
     GLCanvas::destroyAll();
     ImageCache::clear();
@@ -4293,6 +4679,7 @@ void reset() {
     GLBuffers::clear();
     GLFont::clear();
     GLModelCache::clear();
+    GradientText::cleanupBuffers();
     if (g_L) {
         lua_close(g_L);
         g_L = nullptr;
@@ -4709,17 +5096,20 @@ namespace Render {
                 const char* pId = getRefPtr(e->props, "id");
                 const char* pCt = getRefPtr(e->props, "content");
                 if (pId[0] != '\0') {
-                    auto i = Script::g_texts.find(pId);
-                    if (i != Script::g_texts.end()) pCt = i->second.c_str();
-                    else { Script::g_texts[pId] = pCt; pCt = Script::g_texts[pId].c_str(); }
+                    auto i = Bindings::g_texts.find(pId);
+                    if (i != Bindings::g_texts.end()) pCt = i->second.c_str();
+                    else {
+                        Bindings::g_texts[pId] = pCt;
+                        pCt = Bindings::g_texts[pId].c_str();
+                    }
                 }
                 int sz = e->props.getInt("size", 16);
                 auto col = e->props.getColor("color", { 255,255,255 });
                 const char* pGrad = getRefPtr(e->props, "gradient");
                 int offset_y = 0; float shimmer = 0.0f;
                 if (pId[0] != '\0') {
-                    auto oi = Script::g_offsets_y.find(pId); if (oi != Script::g_offsets_y.end()) offset_y = oi->second;
-                    auto si = Script::g_shimmer_offsets.find(pId); if (si != Script::g_shimmer_offsets.end()) shimmer = si->second;
+                    auto oi = Bindings::g_offsets_y.find(pId); if (oi != Bindings::g_offsets_y.end()) offset_y = oi->second;
+                    auto si = Bindings::g_shimmer_offsets.find(pId); if (si != Bindings::g_shimmer_offsets.end()) shimmer = si->second;
                 }
                 int z = e->props.getInt("z-index", 0);
                 const char* pFontName = getRefPtr(e->props, "font");
@@ -4825,10 +5215,10 @@ namespace Render {
                 int ih = e->props.getInt("height", 28), iy = y, iw = e->props.getInt("width", 250), z = e->props.getInt("z-index", 0);
                 const char* pId = getRefPtr(e->props, "id"), * pPh = getRefPtr(e->props, "placeholder");
                 LumeString id = (pId[0] == '\0') ? ("inp_" + lume_to_string(y)) : pId;
-                auto& inp = Script::g_inputs[id];
+                auto& inp = Bindings::g_inputs[id];
                 if (inp.placeholder.empty() && pPh[0] != '\0') inp.placeholder = pPh;
                 inp.x = x; inp.y = iy; inp.w = iw; inp.h = ih;
-                bool foc = (Script::g_focusId == id);
+                bool foc = (Bindings::g_focusId == id);
                 int cursorToDraw = inp.cursor; LumeString textStr = inp.text, phStr = inp.placeholder;
                 renderQueue.push_back({ z, [this, x, iy, iw, ih, foc, textStr, phStr, cursorToDraw]() {
                     HDC dc = this->docDC;
@@ -5730,11 +6120,25 @@ void loadContent(const LumeString& content, const LumeString& url, bool isIntern
     g_doc = p.parse(finalContent);
     g_curUrl = displayUrl;
     g_ren.setScroll(0);
-
     struct Runner {
         void run(LumeSharedPtr<HTP::Elem> e) {
             if (!e) return;
-            if (e->type == HTP::EType::SCRIPT && !e->scriptCode.empty()) Script::exec(e->scriptCode.c_str());
+            if (e->type == HTP::EType::SCRIPT && !e->scriptCode.empty()) {
+                LumeString lang = e->props.get("lang", "lua");
+                if (lang == "lua") {
+                    Script::exec(e->scriptCode.c_str());
+                }
+                else {
+                    auto it = Plugins::g_scriptEngines.find(lang);
+                    if (it != Plugins::g_scriptEngines.end() && it->second) {
+                        it->second(e->scriptCode.c_str());
+                    }
+                    else {
+                        LumeString err = "Lume Engine: Unknown script language '" + lang + "'\n";
+                        OutputDebugStringA(err.c_str());
+                    }
+                }
+            }
             for (auto& c : e->children) run(c);
         }
     } runner;
@@ -5947,7 +6351,6 @@ LRESULT CALLBACK AddrProc(HWND h, UINT m, WPARAM w, LPARAM l) {
 LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
     case WM_CREATE: {
-        Script::g_hwnd = hw;
         CreateWindowW(L"BUTTON", L"<", WS_CHILD | WS_VISIBLE, 4, 6, 30, 28, hw, (HMENU)ID_BACK, 0, 0);
         CreateWindowW(L"BUTTON", L">", WS_CHILD | WS_VISIBLE, 38, 6, 30, 28, hw, (HMENU)ID_FWD, 0, 0);
         CreateWindowW(L"BUTTON", L"R", WS_CHILD | WS_VISIBLE, 72, 6, 30, 28, hw, (HMENU)ID_REF, 0, 0);
@@ -6180,15 +6583,15 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
                 return 0;
             }
             if (clickedHit.isInput) {
-                Script::g_focusId = clickedHit.elemId;
-                Script::g_inputs[clickedHit.elemId].focused = true;
-                Script::g_inputs[clickedHit.elemId].cursor = (int)Script::g_inputs[clickedHit.elemId].text.length();
+                Bindings::g_focusId = clickedHit.elemId;
+                Bindings::g_inputs[clickedHit.elemId].focused = true;
+                Bindings::g_inputs[clickedHit.elemId].cursor = (int)Bindings::g_inputs[clickedHit.elemId].text.length();
                 ci = true;
                 invalidateContent();
             }
             else {
                 if (clickedHit.isBtn && !clickedHit.elemId.empty()) {
-                    Script::fireClick(clickedHit.elemId);
+                    Bindings::fire_click(clickedHit.elemId.c_str());
                     invalidateContent();
                     if (!clickedHit.url.empty()) navigateTo(clickedHit.url);
                     return 0;
@@ -6200,8 +6603,8 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
             }
         }
         if (!ci) {
-            Script::g_focusId.clear();
-            for (auto& kv : Script::g_inputs) kv.second.focused = false;
+            Bindings::g_focusId.clear();
+            for (auto& kv : Bindings::g_inputs) kv.second.focused = false;
             invalidateContent();
         }
         SetFocus(hw);
@@ -6221,7 +6624,7 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
                 Script::fireCanvasClick(clickedHit.canvasId, mx - clickedHit.r.left, my - clickedHit.r.top, 2);
             }
             else if (clickedHit.isBtn && !clickedHit.elemId.empty()) {
-                Script::fireRightClick(clickedHit.elemId);
+                Bindings::fire_right_click(clickedHit.elemId.c_str());
             }
         }
         SetFocus(hw);
@@ -6234,9 +6637,9 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
             }
             return 0;
         }
-        if (Script::g_focusId.empty()) break;
-        auto it = Script::g_inputs.find(Script::g_focusId);
-        if (it != Script::g_inputs.end()) {
+        if (Bindings::g_focusId.empty()) break;
+        auto it = Bindings::g_inputs.find(Bindings::g_focusId);
+        if (it != Bindings::g_inputs.end()) {
             auto& inp = it->second;
             wchar_t wc = (wchar_t)wp;
             if (wc == L'\b') {
@@ -6251,7 +6654,7 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
             }
             else if (wc == L'\r' || wc == L'\n') {
                 inp.focused = false;
-                Script::g_focusId.clear();
+                Bindings::g_focusId.clear();
             }
             else if (wc >= 32) {
                 LumeWString ws(1, wc);
@@ -6266,7 +6669,7 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
     }
     case WM_KEYDOWN: {
         if ((lp & (1 << 30)) == 0 && wp < 256) {
-            Script::g_keyPressed[wp] = true;
+            Bindings::g_keyPressed[wp] = true;
         }
         if (wp == VK_ESCAPE) {
             if (g_mouseCaptured) {
@@ -6298,7 +6701,7 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
             else if (wp == VK_BACK && GetFocus() != g_addressBar) goBack();
             return 0;
         }
-        if (Script::g_keyDownRef != LUA_NOREF && Script::g_L && GetFocus() == hw && Script::g_focusId.empty()) {
+        if (Script::g_keyDownRef != LUA_NOREF && Script::g_L && GetFocus() == hw && Bindings::g_focusId.empty()) {
             lua_rawgeti(Script::g_L, LUA_REGISTRYINDEX, Script::g_keyDownRef);
             lua_pushinteger(Script::g_L, (int)wp);
             if (lua_pcall(Script::g_L, 1, 0, 0) != 0) {
@@ -6306,9 +6709,9 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
                 lua_pop(Script::g_L, 1);
             }
         }
-        if (!Script::g_focusId.empty() && GetFocus() == hw) {
-            auto it = Script::g_inputs.find(Script::g_focusId);
-            if (it != Script::g_inputs.end()) {
+        if (!Bindings::g_focusId.empty() && GetFocus() == hw) {
+            auto it = Bindings::g_inputs.find(Bindings::g_focusId);
+            if (it != Bindings::g_inputs.end()) {
                 auto& inp = it->second;
                 if (wp == VK_LEFT) {
                     while (inp.cursor > 0) {
@@ -6365,11 +6768,11 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
             }
         }
         if (wp == VK_F5) navigateTo(g_curUrl);
-        else if (wp == VK_BACK && Script::g_focusId.empty() && GetFocus() != g_addressBar) goBack();
+        else if (wp == VK_BACK && Bindings::g_focusId.empty() && GetFocus() != g_addressBar) goBack();
         return 0;
     }
     case WM_KEYUP: {
-        if (wp < 256) Script::g_keyReleased[wp] = true;
+        if (wp < 256) Bindings::g_keyReleased[wp] = true;
         return 0;
     }
     case WM_SETCURSOR:
@@ -6492,6 +6895,11 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
     case WM_DESTROY:
         InterlockedExchange(&g_isShuttingDown, 1);
+        MSG tempMsg;
+        while (PeekMessage(&tempMsg, hw, WM_NAVIGATE_DEFERRED, WM_NAVIGATE_DEFERRED, PM_REMOVE)) {
+            LumeString* str = (LumeString*)tempMsg.wParam;
+            if (str) delete str;
+        }
         releaseMouse();
         if (g_fullscreenCanvas) exitFullscreenCanvas();
         Script::reset();
@@ -6544,6 +6952,7 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
     return DefWindowProcW(hw, msg, wp, lp);
 }
 int WINAPI WinMain(HINSTANCE hI, HINSTANCE, LPSTR cmd, int show) {
+    SetPriorityClass(GetCurrentProcess(), ABOVE_NORMAL_PRIORITY_CLASS);
     INITCOMMONCONTROLSEX ic = {sizeof(ic), ICC_STANDARD_CLASSES};
     InitCommonControlsEx(&ic);
     initHighResTimer();
