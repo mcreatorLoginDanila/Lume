@@ -874,7 +874,6 @@ void invalidateDOM() {
 void invalidateContent() {
     if (!g_mainWnd) return;
     g_contentDirty = true;
-    g_domDirty = true;
     RECT cr;
     GetClientRect(g_mainWnd, &cr);
     RECT contentRect = { 0, TOOLBAR_H, cr.right, cr.bottom - STATUS_H };
@@ -1770,7 +1769,6 @@ namespace Plugins {
             }
         }
     }
-    /* ---------- Безопасные обертки для C API (JS/Python/C плагины) ---------- */
     static void host_http_request(const char* url, char** out_body, int* out_code) {
         LumeString body;
         Bindings::http_request(url, body, *out_code);
@@ -1973,11 +1971,9 @@ namespace Plugins {
             expectedHash = url.substr(hashPos + 8);
             fetchUrl = url.substr(0, hashPos);
         }
-
         for (const auto& dp : g_dynPlugins) {
             if (dp.url == fetchUrl) return true;
         }
-
         int trust = 3;
         if (fetchUrl.find("..") != LumeString::npos ||
             fetchUrl.find("%2e") != LumeString::npos ||
@@ -2882,60 +2878,47 @@ namespace GLBatcher {
         colors.clear();
         texCoords.clear();
         normals.clear();
-        useColor = false;
-        useTex = false;
-        useNormal = false;
     }
     void color(float r, float g, float b, float a) {
-        curR = r;
-        curG = g;
-        curB = b;
-        curA = a;
+        curR = r; curG = g; curB = b; curA = a;
         useColor = true;
+        glColor4f(r, g, b, a);
     }
     void texCoord(float u, float v) {
         curU = u; curV = v;
         useTex = true;
+        glTexCoord2f(u, v);
     }
     void normal(float x, float y, float z) {
         curNx = x; curNy = y; curNz = z;
         useNormal = true;
+        glNormal3f(x, y, z);
     }
     void vertex(float x, float y, float z) {
         vertices.push_back(x); vertices.push_back(y); vertices.push_back(z);
-        if (useColor) {
-            colors.push_back(curR);
-            colors.push_back(curG);
-            colors.push_back(curB);
-            colors.push_back(curA);
-        }
-        if (useTex) {
-            texCoords.push_back(curU);
-            texCoords.push_back(curV);
-        }
-        if (useNormal) {
-            normals.push_back(curNx);
-            normals.push_back(curNy);
-            normals.push_back(curNz);
-        }
+        colors.push_back(curR); colors.push_back(curG); colors.push_back(curB); colors.push_back(curA);
+        texCoords.push_back(curU); texCoords.push_back(curV);
+        normals.push_back(curNx); normals.push_back(curNy); normals.push_back(curNz);
     }
     void end() {
         if (vertices.empty()) return;
         glEnableClientState(GL_VERTEX_ARRAY);
         glVertexPointer(3, GL_FLOAT, 0, vertices.data());
-        if (useColor && colors.size() == (vertices.size() / 3) * 4) {
+        if (useColor) {
             glEnableClientState(GL_COLOR_ARRAY);
             glColorPointer(4, GL_FLOAT, 0, colors.data());
         }
-        if (useTex && texCoords.size() == (vertices.size() / 3) * 2) {
+        if (useTex) {
             glEnableClientState(GL_TEXTURE_COORD_ARRAY);
             glTexCoordPointer(2, GL_FLOAT, 0, texCoords.data());
         }
-        if (useNormal && normals.size() == vertices.size()) {
+        if (useNormal) {
             glEnableClientState(GL_NORMAL_ARRAY);
             glNormalPointer(GL_FLOAT, 0, normals.data());
         }
+
         glDrawArrays(currentMode, 0, (GLsizei)(vertices.size() / 3));
+
         glDisableClientState(GL_VERTEX_ARRAY);
         if (useColor) glDisableClientState(GL_COLOR_ARRAY);
         if (useTex) glDisableClientState(GL_TEXTURE_COORD_ARRAY);
@@ -2948,7 +2931,61 @@ namespace Bindings {
         int x = 0, y = 0, w = 250, h = 28;
         bool focused = false;
         int cursor = 0;
+        int selStart = -1;
+        bool multiline = false;
+        int scrollX = 0, scrollY = 0;
     };
+    void deleteSelection(InputState& inp) {
+        if (inp.selStart == -1 || inp.selStart == inp.cursor) return;
+        int s = lume_min(inp.cursor, inp.selStart);
+        int e = lume_max(inp.cursor, inp.selStart);
+        inp.text.erase(s, e - s);
+        inp.cursor = s;
+        inp.selStart = -1;
+    }
+    int getCursorPosFromXY(HDC dc, const LumeString& text, int lx, int ly, bool multi) {
+        int fontH = 16;
+        if (!multi) ly = 0;
+        int targetLine = lume_max(0, ly / fontH);
+        int currentLine = 0;
+        int lineStart = 0;
+        for (int i = 0; i <= text.length(); i++) {
+            if (i == text.length() || text[i] == '\n') {
+                if (currentLine == targetLine || i == text.length()) {
+                    int bestI = lineStart;
+                    int minDist = 999999;
+                    for (int j = lineStart; j <= i; j++) {
+                        SIZE sz; GetTextExtentPoint32U(dc, text.c_str() + lineStart, j - lineStart, &sz);
+                        int d = std::abs((int)sz.cx - lx);
+                        if (d < minDist) {
+                            minDist = d;
+                            bestI = j;
+                        }
+                        else if (sz.cx > lx) break;
+                    }
+                    return bestI;
+                }
+                currentLine++;
+                lineStart = i + 1;
+            }
+        }
+        return text.length();
+    }
+    void getXYFromCursor(HDC dc, const LumeString& text, int index, bool multi, int& outX, int& outY) {
+        int fontH = 16;
+        outX = 0;
+        outY = 0;
+        int currentLine = 0, lineStart = 0;
+        for (int i = 0; i <= text.length(); i++) {
+            if (i == index) {
+                SIZE sz; GetTextExtentPoint32U(dc, text.c_str() + lineStart, i - lineStart, &sz);
+                outX = sz.cx;
+                outY = multi ? (currentLine * fontH) : 0;
+                return;
+            }
+            if (text[i] == '\n') { currentLine++; lineStart = i + 1; }
+        }
+    }
     LumeMap<LumeString, InputState> g_inputs;
     LumeMap<LumeString, LumeString> g_texts;
     LumeMap<LumeString, int> g_offsets_y;
@@ -3001,7 +3038,9 @@ namespace Bindings {
             c = nv;
             auto i = g_inputs.find(id);
             if (i != g_inputs.end()) i->second.text = nv;
-            invalidateDOM();
+            if (HTP::findById(::g_doc.root, id)) {
+                invalidateDOM();
+            }
         }
     }
     const char* get_text(const char* id) {
@@ -3015,7 +3054,9 @@ namespace Bindings {
         auto& c = g_offsets_y[id];
         if (c != o) {
             c = o;
-            invalidateDOM();
+            if (HTP::findById(::g_doc.root, id)) {
+                invalidateDOM();
+            }
         }
     }
     int get_offset_y(const char* id) {
@@ -3023,8 +3064,13 @@ namespace Bindings {
         return i != g_offsets_y.end() ? i->second : 0;
     }
     void set_shimmer(const char* id, float s) {
-        g_shimmer_offsets[id] = s;
-        invalidateDOM();
+        auto& c = g_shimmer_offsets[id];
+        if (c != s) {
+            c = s;
+            if (HTP::findById(::g_doc.root, id)) {
+                invalidateDOM();
+            }
+        }
     }
     void on_click(const char* id, LumeAction action) {
         g_clicks[id] = static_cast<LumeAction&&>(action);
@@ -3515,22 +3561,9 @@ static int l_set_timer(lua_State* L) {
     int ref = luaL_ref(L, LUA_REGISTRYINDEX);
     int tid = ++g_timerN;
     g_timerRefs[tid] = ref;
-    SetTimer(g_mainWnd, tid, ms, [](HWND, UINT, UINT_PTR id, DWORD) {
-        if (!g_mainWnd || IsIconic(g_mainWnd)) return;
-        auto i = g_timerRefs.find((int)id);
-        if (i == g_timerRefs.end() || !g_L) return;
-        lua_rawgeti(g_L, LUA_REGISTRYINDEX, i->second);
-        if (lua_pcall(g_L, 0, 0, 0) != 0) {
-            const char* err = lua_tostring(g_L, -1);
-            OutputDebugStringA(err ? err : "Lua timer error\n");
-            KillTimer(g_mainWnd, id);
-            MessageBoxU(g_mainWnd, err ? err : "Unknown error", "Lua Timer Error", MB_OK | MB_ICONERROR);
-            lua_pop(g_L, 1);
-            luaL_unref(g_L, LUA_REGISTRYINDEX, i->second);
-            g_timerRefs.erase(i);
-        }
-        });
-    lua_pushinteger(L, tid); return 1;
+    SetTimer(g_mainWnd, tid, ms, NULL);
+    lua_pushinteger(L, tid);
+    return 1;
 }
 static int l_kill_timer(lua_State* L) {
     int id = (int)luaL_checkinteger(L, 1);
@@ -4784,19 +4817,22 @@ namespace Render {
         };
         Est_Entry* est_tab = nullptr; size_t est_cap = 0, est_sz = 0;
         void clear_th() {
-            if (th_tab) HeapFree(GetProcessHeap(), 0, th_tab);
-            th_tab = nullptr;
-            th_cap = th_sz = 0;
+            if (th_tab && th_cap > 0) {
+                ZeroMemory(th_tab, th_cap * sizeof(TH_Entry));
+                th_sz = 0;
+            }
         }
         void clear_ts() {
-            if (ts_tab) HeapFree(GetProcessHeap(), 0, ts_tab);
-            ts_tab = nullptr;
-            ts_cap = ts_sz = 0;
+            if (ts_tab && ts_cap > 0) {
+                ZeroMemory(ts_tab, ts_cap * sizeof(TS_Entry));
+                ts_sz = 0;
+            }
         }
         void clear_est() {
-            if (est_tab) HeapFree(GetProcessHeap(), 0, est_tab);
-            est_tab = nullptr;
-            est_cap = est_sz = 0;
+            if (est_tab && est_cap > 0) {
+                ZeroMemory(est_tab, est_cap * sizeof(Est_Entry));
+                est_sz = 0;
+            }
         }
         int* get_th(uint64_t k) {
             if (!th_cap) return nullptr;
@@ -4849,13 +4885,21 @@ namespace Render {
                 }
             }
             size_t idx = (k ^ (k >> 32)) & (ts_cap - 1);
-            while (ts_tab[idx].occ) {if (ts_tab[idx].k == k) {ts_tab[idx].v = v; return;} idx = (idx + 1) & (ts_cap - 1);}
-            ts_tab[idx] = {k, v, true}; ts_sz++;
+            while (ts_tab[idx].occ) {
+                if (ts_tab[idx].k == k) {
+                    ts_tab[idx].v = v;
+                    return;
+                }
+                idx = (idx + 1) & (ts_cap - 1);
+            }
+            ts_tab[idx] = {k, v, true};
+            ts_sz++;
         }
 
         int* get_est(const HTP::Elem* k) {
             if (!est_cap) return nullptr;
-            uint64_t ptr = (uint64_t)k; size_t idx = (ptr ^ (ptr >> 32)) & (est_cap - 1);
+            uint64_t ptr = (uint64_t)k;
+            size_t idx = (ptr ^ (ptr >> 32)) & (est_cap - 1);
             while (est_tab[idx].occ) {if (est_tab[idx].k == k) return &est_tab[idx].v; idx = (idx + 1) & (est_cap - 1);}
             return nullptr;
         }
@@ -4887,7 +4931,7 @@ namespace Render {
         LumeVector<GLCache> glCanvases;
         LumeVector<Hit> docHits;
         LumeVector<Hit>* pH = nullptr;
-        inline const char* getRefPtr(const HTP::Props& p, const char* k) const { return p.get(k, ""); }
+        inline const char* getRefPtr(const HTP::Props& p, const char* k) const {return p.get(k, "");}
         uint64_t hashText(const char* str, int w, HFONT f) {
             uint64_t h = 2166136261u;
             while (*str) { h ^= (uint8_t)*str++; h *= 16777619u; }
@@ -4901,8 +4945,10 @@ namespace Render {
             auto ob = SelectObject(dc, b);
             auto op = SelectObject(dc, p);
             RoundRect(dc, x, y, x + w, y + h, rad, rad);
-            SelectObject(dc, ob); SelectObject(dc, op);
-            DeleteObject(b); DeleteObject(p);
+            SelectObject(dc, ob);
+            SelectObject(dc, op);
+            DeleteObject(b);
+            DeleteObject(p);
         }
         int estH(const LumeSharedPtr<HTP::Elem>& e) {
             if (!e) return 0;
@@ -4910,19 +4956,36 @@ namespace Render {
             if (cached) return *cached;
             int res = 20;
             switch (e->type) {
-            case HTP::EType::TEXT: case HTP::EType::ITEM: res = e->props.getInt("size", 16) + 8; break;
-            case HTP::EType::LINK: res = e->props.getInt("size", 16) + 8; break;
-            case HTP::EType::BUTTON: res = e->props.getInt("height", 35) + 8; break;
-            case HTP::EType::INPUT_FIELD: res = e->props.getInt("height", 28) + 8; break;
-            case HTP::EType::DIVIDER: res = e->props.getInt("margin", 10) * 2 + e->props.getInt("thickness", 1); break;
-            case HTP::EType::IMAGE: res = e->props.getInt("height", 100) + 8; break;
-            case HTP::EType::BR: res = e->props.getInt("size", 16); break;
-            case HTP::EType::CANVAS: case HTP::EType::GL_CANVAS: res = e->props.getInt("height", 200) + 8; break;
-            case HTP::EType::SCRIPT: res = 0; break;
+            case HTP::EType::TEXT: case HTP::EType::ITEM:
+                res = e->props.getInt("size", 16) + 8;
+                break;
+            case HTP::EType::LINK:
+                res = e->props.getInt("size", 16) + 8;
+                break;
+            case HTP::EType::BUTTON:
+                res = e->props.getInt("height", 35) + 8;
+                break;
+            case HTP::EType::INPUT_FIELD:
+                res = e->props.getInt("height", 28) + 8;
+                break;
+            case HTP::EType::DIVIDER:
+                res = e->props.getInt("margin", 10) * 2 + e->props.getInt("thickness", 1); break;
+            case HTP::EType::IMAGE:
+                res = e->props.getInt("height", 100) + 8;
+                break;
+            case HTP::EType::BR:
+                res = e->props.getInt("size", 16); break;
+            case HTP::EType::CANVAS: case HTP::EType::GL_CANVAS:
+                res = e->props.getInt("height", 200) + 8;
+                break;
+            case HTP::EType::SCRIPT:
+                res = 0;
+                break;
             case HTP::EType::BLOCK: case HTP::EType::COLUMN: {
                 int h = e->props.getInt("padding", 10) * 2 + e->props.getInt("margin", 5) * 2;
                 for (auto& c : e->children) h += estH(c);
-                res = h; break;
+                res = h;
+                break;
             }
             case HTP::EType::ROW: {
                 int m = 0; for (auto& c : e->children) m = lume_max(m, estH(c));
@@ -5036,6 +5099,7 @@ namespace Render {
                 }
                 if (nc > 1) totalContentWidth += gap * (nc - 1);
                 int avail = mw - mar * 2 - pad * 2, flexW = 0;
+                if (avail < 1) avail = 1;
                 if (fc > 0 && avail > fw) flexW = (avail - fw) / fc;
                 if (flexW < 50 && fc > 0) flexW = 50;
                 int cx = x + mar + pad;
@@ -5065,12 +5129,28 @@ namespace Render {
                 }
                 curY = y + pad;
                 for (auto& c : e->children) {
-                    int cmw = mw - pad * 2, cx = x + pad, cwToPass = cmw;
-                    if (currentAlign == "center") { int ew = estW(c, cmw); if (ew < cmw) { cx += (cmw - ew) / 2; cwToPass = ew; } }
-                    else if (currentAlign == "right") { int ew = estW(c, cmw); if (ew < cmw) { cx += (cmw - ew); cwToPass = ew; } }
+                    int cmw = mw - pad * 2;
+                    if (cmw < 1) cmw = 1;
+                    int cx = x + pad, cwToPass = cmw;
+                    if (currentAlign == "center") {
+                        int ew = estW(c, cmw);
+                        if (ew < cmw) {
+                            cx += (cmw - ew) / 2;
+                            cwToPass = ew;
+                        }
+                    }
+                    else if (currentAlign == "right") {
+                        int ew = estW(c, cmw);
+                        if (ew < cmw) {
+                            cx += (cmw - ew);
+                            cwToPass = ew;
+                        }
+                    }
                     draw(refDC, c, cx, curY, cwToPass, currentAlign);
                 }
-                blockHeights[heightIdx] = (curY - y) + pad; curY += pad; break;
+                blockHeights[heightIdx] = (curY - y) + pad;
+                curY += pad;
+                break;
             }
             case HTP::EType::BLOCK: {
                 int pad = e->props.getInt("padding", 10), mar = e->props.getInt("margin", 5), rad = e->props.getInt("border-radius", 6), z = e->props.getInt("z-index", 0);
@@ -5085,12 +5165,28 @@ namespace Render {
                 }
                 curY = startY + pad;
                 for (auto& c : e->children) {
-                    int cmw = mw - (mar + pad) * 2, cx = x + mar + pad, cwToPass = cmw;
-                    if (currentAlign == "center") { int ew = estW(c, cmw); if (ew < cmw) { cx += (cmw - ew) / 2; cwToPass = ew; } }
-                    else if (currentAlign == "right") { int ew = estW(c, cmw); if (ew < cmw) { cx += (cmw - ew); cwToPass = ew; } }
+                    int cmw = mw - (mar + pad) * 2;
+                    if (cmw < 1) cmw = 1;
+                    int cx = x + mar + pad, cwToPass = cmw;
+                    if (currentAlign == "center") {
+                        int ew = estW(c, cmw);
+                        if (ew < cmw) {
+                            cx += (cmw - ew) / 2;
+                            cwToPass = ew;
+                        }
+                    }
+                    else if (currentAlign == "right") {
+                        int ew = estW(c, cmw);
+                        if (ew < cmw) {
+                            cx += (cmw - ew);
+                            cwToPass = ew;
+                        }
+                    }
                     draw(refDC, c, cx, curY, cwToPass, currentAlign);
                 }
-                blockHeights[heightIdx] = (curY - startY) + pad; curY += pad + mar; break;
+                blockHeights[heightIdx] = (curY - startY) + pad;
+                curY += pad + mar;
+                break;
             }
             case HTP::EType::TEXT: {
                 const char* pId = getRefPtr(e->props, "id");
@@ -5199,62 +5295,106 @@ namespace Render {
                 int sz = e->props.getInt("size", 14), rad = e->props.getInt("border-radius", 6), z = e->props.getInt("z-index", 0);
                 auto bg = e->props.getColor("background", { 233,69,96 }), col = e->props.getColor("color", { 255,255,255 });
                 LumeString textStr = pCt;
-                renderQueue.push_back({ z, [this, x, by, bw, bh, bg, rad, f = FontCache::get(sz, true), col, textStr]() {
+                renderQueue.push_back({z, [this, x, by, bw, bh, bg, rad, f = FontCache::get(sz, true), col, textStr]() {
                     HDC dc = this->docDC;
                     fillRR(dc, x, by, bw, bh, bg, rad);
                     auto of = SelectObject(dc, f);
                     SetTextColor(dc, col.cr()); SetBkMode(dc, TRANSPARENT);
-                    RECT rc = { x, by, x + bw, by + bh };
+                    RECT rc = {x, by, x + bw, by + bh};
                     DrawTextU(dc, textStr.c_str(), -1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
                     SelectObject(dc, of);
-                } });
-                if (pH) { Hit h; h.r = { x, by, x + bw, by + bh }; h.url = url; h.action = pAct; h.elemId = pId; h.isBtn = true; h.zIndex = z; pH->push_back(h); }
-                curY = y + bh + 8; break;
+                }});
+                if (pH) {
+                    Hit h; h.r = {x, by, x + bw, by + bh};
+                    h.url = url;
+                    h.action = pAct;
+                    h.elemId = pId;
+                    h.isBtn = true;
+                    h.zIndex = z;
+                    pH->push_back(h);
+                }
+                curY = y + bh + 8;
+                break;
             }
             case HTP::EType::INPUT_FIELD: {
-                int ih = e->props.getInt("height", 28), iy = y, iw = e->props.getInt("width", 250), z = e->props.getInt("z-index", 0);
+                bool isMulti = e->props.getBool("multiline", false);
+                int ih = e->props.getInt("height", isMulti ? 80 : 28), iy = y, iw = e->props.getInt("width", 250), z = e->props.getInt("z-index", 0);
                 const char* pId = getRefPtr(e->props, "id"), * pPh = getRefPtr(e->props, "placeholder");
                 LumeString id = (pId[0] == '\0') ? ("inp_" + lume_to_string(y)) : pId;
                 auto& inp = Bindings::g_inputs[id];
                 if (inp.placeholder.empty() && pPh[0] != '\0') inp.placeholder = pPh;
-                inp.x = x; inp.y = iy; inp.w = iw; inp.h = ih;
+                inp.x = x; inp.y = iy; inp.w = iw; inp.h = ih; inp.multiline = isMulti;
                 bool foc = (Bindings::g_focusId == id);
-                int cursorToDraw = inp.cursor; LumeString textStr = inp.text, phStr = inp.placeholder;
-                renderQueue.push_back({ z, [this, x, iy, iw, ih, foc, textStr, phStr, cursorToDraw]() {
+                renderQueue.push_back({ z, [this, x, iy, iw, ih, foc, id, isMulti]() {
+                    auto& inp = Bindings::g_inputs[id];
                     HDC dc = this->docDC;
                     HBRUSH br = CreateSolidBrush(foc ? RGB(50, 50, 80) : RGB(40, 40, 60));
                     HPEN pn = CreatePen(PS_SOLID, foc ? 2 : 1, foc ? RGB(10, 189, 227) : RGB(100, 100, 140));
-                    auto ob = SelectObject(dc, br);
-                    auto op = SelectObject(dc, pn);
+                    auto ob = SelectObject(dc, br); auto op = SelectObject(dc, pn);
                     RoundRect(dc, x, iy, x + iw, iy + ih, 4, 4);
-                    SelectObject(dc, ob);
-                    SelectObject(dc, op);
-                    DeleteObject(br);
-                    DeleteObject(pn);
+                    SelectObject(dc, ob); SelectObject(dc, op);
+                    DeleteObject(br); DeleteObject(pn);
+                    int save = SaveDC(dc);
+                    IntersectClipRect(dc, x + 4, iy + 4, x + iw - 4, iy + ih - 4);
                     auto of = SelectObject(dc, FontCache::get(14)); SetBkMode(dc, TRANSPARENT);
-                    if (textStr[0] != '\0') {
-                        SetTextColor(dc, RGB(230, 230, 240));
-                        RECT rc = {x + 6, iy + 2, x + iw - 4, iy + ih - 2};
-                        DrawTextU(dc, textStr.c_str(), -1, &rc, DT_VCENTER | DT_SINGLELINE);
-                        if (foc) {
-                            int cp = lume_min(cursorToDraw, (int)textStr.length());
-                            SIZE ts;
-                            GetTextExtentPoint32U(dc, textStr.c_str(), cp, &ts);
+                    int fontH = 16;
+                    int curX = 0, curY = 0;
+                    if (foc) {
+                        Bindings::getXYFromCursor(dc, inp.text, inp.cursor, isMulti, curX, curY);
+                        if (curX - inp.scrollX > iw - 16) inp.scrollX = curX - (iw - 16);
+                        if (curX - inp.scrollX < 0) inp.scrollX = curX;
+                        if (curY - inp.scrollY > ih - fontH - 8) inp.scrollY = curY - (ih - fontH - 8);
+                        if (curY - inp.scrollY < 0) inp.scrollY = curY;
+                    }
+                    else {
+                        if (!isMulti) inp.scrollX = 0;
+                        inp.scrollY = 0;
+                    }
+                    int drawX = x + 6 - inp.scrollX;
+                    int drawY = iy + 4 - inp.scrollY;
+                    auto drawLine = [&](int ly, const char* str, int len, int lineStartIdx) {
+                        if (foc && inp.selStart != -1 && inp.selStart != inp.cursor) {
+                            int s = lume_max(lineStartIdx, lume_min(inp.cursor, inp.selStart));
+                            int e = lume_max(lineStartIdx, lume_min(lineStartIdx + len, lume_max(inp.cursor, inp.selStart)));
+                            if (s < e) {
+                                SIZE pre = {0,0}, sel = {0,0};
+                                GetTextExtentPoint32U(dc, str, s - lineStartIdx, &pre);
+                                GetTextExtentPoint32U(dc, str + (s - lineStartIdx), e - s, &sel);
+                                RECT sr = {drawX + pre.cx, drawY + ly, drawX + pre.cx + sel.cx, drawY + ly + fontH};
+                                HBRUSH selBr = CreateSolidBrush(RGB(0, 120, 215));
+                                FillRect(dc, &sr, selBr);
+                                DeleteObject(selBr);
+                            }
+                        }
+                        RECT rc = {drawX, drawY + ly, x + iw, drawY + ly + fontH};
+                        DrawTextU(dc, str, len, &rc, DT_SINGLELINE | DT_NOCLIP);
+                        if (foc && inp.cursor >= lineStartIdx && inp.cursor <= lineStartIdx + len) {
+                            SIZE pre = {0,0};
+                            GetTextExtentPoint32U(dc, str, inp.cursor - lineStartIdx, &pre);
                             HPEN cpen = CreatePen(PS_SOLID, 1, RGB(255, 255, 255));
                             auto ocp = SelectObject(dc, cpen);
-                            MoveToEx(dc, x + 6 + ts.cx, iy + 4, 0);
-                            LineTo(dc, x + 6 + ts.cx, iy + ih - 4);
+                            MoveToEx(dc, drawX + pre.cx, drawY + ly, 0);
+                            LineTo(dc, drawX + pre.cx, drawY + ly + fontH);
                             SelectObject(dc, ocp);
                             DeleteObject(cpen);
                         }
-                    }
-                    else if (phStr[0] != '\0') {
-                        SetTextColor(dc, RGB(120, 120, 140));
-                        RECT rc = {x + 6, iy + 2, x + iw - 4, iy + ih - 2};
-                        DrawTextU(dc, phStr.c_str(), -1, &rc, DT_VCENTER | DT_SINGLELINE);
+                    };
+                    if (inp.text.empty() && !inp.placeholder.empty()) {
+                        SetTextColor(dc, RGB(120, 120, 140)); drawLine(0, inp.placeholder.c_str(), inp.placeholder.length(), 0);
+                    } else {
+                        SetTextColor(dc, RGB(230, 230, 240));
+                        int currentY = 0, lineStart = 0;
+                        for (int i = 0; i <= inp.text.length(); i++) {
+                            if (i == inp.text.length() || inp.text[i] == '\n') {
+                                drawLine(currentY, inp.text.c_str() + lineStart, i - lineStart, lineStart);
+                                currentY += fontH;
+                                lineStart = i + 1;
+                            }
+                        }
                     }
                     SelectObject(dc, of);
-                } });
+                    RestoreDC(dc, save);
+                }});
                 if (pH) {
                     Hit h; h.r = {x, iy, x + iw, iy + ih};
                     h.elemId = id;
@@ -5262,7 +5402,8 @@ namespace Render {
                     h.zIndex = z;
                     pH->push_back(h);
                 }
-                curY = y + ih + 8; break;
+                curY = y + ih + 8;
+                break;
             }
             case HTP::EType::CANVAS: {
                 int ch = e->props.getInt("height", 200), cy = y, cw = e->props.getInt("width", 400), z = e->props.getInt("z-index", 0);
@@ -5278,7 +5419,8 @@ namespace Render {
                     SelectObject(dc, ob); SelectObject(dc, op); DeleteObject(p);
                     if (cb->dc) BitBlt(dc, x, cy, cw, ch, cb->dc, 0, 0, SRCCOPY);
                 }});
-                curY = y + ch + 8; break;
+                curY = y + ch + 8;
+                break;
             }
             case HTP::EType::GL_CANVAS: {
                 int ch = e->props.getInt("height", 200), cw = e->props.getInt("width", 400), cy = y, z = e->props.getInt("z-index", 0);
@@ -5434,9 +5576,9 @@ namespace Render {
         HDC docDC = nullptr;
         LumeVector<Hit> hits;
         ~Engine() {
-            clear_th();
-            clear_ts();
-            clear_est();
+            if (th_tab) HeapFree(GetProcessHeap(), 0, th_tab);
+            if (ts_tab) HeapFree(GetProcessHeap(), 0, ts_tab);
+            if (est_tab) HeapFree(GetProcessHeap(), 0, est_tab);
         }
         int totalH() const {return contentH;}
         void setScroll(int y) {scrollY = lume_max(0, y);}
@@ -6025,21 +6167,45 @@ LumeString parseMarkdown(const LumeString& mdText) {
     htp += "}\n";
     return htp;
 }
+void processLCFG(const LumeString& content, const LumeString& lcfgUrl);
 void loadContent(const LumeString& content, const LumeString& url, bool isInternalHtp = false) {
+    LumeString cleanUrl = url;
+    if (cleanUrl.length() > 5 && cleanUrl.substr(cleanUrl.length() - 5) == " !raw") cleanUrl = cleanUrl.substr(0, cleanUrl.length() - 5);
+    else if (cleanUrl.length() > 5 && cleanUrl.substr(cleanUrl.length() - 5) == " !htp") cleanUrl = cleanUrl.substr(0, cleanUrl.length() - 5);
+    LumeString ext_check;
+    auto dot_check = cleanUrl.find_last_of('.');
+    if (dot_check != LumeString::npos) {
+        ext_check = cleanUrl.substr(dot_check);
+        CharLowerBuffA(&ext_check[0], (DWORD)ext_check.length());
+    }
+    if (!isInternalHtp && ext_check == ".lcfg" && url.find(" !raw") == LumeString::npos) {
+        processLCFG(content, url);
+        return;
+    }
     LumeString finalContent = content;
     LumeString displayUrl = url;
-    if (Plugins::g_activeProtocol && Plugins::g_activeCustomPageContext) {
-        Plugins::g_activeProtocol->free_page(Plugins::g_activeCustomPageContext);
-        Plugins::g_activeProtocol = nullptr;
-        Plugins::g_activeCustomPageContext = nullptr;
+    if (Plugins::g_activeCustomEngine) {
+        if (Plugins::g_activeCustomPageContext && Plugins::g_activeCustomEngine->free_page) {
+            Plugins::g_activeCustomEngine->free_page(Plugins::g_activeCustomPageContext);
+        }
+        Plugins::g_activeCustomEngine = nullptr;
     }
+    if (Plugins::g_activeProtocol) {
+        if (Plugins::g_activeCustomPageContext && Plugins::g_activeProtocol->free_page) {
+            Plugins::g_activeProtocol->free_page(Plugins::g_activeCustomPageContext);
+        }
+        Plugins::g_activeProtocol = nullptr;
+    }
+    Plugins::g_activeCustomPageContext = nullptr;
     Script::reset();
     Script::init();
     Plugins::initAllPlugins(Script::g_L);
     LumeString scheme = displayUrl.substr(0, displayUrl.find("://"));
     if (Plugins::g_protocols.find(scheme) != Plugins::g_protocols.end() && !content.empty() && content[0] >= '0' && content[0] <= '9') {
         unsigned long long ptrVal = 0;
-        for (char c : content) { if (c >= '0' && c <= '9') ptrVal = ptrVal * 10 + (c - '0'); }
+        for (char c : content) {
+            if (c >= '0' && c <= '9') ptrVal = ptrVal * 10 + (c - '0');
+        }
         Plugins::g_activeProtocol = &Plugins::g_protocols[scheme];
         Plugins::g_activeCustomPageContext = (void*)ptrVal;
         g_curUrl = displayUrl;
@@ -6049,15 +6215,12 @@ void loadContent(const LumeString& content, const LumeString& url, bool isIntern
         invalidateDOM();
         return;
     }
-    bool forceRaw = false;
-    bool forceHtp = false;
+    bool forceRaw = false, forceHtp = false;
     if (displayUrl.length() > 5 && displayUrl.substr(displayUrl.length() - 5) == " !raw") {
-        forceRaw = true;
-        displayUrl = displayUrl.substr(0, displayUrl.length() - 5);
+        forceRaw = true; displayUrl = displayUrl.substr(0, displayUrl.length() - 5);
     }
     else if (displayUrl.length() > 5 && displayUrl.substr(displayUrl.length() - 5) == " !htp") {
-        forceHtp = true;
-        displayUrl = displayUrl.substr(0, displayUrl.length() - 5);
+        forceHtp = true; displayUrl = displayUrl.substr(0, displayUrl.length() - 5);
     }
     LumeString ext;
     auto dot = displayUrl.find_last_of('.');
@@ -6068,48 +6231,30 @@ void loadContent(const LumeString& content, const LumeString& url, bool isIntern
     auto customEngineIt = Plugins::g_customPages.find(ext);
     if (!isInternalHtp && !forceHtp && !forceRaw && customEngineIt != Plugins::g_customPages.end()) {
         Plugins::g_activeCustomEngine = &customEngineIt->second;
-        Plugins::g_activeCustomPageContext = Plugins::g_activeCustomEngine->load_page(
-            displayUrl.c_str(), content.c_str(), content.length());
+        Plugins::g_activeCustomPageContext = Plugins::g_activeCustomEngine->load_page(displayUrl.c_str(), content.c_str(), content.length());
         g_curUrl = displayUrl;
         g_ren.setScroll(0);
         SetWindowTextU(g_mainWnd, (LumeString("Lume (Custom Render) - ") + displayUrl).c_str());
         SetWindowTextU(g_addressBar, url.c_str());
-        invalidateContent();
+        invalidateDOM();
         return;
     }
     if (!isInternalHtp) {
         bool isText = false;
-        if (forceRaw) {
-            isText = true;
-        }
-        else if (forceHtp) {
-            isText = false;
-        }
-        else {
+        if (forceRaw) isText = true;
+        else if (!forceHtp) {
             LumeString path = displayUrl;
-            auto q = path.find('?');
-            if (q != LumeString::npos) path = path.substr(0, q);
-            auto slash = path.find_last_of('/');
-            if (slash != LumeString::npos) path = path.substr(slash + 1);
+            auto q = path.find('?'); if (q != LumeString::npos) path = path.substr(0, q);
+            auto slash = path.find_last_of('/'); if (slash != LumeString::npos) path = path.substr(slash + 1);
             if (!path.empty()) {
                 auto p_dot = path.find_last_of('.');
-                if (p_dot == LumeString::npos) {
-                    isText = true;
-                }
+                if (p_dot == LumeString::npos) isText = true;
                 else {
                     LumeString p_ext = path.substr(p_dot);
                     CharLowerBuffA(&p_ext[0], (DWORD)p_ext.length());
-                    if (p_ext == ".txt" || p_ext == ".json" || p_ext == ".log" || p_ext == ".cpp" || p_ext == ".h") {
-                        isText = true;
-                    }
-                    else if (p_ext == ".md") {
-                        finalContent = parseMarkdown(content);
-                        isText = false;
-                    }
-                    else if (p_ext == ".wasm") {
-                        finalContent = "@page{title:\"WASM Module\";background:\"#09090b\";}@block{align:\"center\";padding:50;@text{content:\"WebAssembly Binary Module\";size:30;color:\"#10b981\";bold:\"true\";}@br{size:10;}@text{content:\"Size: " + lume_to_string(content.size()) + " bytes\";size:16;color:\"#a1a1aa\";}}";
-                        isText = false;
-                    }
+                    if (p_ext == ".txt" || p_ext == ".json" || p_ext == ".log" || p_ext == ".cpp" || p_ext == ".h") isText = true;
+                    else if (p_ext == ".md") { finalContent = parseMarkdown(content); isText = false; }
+                    else if (p_ext == ".wasm") { finalContent = "@page{title:\"WASM Module\";background:\"#09090b\";}@block{align:\"center\";padding:50;@text{content:\"WebAssembly Binary Module\";size:30;color:\"#10b981\";bold:\"true\";}@br{size:10;}@text{content:\"Size: " + lume_to_string(content.size()) + " bytes\";size:16;color:\"#a1a1aa\";}}"; isText = false; }
                 }
             }
         }
@@ -6125,18 +6270,11 @@ void loadContent(const LumeString& content, const LumeString& url, bool isIntern
             if (!e) return;
             if (e->type == HTP::EType::SCRIPT && !e->scriptCode.empty()) {
                 LumeString lang = e->props.get("lang", "lua");
-                if (lang == "lua") {
-                    Script::exec(e->scriptCode.c_str());
-                }
+                if (lang == "lua") Script::exec(e->scriptCode.c_str());
                 else {
                     auto it = Plugins::g_scriptEngines.find(lang);
-                    if (it != Plugins::g_scriptEngines.end() && it->second) {
-                        it->second(e->scriptCode.c_str());
-                    }
-                    else {
-                        LumeString err = "Lume Engine: Unknown script language '" + lang + "'\n";
-                        OutputDebugStringA(err.c_str());
-                    }
+                    if (it != Plugins::g_scriptEngines.end() && it->second) it->second(e->scriptCode.c_str());
+                    else OutputDebugStringA(("Lume Engine: Unknown script language '" + lang + "'\n").c_str());
                 }
             }
             for (auto& c : e->children) run(c);
@@ -6145,7 +6283,82 @@ void loadContent(const LumeString& content, const LumeString& url, bool isIntern
     runner.run(g_doc.root);
     SetWindowTextU(g_mainWnd, (g_doc.title + " - Lume").c_str());
     SetWindowTextU(g_addressBar, url.c_str());
-    invalidateContent();
+    invalidateDOM();
+}
+namespace LCFG {
+    struct Config {
+        LumeVector<LumeString> plugins;
+        LumeString mainFile;
+    };
+    bool isSafeLocalTarget(const LumeString& file) {
+        if (file.empty()) return false;
+        if (file.find("http://") == 0 || file.find("https://") == 0 || file.find("file://") == 0) return false;
+        if (file.find("..") != LumeString::npos) return false;
+        if (file.find(":\\") != LumeString::npos || file.find(":/") != LumeString::npos) return false;
+        if (file[0] == '/' || file[0] == '\\') return false;
+        return true;
+    }
+    Config parse(const LumeString& text) {
+        Config cfg;
+        LumeString section = "";
+        size_t pos = 0;
+        while (pos < text.length()) {
+            size_t next = text.find('\n', pos);
+            LumeString line = (next == LumeString::npos) ? text.substr(pos) : text.substr(pos, next - pos);
+            pos = (next == LumeString::npos) ? text.length() : next + 1;
+            if (!line.empty() && line.back() == '\r') line.pop_back();
+            size_t start = 0;
+            while (start < line.length() && (line[start] == ' ' || line[start] == '\t')) start++;
+            if (start > 0) line = line.substr(start);
+            while (!line.empty() && (line.back() == ' ' || line.back() == '\t')) line.pop_back();
+            if (line.empty() || line.find("//") == 0) continue;
+            if (line[0] == '[' && line.back() == ']') {
+                section = line.substr(1, line.length() - 2);
+                continue;
+            }
+            if (section == "plugins") {
+                size_t commentPos = line.find(" //");
+                if (commentPos != LumeString::npos) line = line.substr(0, commentPos);
+                while (!line.empty() && (line.back() == ' ' || line.back() == '\t')) line.pop_back();
+                if (!line.empty()) cfg.plugins.push_back(line);
+            }
+            else if (section == "main") {
+                if (line.find("file") == 0) {
+                    size_t eq = line.find('=');
+                    if (eq != LumeString::npos) {
+                        LumeString val = line.substr(eq + 1);
+                        size_t vStart = 0;
+                        while (vStart < val.length() && (val[vStart] == ' ' || val[vStart] == '\t' || val[vStart] == '"')) vStart++;
+                        val = val.substr(vStart);
+
+                        size_t commentPos = val.find(" //");
+                        if (commentPos != LumeString::npos) val = val.substr(0, commentPos);
+
+                        while (!val.empty() && (val.back() == ' ' || val.back() == '\t' || val.back() == '"')) val.pop_back();
+                        cfg.mainFile = val;
+                    }
+                }
+            }
+        }
+        return cfg;
+    }
+}
+void processLCFG(const LumeString& content, const LumeString& lcfgUrl) {
+    LCFG::Config cfg = LCFG::parse(content);
+    if (!LCFG::isSafeLocalTarget(cfg.mainFile)) {
+        loadContent(Pages::error("Security Error: Target file must be local and relative (no absolute paths or external URLs).", cfg.mainFile), lcfgUrl, true);
+        return;
+    }
+    LumeString loadingHtp = "@page{title:\"Loading App...\";background:\"#09090b\";}@block{align:\"center\";padding:60;margin:20;background:\"#18181b\";border-radius:10;@text{content:\"Downloading required engines/plugins...\";size:22;color:\"#3b82f6\";bold:\"true\";}@br{size:15;}@text{content:\"Please wait.\";size:15;color:\"#a1a1aa\";}}";
+    loadContent(loadingHtp, lcfgUrl, true);
+    LumeThread::RunAsync([cfg, lcfgUrl]() {
+        for (const auto& purl : cfg.plugins) {
+            Plugins::loadFromNet(purl, lcfgUrl, Script::g_L);
+        }
+        LumeString targetUrl = resolveUrl(cfg.mainFile, lcfgUrl);
+        LumeString* deferredUrl = new LumeString(targetUrl);
+        PostMessage(g_mainWnd, WM_NAVIGATE_DEFERRED, (WPARAM)deferredUrl, 0);
+    });
 }
 void loadFile(const LumeString& fp) {
     LumeString originalUrl = fp;
@@ -6346,9 +6559,10 @@ LRESULT CALLBACK AddrProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         return 0;
     }
     if (m == WM_CHAR && w == VK_RETURN) return 0;
-    return CallWindowProcA(g_origAddr, h, m, w, l);
+    return CallWindowProcW(g_origAddr, h, m, w, l);
 }
 LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
+    static bool g_draggingInput = false;
     switch (msg) {
     case WM_CREATE: {
         CreateWindowW(L"BUTTON", L"<", WS_CHILD | WS_VISIBLE, 4, 6, 30, 28, hw, (HMENU)ID_BACK, 0, 0);
@@ -6400,6 +6614,7 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
         }
         else {
             int w = cr.right;
+            if (w < 1) w = 1;
             int h = cr.bottom - TOOLBAR_H - STATUS_H;
             if (h < 1) h = 1;
             if (ps.rcPaint.top < TOOLBAR_H) {
@@ -6486,6 +6701,18 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
             }
             return 0;
         }
+        if (g_draggingInput && !Bindings::g_focusId.empty()) {
+            auto& inp = Bindings::g_inputs[Bindings::g_focusId];
+            HDC dc = GetDC(hw);
+            auto of = SelectObject(dc, FontCache::get(14));
+            int mx = GET_X_LPARAM(lp) - inp.x - 6 + inp.scrollX;
+            int my = GET_Y_LPARAM(lp) - TOOLBAR_H - inp.y - 4 + g_ren.getScroll() + inp.scrollY;
+            inp.cursor = Bindings::getCursorPosFromXY(dc, inp.text, mx, my, inp.multiline);
+            SelectObject(dc, of);
+            ReleaseDC(hw, dc);
+            invalidateDOM();
+            return 0;
+        }
         if (Plugins::g_activeCustomEngine && Plugins::g_activeCustomPageContext && Plugins::g_activeCustomEngine->on_mouse_move) {
             int mx = GET_X_LPARAM(lp);
             int my = GET_Y_LPARAM(lp) - TOOLBAR_H;
@@ -6500,6 +6727,12 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
         }
         return 0;
     }
+    case WM_LBUTTONUP:
+        if (g_draggingInput) {
+            g_draggingInput = false;
+            ReleaseCapture();
+        }
+        return 0;
     case WM_MOUSEWHEEL: {
         int d = GET_WHEEL_DELTA_WPARAM(wp);
         g_mouseWheelDelta += d;
@@ -6584,8 +6817,22 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
             }
             if (clickedHit.isInput) {
                 Bindings::g_focusId = clickedHit.elemId;
-                Bindings::g_inputs[clickedHit.elemId].focused = true;
-                Bindings::g_inputs[clickedHit.elemId].cursor = (int)Bindings::g_inputs[clickedHit.elemId].text.length();
+                auto& inp = Bindings::g_inputs[clickedHit.elemId];
+                inp.focused = true;
+                HDC dc = GetDC(hw);
+                auto of = SelectObject(dc, FontCache::get(14));
+                int newC = Bindings::getCursorPosFromXY(dc, inp.text, mx - clickedHit.r.left - 6 + inp.scrollX, my - clickedHit.r.top - 4 + inp.scrollY, inp.multiline);
+                if (GetKeyState(VK_SHIFT) & 0x8000) {
+                    if (inp.selStart == -1) inp.selStart = inp.cursor;
+                }
+                else {
+                    inp.selStart = newC;
+                }
+                inp.cursor = newC;
+                SelectObject(dc, of);
+                ReleaseDC(hw, dc);
+                g_draggingInput = true;
+                SetCapture(hw);
                 ci = true;
                 invalidateContent();
             }
@@ -6632,45 +6879,37 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
     }
     case WM_CHAR: {
         if (g_opt_plugins && Plugins::g_activeCustomEngine && Plugins::g_activeCustomPageContext) {
-            if (Plugins::g_activeCustomEngine->on_char) {
-                Plugins::g_activeCustomEngine->on_char(Plugins::g_activeCustomPageContext, (unsigned int)wp);
-            }
+            if (Plugins::g_activeCustomEngine->on_char) Plugins::g_activeCustomEngine->on_char(Plugins::g_activeCustomPageContext, (unsigned int)wp);
             return 0;
         }
         if (Bindings::g_focusId.empty()) break;
-        auto it = Bindings::g_inputs.find(Bindings::g_focusId);
-        if (it != Bindings::g_inputs.end()) {
-            auto& inp = it->second;
-            wchar_t wc = (wchar_t)wp;
-            if (wc == L'\b') {
-                if (inp.cursor > 0 && !inp.text.empty()) {
-                    while (inp.cursor > 0) {
-                        inp.cursor--;
-                        char erased = inp.text[inp.cursor];
-                        inp.text.erase(inp.cursor, 1);
-                        if ((erased & 0xC0) != 0x80) break;
-                    }
-                }
+        auto& inp = Bindings::g_inputs[Bindings::g_focusId];
+        wchar_t wc = (wchar_t)wp;
+        if (wc < 32 && wc != L'\b' && wc != L'\r') return 0;
+        if (wc == L'\b') {
+            if (inp.selStart != -1 && inp.selStart != inp.cursor) Bindings::deleteSelection(inp);
+            else if (inp.cursor > 0) {
+                inp.cursor--;
+                inp.text.erase(inp.cursor, 1);
             }
-            else if (wc == L'\r' || wc == L'\n') {
-                inp.focused = false;
-                Bindings::g_focusId.clear();
-            }
-            else if (wc >= 32) {
-                LumeWString ws(1, wc);
-                LumeString utf8_char = wstring_to_utf8(ws);
-                inp.text.insert(inp.cursor, utf8_char);
-                inp.cursor += (int)utf8_char.length();
-            }
-            invalidateDOM();
-            return 0;
         }
-        break;
+        else if (wc == L'\r' && !inp.multiline) {
+            inp.focused = false;
+            Bindings::g_focusId.clear();
+        }
+        else {
+            Bindings::deleteSelection(inp);
+            if (wc == L'\r') wc = L'\n';
+            LumeWString ws(1, wc);
+            LumeString utf8_char = wstring_to_utf8(ws);
+            inp.text.insert(inp.cursor, utf8_char);
+            inp.cursor += (int)utf8_char.length();
+        }
+        invalidateDOM();
+        return 0;
     }
     case WM_KEYDOWN: {
-        if ((lp & (1 << 30)) == 0 && wp < 256) {
-            Bindings::g_keyPressed[wp] = true;
-        }
+        if ((lp & (1 << 30)) == 0 && wp < 256) Bindings::g_keyPressed[wp] = true;
         if (wp == VK_ESCAPE) {
             if (g_mouseCaptured) {
                 releaseMouse();
@@ -6693,13 +6932,134 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
             }
             return 0;
         }
-        if (g_opt_plugins && Plugins::g_activeCustomEngine && Plugins::g_activeCustomPageContext) {
-            if (Plugins::g_activeCustomEngine->on_key_down) {
-                Plugins::g_activeCustomEngine->on_key_down(Plugins::g_activeCustomPageContext, (int)wp);
+        bool shift = GetKeyState(VK_SHIFT) & 0x8000;
+        bool ctrl = GetKeyState(VK_CONTROL) & 0x8000;
+        if (!Bindings::g_focusId.empty() && GetFocus() == hw) {
+            auto& inp = Bindings::g_inputs[Bindings::g_focusId];
+            int oldC = inp.cursor;
+            auto updateSel = [&](int oldCur) {
+                if (shift) {
+                    if (inp.selStart == -1) inp.selStart = oldCur;
+                }
+                else {
+                    inp.selStart = -1;
+                }
+            };
+            if (wp == 'C' && ctrl) {
+                if (inp.selStart != -1 && inp.selStart != inp.cursor) {
+                    int s = lume_min(inp.cursor, inp.selStart); int e = lume_max(inp.cursor, inp.selStart);
+                    LumeString sub = inp.text.substr(s, e - s);
+                    if (OpenClipboard(hw)) {
+                        EmptyClipboard();
+                        HGLOBAL hg = GlobalAlloc(GMEM_MOVEABLE, sub.length() + 1);
+                        if (hg) {
+                            memcpy(GlobalLock(hg), sub.c_str(), sub.length() + 1);
+                            GlobalUnlock(hg);
+                            SetClipboardData(CF_TEXT, hg);
+                        }
+                        CloseClipboard();
+                    }
+                }
+                return 0;
             }
-            if (wp == VK_F5) navigateTo(g_curUrl);
-            else if (wp == VK_BACK && GetFocus() != g_addressBar) goBack();
-            return 0;
+            if (wp == 'X' && ctrl) {
+                if (inp.selStart != -1 && inp.selStart != inp.cursor) {
+                    int s = lume_min(inp.cursor, inp.selStart);
+                    int e = lume_max(inp.cursor, inp.selStart);
+                    LumeString sub = inp.text.substr(s, e - s);
+                    if (OpenClipboard(hw)) {
+                        EmptyClipboard(); HGLOBAL hg = GlobalAlloc(GMEM_MOVEABLE, sub.length() + 1);
+                        if (hg) {
+                            memcpy(GlobalLock(hg), sub.c_str(), sub.length() + 1);
+                            GlobalUnlock(hg);
+                            SetClipboardData(CF_TEXT, hg);
+                        }
+                        CloseClipboard();
+                    }
+                    Bindings::deleteSelection(inp);
+                    invalidateDOM();
+                }
+                return 0;
+            }
+            if (wp == 'V' && ctrl) {
+                if (OpenClipboard(hw)) {
+                    HANDLE h = GetClipboardData(CF_TEXT);
+                    if (h) {
+                        const char* cl = (const char*)GlobalLock(h);
+                        if (cl) {
+                            Bindings::deleteSelection(inp);
+                            LumeString p = cl; p.remove_char('\r');
+                            if (!inp.multiline) p.remove_char('\n');
+                            inp.text.insert(inp.cursor, p); inp.cursor += (int)p.length();
+                            GlobalUnlock(h);
+                        }
+                    }
+                    CloseClipboard();
+                }
+                invalidateDOM();
+                return 0;
+            }
+            if (wp == 'A' && ctrl) {
+                inp.selStart = 0; inp.cursor = inp.text.length();
+                invalidateDOM();
+                return 0;
+            }
+            if (wp == VK_LEFT) {
+                if (ctrl) {
+                    while (inp.cursor > 0 && inp.text[inp.cursor - 1] == ' ') inp.cursor--;
+                    while (inp.cursor > 0 && inp.text[inp.cursor - 1] != ' ' && inp.text[inp.cursor - 1] != '\n') inp.cursor--;
+                } else if (inp.cursor > 0) inp.cursor--;
+                updateSel(oldC);
+                invalidateDOM();
+                return 0;
+            }
+            if (wp == VK_RIGHT) {
+                if (ctrl) {
+                    while (inp.cursor < inp.text.length() && inp.text[inp.cursor] != ' ' && inp.text[inp.cursor] != '\n') inp.cursor++;
+                    while (inp.cursor < inp.text.length() && inp.text[inp.cursor] == ' ') inp.cursor++;
+                } else if (inp.cursor < inp.text.length()) inp.cursor++;
+                updateSel(oldC);
+                invalidateDOM();
+                return 0;
+            }
+            if (wp == VK_UP && inp.multiline) {
+                HDC dc = GetDC(hw); auto of = SelectObject(dc, FontCache::get(14));
+                int cx, cy; Bindings::getXYFromCursor(dc, inp.text, inp.cursor, true, cx, cy);
+                inp.cursor = Bindings::getCursorPosFromXY(dc, inp.text, cx, cy - 16, true);
+                SelectObject(dc, of);
+                ReleaseDC(hw, dc);
+                updateSel(oldC);
+                invalidateDOM();
+                return 0;
+            }
+            if (wp == VK_DOWN && inp.multiline) {
+                HDC dc = GetDC(hw); auto of = SelectObject(dc, FontCache::get(14));
+                int cx, cy; Bindings::getXYFromCursor(dc, inp.text, inp.cursor, true, cx, cy);
+                inp.cursor = Bindings::getCursorPosFromXY(dc, inp.text, cx, cy + 16, true);
+                SelectObject(dc, of);
+                ReleaseDC(hw, dc);
+                updateSel(oldC);
+                invalidateDOM();
+                return 0;
+            }
+            if (wp == VK_HOME) {
+                inp.cursor = 0;
+                updateSel(oldC);
+                invalidateDOM();
+                return 0;
+            }
+            if (wp == VK_END) {
+                inp.cursor = inp.text.length();
+                updateSel(oldC);
+                invalidateDOM();
+                return 0;
+            }
+            if (wp == VK_DELETE) {
+                if (inp.selStart != -1 && inp.selStart != inp.cursor) Bindings::deleteSelection(inp);
+                else if (inp.cursor < inp.text.length()) inp.text.erase(inp.cursor, 1);
+                invalidateDOM();
+                return 0;
+            }
         }
         if (Script::g_keyDownRef != LUA_NOREF && Script::g_L && GetFocus() == hw && Bindings::g_focusId.empty()) {
             lua_rawgeti(Script::g_L, LUA_REGISTRYINDEX, Script::g_keyDownRef);
@@ -6707,64 +7067,6 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
             if (lua_pcall(Script::g_L, 1, 0, 0) != 0) {
                 OutputDebugStringA(lua_tostring(Script::g_L, -1));
                 lua_pop(Script::g_L, 1);
-            }
-        }
-        if (!Bindings::g_focusId.empty() && GetFocus() == hw) {
-            auto it = Bindings::g_inputs.find(Bindings::g_focusId);
-            if (it != Bindings::g_inputs.end()) {
-                auto& inp = it->second;
-                if (wp == VK_LEFT) {
-                    while (inp.cursor > 0) {
-                        inp.cursor--;
-                        if ((inp.text[inp.cursor] & 0xC0) != 0x80) break;
-                    }
-                    invalidateDOM();
-                    return 0;
-                }
-                if (wp == VK_RIGHT) {
-                    while (inp.cursor < (int)inp.text.length()) {
-                        inp.cursor++;
-                        if (inp.cursor >= (int)inp.text.length() || (inp.text[inp.cursor] & 0xC0) != 0x80) break;
-                    }
-                    invalidateDOM();
-                    return 0;
-                }
-                if (wp == VK_HOME) {
-                    inp.cursor = 0;
-                    invalidateDOM();
-                    return 0;
-                }
-                if (wp == VK_END) {
-                    inp.cursor = (int)inp.text.length();
-                    invalidateDOM();
-                    return 0;
-                }
-                if (wp == VK_DELETE) {
-                    if (inp.cursor < (int)inp.text.length()) {
-                        inp.text.erase(inp.cursor, 1);
-                        invalidateDOM();
-                    }
-                    return 0;
-                }
-                if (wp == 'V' && (GetKeyState(VK_CONTROL) & 0x8000)) {
-                    if (OpenClipboard(hw)) {
-                        HANDLE h = GetClipboardData(CF_TEXT);
-                        if (h) {
-                            const char* cl = (const char*)GlobalLock(h);
-                            if (cl) {
-                                LumeString p = cl;
-                                p.remove_char('\r');
-                                p.remove_char('\n');
-                                inp.text.insert(inp.cursor, p);
-                                inp.cursor += (int)p.length();
-                                GlobalUnlock(h);
-                            }
-                        }
-                        CloseClipboard();
-                    }
-                    invalidateDOM();
-                    return 0;
-                }
             }
         }
         if (wp == VK_F5) navigateTo(g_curUrl);
@@ -6891,8 +7193,23 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
         loadFile(wstring_to_utf8(wfp));
         return 0;
     }
-    case WM_TIMER:
+    case WM_TIMER: {
+        int id = (int)wp;
+        auto it = Script::g_timerRefs.find(id);
+        if (it != Script::g_timerRefs.end() && Script::g_L) {
+            lua_rawgeti(Script::g_L, LUA_REGISTRYINDEX, it->second);
+            if (lua_pcall(Script::g_L, 0, 0, 0) != 0) {
+                const char* err = lua_tostring(Script::g_L, -1);
+                OutputDebugStringA(err ? err : "Lua timer error\n");
+                KillTimer(hw, id);
+                MessageBoxU(hw, err ? err : "Unknown error", "Lua Timer Error", MB_OK | MB_ICONERROR);
+                lua_pop(Script::g_L, 1);
+                luaL_unref(Script::g_L, LUA_REGISTRYINDEX, it->second);
+                Script::g_timerRefs.erase(it);
+            }
+        }
         return 0;
+    }
     case WM_DESTROY:
         InterlockedExchange(&g_isShuttingDown, 1);
         MSG tempMsg;
