@@ -1,3 +1,4 @@
+// cl /EHsc /std:c++17 /O2 /utf-8 /I. main.cpp lib/*.c lib/wasm3/*.c /link gdi32.lib user32.lib comctl32.lib shell32.lib winhttp.lib ole32.lib
 /*
  * Copyright (C) 2026 mcreatorLoginDanila also known as NotAndrey
  *
@@ -792,8 +793,13 @@ HWND g_mainWnd = nullptr;
 HWND g_addressBar = nullptr;
 HWND g_statusBar = nullptr;
 HWND g_menuBtn = nullptr;
-const int TOOLBAR_H = 40;
+const int TOOLBAR_H = 65;
 const int STATUS_H = 24;
+#define MAX_LUME_TABS 10
+int g_tabIdx = 0;
+int g_tabCount = 1;
+HWND g_tabBtns[MAX_LUME_TABS] = { nullptr };
+HWND g_newTabBtn = nullptr;
 #define ID_ADDR 1001
 #define ID_GO   1002
 #define ID_BACK 1003
@@ -808,6 +814,8 @@ const int STATUS_H = 24;
 #define WM_UPDATE_CONTENT (WM_USER + 1)
 #define WM_PAGE_LOADED (WM_USER + 2)
 #define WM_NAVIGATE_DEFERRED (WM_USER + 3)
+#define IDT_FRAME_PACING 9999
+static bool g_renderRequested = false;
 extern bool g_opt_gpu;
 bool g_opt_gpu = true;
 bool g_opt_lua_http = true;
@@ -832,6 +840,28 @@ static bool g_fullscreenCanvas = false;
 static char g_fullscreenCanvasId[128] = { 0 };
 static RECT g_preFullscreenRect = {};
 static LONG_PTR g_preFullscreenStyle = 0;
+HWND g_tabPrevBtn = nullptr;
+HWND g_tabNextBtn = nullptr;
+#define ID_TAB_PREV 4101
+#define ID_TAB_NEXT 4102
+extern HWND g_tabControl;
+void repositionNewTabBtn() {
+    if (!g_tabControl || !g_newTabBtn) return;
+    HWND hParent = GetParent(g_tabControl);
+    if (!hParent) return;
+    RECT rcLast = {0};
+    if (g_tabCount > 0 && TabCtrl_GetItemRect(g_tabControl, g_tabCount - 1, &rcLast)) {
+        RECT cr;
+        GetClientRect(hParent, &cr);
+        int btnW = 24, btnH = 22;
+        int x = rcLast.right + 4;
+        int y = rcLast.top + (rcLast.bottom - rcLast.top - btnH) / 2;
+        if (x + btnW > cr.right - 58) {
+            x = cr.right - 58 - btnW;
+        }
+        SetWindowPos(g_newTabBtn, HWND_TOP, x, y, btnW, btnH, SWP_SHOWWINDOW);
+    }
+}
 void ensureBackbuffer(HDC hdc, int w, int h) {
     if (g_backDC && g_backW == w && g_backH == h) return;
     if (g_backDC) {
@@ -863,21 +893,28 @@ void cleanupBackbuffer() {
     g_backOld = nullptr;
     g_backW = g_backH = 0;
 }
+extern int g_tabIdx;
+extern HWND g_tabControl;
+struct TabScope {
+    int oldIdx;
+    TabScope(int newIdx) {
+        oldIdx = g_tabIdx;
+        g_tabIdx = newIdx;
+    }
+    ~TabScope() {
+        g_tabIdx = oldIdx;
+    }
+};
+static bool g_renderPending = false;
 void invalidateDOM() {
-    if (!g_mainWnd) return;
     g_domDirty = true;
     g_contentDirty = true;
-    RECT cr; GetClientRect(g_mainWnd, &cr);
-    RECT contentRect = {0, TOOLBAR_H, cr.right, cr.bottom - STATUS_H};
-    InvalidateRect(g_mainWnd, &contentRect, FALSE);
+    g_renderPending = true;
 }
+
 void invalidateContent() {
-    if (!g_mainWnd) return;
     g_contentDirty = true;
-    RECT cr;
-    GetClientRect(g_mainWnd, &cr);
-    RECT contentRect = { 0, TOOLBAR_H, cr.right, cr.bottom - STATUS_H };
-    InvalidateRect(g_mainWnd, &contentRect, FALSE);
+    g_renderPending = true;
 }
 void invalidateRect(int x, int y, int w, int h) {
     if (!g_mainWnd) return;
@@ -1117,9 +1154,23 @@ struct Elem {
 struct Doc {
     LumeSharedPtr<Elem> root;
     LumeString title;
-    Color bg = { 26,26,46 };
+    Color bg = {26,26,46};
 };
+LumeMap<LumeString, LumeSharedPtr<HTP::Elem>> g_domIdMap_arr[MAX_LUME_TABS];
+#define g_domIdMap HTP::g_domIdMap_arr[g_tabIdx]
+void indexDomTree(LumeSharedPtr<HTP::Elem> node) {
+    if (!node) return;
+    const char* id = node->props.get("id");
+    if (id && id[0] != '\0') {
+        g_domIdMap[id] = node;
+    }
+    for (auto& c : node->children) indexDomTree(c);
+}
 LumeSharedPtr<Elem> findById(LumeSharedPtr<Elem> node, const LumeString& id) {
+    auto it = g_domIdMap.find(id);
+    if (it != g_domIdMap.end()) {
+        return it->second;
+    }
     if (!node) return nullptr;
     const char* nodeId = node->props.get("id");
     if (nodeId[0] != '\0' && fast_streq(nodeId, id.c_str())) return node;
@@ -1564,7 +1615,10 @@ namespace WasmEngine {
     int load(const LumeString& wasmBytes);
 }
 namespace Bindings {
-    extern LumeMap<LumeString, LumeString> g_texts;
+    extern LumeMap<LumeString, LumeString> g_texts_arr[];
+    #ifndef g_texts
+    #define g_texts g_texts_arr[g_tabIdx]
+    #endif
     void alert(const char* msg);
     void navigate(const char* url);
     void refresh();
@@ -1606,10 +1660,14 @@ namespace Bindings {
 namespace Script {
     extern lua_State* g_L;
 }
-extern HTP::Doc g_doc;
+extern HTP::Doc g_docs[];
+#ifndef g_doc
+#define g_doc g_docs[g_tabIdx]
+#endif
 namespace Plugins {
     LumeMap<LumeString, CustomProtocolHandler> g_protocols;
-    CustomProtocolHandler* g_activeProtocol = nullptr;
+    CustomProtocolHandler* g_activeProtocol_arr[MAX_LUME_TABS] = {nullptr};
+    #define g_activeProtocol g_activeProtocol_arr[g_tabIdx]
     void hostRegisterProtocolEngine(CustomProtocolHandler handler) {
         g_protocols[handler.scheme] = handler;
     }
@@ -1652,12 +1710,12 @@ namespace Plugins {
     static void hostInvalidateContent() {invalidateContent();}
     static void hostSetStatus(const char* t) {setStatus(t ? t : "");}
     static void hostNavigateTo(const char* u) { if (u) navigateTo(u); }
-
     LumeMap<LumeString, CustomTagHandler> g_customTags;
     LumeMap<LumeString, CustomPageHandler> g_customPages;
-    CustomPageHandler* g_activeCustomEngine = nullptr;
-    void* g_activeCustomPageContext = nullptr;
-
+    CustomPageHandler* g_activeCustomEngine_arr[MAX_LUME_TABS] = { nullptr };
+    void* g_activeCustomPageContext_arr[MAX_LUME_TABS] = { nullptr };
+    #define g_activeCustomEngine g_activeCustomEngine_arr[g_tabIdx]
+    #define g_activeCustomPageContext g_activeCustomPageContext_arr[g_tabIdx]
     const char* hostGetNodeProp(HTP_NodeHandle node, const char* key, const char* def) {
         if (!node) return def;
         auto e = (HTP::Elem*)node;
@@ -1698,18 +1756,48 @@ namespace Plugins {
     static void hostRegisterOnReset(void (*callback)()) {
         if (callback) g_onResetCallbacks.push_back(callback);
     }
-    void reboot() {
-        if (g_activeCustomEngine && g_activeCustomPageContext) {
-            g_activeCustomEngine->free_page(g_activeCustomPageContext);
+    static LumeVector<lume_frame_cb> g_frameCallbacks;
+    static void hostRegisterFrameHook(lume_frame_cb cb) {
+        if (cb) g_frameCallbacks.push_back(cb);
+    }
+    static HTP_NodeHandle hostGetNodeById(const char* id) {
+        if (!id || !id[0]) return nullptr;
+        auto it = g_domIdMap.find(id);
+        return (it != g_domIdMap.end()) ? (HTP_NodeHandle)it->second.get() : nullptr;
+    }
+    static void hostSetNodeTextFast(HTP_NodeHandle node, const char* text) {
+        if (!node || !text) return;
+        auto e = (HTP::Elem*)node;
+        const char* id = e->props.get("id");
+        if (id && id[0]) {
+            Bindings::g_texts[id] = text;
         }
-        if (g_activeProtocol && g_activeCustomPageContext) {
-            g_activeProtocol->free_page(g_activeCustomPageContext);
+        bool found = false;
+        for (auto& pair : e->props.d) {
+            if (pair.first == "content") {
+                pair.second = text;
+                found = true;
+                break;
+            }
+        }
+        if (!found) e->props.d.push_back({"content", text});
+        invalidateDOM();
+    }
+    void reboot() {
+        for (int i = 0; i < MAX_LUME_TABS; i++) {
+            if (g_activeCustomEngine_arr[i] && g_activeCustomPageContext_arr[i]) {
+                g_activeCustomEngine_arr[i]->free_page(g_activeCustomPageContext_arr[i]);
+            }
+            if (g_activeProtocol_arr[i] && g_activeCustomPageContext_arr[i]) {
+                g_activeProtocol_arr[i]->free_page(g_activeCustomPageContext_arr[i]);
+            }
+            g_activeCustomEngine_arr[i] = nullptr;
+            g_activeProtocol_arr[i] = nullptr;
+            g_activeCustomPageContext_arr[i] = nullptr;
         }
         g_scriptEngines.clear();
-        g_activeCustomEngine = nullptr;
-        g_activeProtocol = nullptr;
-        g_activeCustomPageContext = nullptr;
         g_onResetCallbacks.clear();
+        g_frameCallbacks.clear();
         for (auto& p : g_plugins) {
             if (p.hModule) {
                 auto sf = (void(*)())GetProcAddress(p.hModule, "lume_plugin_shutdown");
@@ -1891,6 +1979,9 @@ namespace Plugins {
         g_hostAPI.b_cv_circle = Bindings::cv_circle;
         g_hostAPI.b_cv_line = Bindings::cv_line;
         g_hostAPI.b_cv_text = Bindings::cv_text;
+        g_hostAPI.register_frame_hook = hostRegisterFrameHook;
+        g_hostAPI.get_node_by_id = hostGetNodeById;
+        g_hostAPI.set_node_text_fast = hostSetNodeTextFast;
     }
     void discoverPlugins() {
         wchar_t ep[MAX_PATH] = {};
@@ -2197,7 +2288,8 @@ namespace Canvas {
         }
         ~Buf() {cleanup();}
     };
-    LumeMap<LumeString, LumeSharedPtr<Buf>> g_bufs;
+    LumeMap<LumeString, LumeSharedPtr<Buf>> g_bufs_arr[MAX_LUME_TABS];
+    #define g_bufs g_bufs_arr[g_tabIdx]
     LumeSharedPtr<Buf> get(const LumeString& id, HDC ref, int w, int h) {
         auto i = g_bufs.find(id);
         if (i != g_bufs.end() && i->second->w == w && i->second->h == h) return i->second;
@@ -2207,7 +2299,10 @@ namespace Canvas {
         return b;
     }
 }
-extern HTP::Doc g_doc;
+extern HTP::Doc g_docs[];
+#ifndef g_doc
+#define g_doc g_docs[g_tabIdx]
+#endif
 namespace GLCanvas {
     static const wchar_t* kClassName = L"LumeGLCanvasClass";
     static bool g_classRegistered = false;
@@ -2223,7 +2318,8 @@ namespace GLCanvas {
         bool touchedThisLayout = false;
         bool fullscreen = false;
     };
-    LumeMap<LumeString, LumeSharedPtr<GLView>> g_views;
+    LumeMap<LumeString, LumeSharedPtr<GLView>> g_views_arr[MAX_LUME_TABS];
+    #define g_views g_views_arr[g_tabIdx]
     LumeString findIdByHwnd(HWND hwnd) {
         for (auto& kv : g_views) {
             if (kv.second && kv.second->hwnd == hwnd)
@@ -2301,12 +2397,12 @@ namespace GLCanvas {
         g_hInst = hInst;
         WNDCLASSEXW wc = {};
         wc.cbSize = sizeof(wc);
+        wc.style = CS_OWNDC | CS_HREDRAW | CS_VREDRAW;
         wc.lpfnWndProc = CanvasWndProc;
         wc.hInstance = hInst;
         wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
         wc.lpszClassName = kClassName;
         wc.hbrBackground = nullptr;
-
         if (!RegisterClassExW(&wc)) {
             DWORD err = GetLastError();
             if (err != ERROR_CLASS_ALREADY_EXISTS) return false;
@@ -2473,6 +2569,8 @@ namespace GLCanvas {
         }
     }
     bool beginRender(const LumeString& id, int w, int h) {
+        if (!g_opt_gpu) return false;
+        if (g_tabControl && g_tabIdx != TabCtrl_GetCurSel(g_tabControl)) return false;
         auto v = ensure(id, w, h);
         if (!v || !v->valid) return false;
         return wglMakeCurrent(v->hdc, v->hglrc) == TRUE;
@@ -2512,19 +2610,22 @@ namespace GLCanvas {
         if (v->visible) ShowWindow(v->hwnd, SW_SHOW);
     }
     void hideAll() {
-        for (auto& kv : g_views) {
-            auto& v = kv.second;
-            if (v && v->valid) {
-                v->visible = false;
-                ShowWindow(v->hwnd, SW_HIDE);
+        for (int t = 0; t < MAX_LUME_TABS; t++) {
+            for (auto& kv : g_views_arr[t]) {
+                auto& v = kv.second;
+                if (v && v->hwnd) {
+                    ShowWindow(v->hwnd, SW_HIDE);
+                }
             }
         }
     }
+
     void showAll() {
-        for (auto& kv : g_views) {
+        for (auto& kv : g_views_arr[g_tabIdx]) {
             auto& v = kv.second;
-            if (v && v->valid && v->visible) {
+            if (v && v->valid && v->hwnd && v->visible) {
                 ShowWindow(v->hwnd, SW_SHOW);
+                BringWindowToTop(v->hwnd);
             }
         }
     }
@@ -2756,11 +2857,15 @@ static void gluLookAt_impl(double eyeX, double eyeY, double eyeZ,
     glTranslated(-eyeX, -eyeY, -eyeZ);
 }
 LumeString resolveUrl(const LumeString& url, const LumeString& baseUrl);
-extern LumeString g_curUrl;
+extern LumeString g_curUrl_arr[];
+#ifndef g_curUrl
+#define g_curUrl g_curUrl_arr[g_tabIdx]
+#endif
 namespace WasmEngine {
     static IM3Environment env = nullptr;
     struct Instance {IM3Runtime runtime = nullptr; IM3Module module = nullptr; LumeString bytes;};
-    static LumeMap<int, Instance> instances;
+    static LumeMap<int, Instance> instances_arr[MAX_LUME_TABS];
+    #define instances instances_arr[g_tabIdx]
     static int nextId = 1;
     void init() {if (!env) env = m3_NewEnvironment();}
     int load(const LumeString& wasmBytes) {
@@ -2796,9 +2901,13 @@ namespace WasmEngine {
         }
     }
 }
-extern HTP::Doc g_doc;
+extern HTP::Doc g_docs[];
+#ifndef g_doc
+#define g_doc g_docs[g_tabIdx]
+#endif
 namespace GLBuffers {
-    LumeMap<int, LumeVector<float>> buffers;
+    LumeMap<int, LumeVector<float>> buffers_arr[MAX_LUME_TABS];
+    #define buffers buffers_arr[g_tabIdx]
     int nextId = 1;
     void clear() { buffers.clear(); }
 }
@@ -2983,18 +3092,30 @@ namespace Bindings {
                 outY = multi ? (currentLine * fontH) : 0;
                 return;
             }
-            if (text[i] == '\n') { currentLine++; lineStart = i + 1; }
+            if (text[i] == '\n') {
+                currentLine++;
+                lineStart = i + 1;
+            }
         }
     }
-    LumeMap<LumeString, InputState> g_inputs;
-    LumeMap<LumeString, LumeString> g_texts;
-    LumeMap<LumeString, int> g_offsets_y;
-    LumeMap<LumeString, float> g_shimmer_offsets;
-    LumeMap<LumeString, LumeAction> g_clicks;
-    LumeMap<LumeString, LumeAction> g_rightClicks;
-    bool g_keyPressed[256] = {false};
-    bool g_keyReleased[256] = {false};
-    LumeString g_focusId;
+    LumeMap<LumeString, InputState> g_inputs_arr[MAX_LUME_TABS];
+    LumeMap<LumeString, LumeString> g_texts_arr[MAX_LUME_TABS];
+    LumeMap<LumeString, int> g_offsets_y_arr[MAX_LUME_TABS];
+    LumeMap<LumeString, float> g_shimmer_offsets_arr[MAX_LUME_TABS];
+    LumeMap<LumeString, LumeAction> g_clicks_arr[MAX_LUME_TABS];
+    LumeMap<LumeString, LumeAction> g_rightClicks_arr[MAX_LUME_TABS];
+    bool g_keyPressed_arr[MAX_LUME_TABS][256] = {false};
+    bool g_keyReleased_arr[MAX_LUME_TABS][256] = {false};
+    LumeString g_focusId_arr[MAX_LUME_TABS];
+    #define g_inputs g_inputs_arr[g_tabIdx]
+    #define g_texts g_texts_arr[g_tabIdx]
+    #define g_offsets_y g_offsets_y_arr[g_tabIdx]
+    #define g_shimmer_offsets g_shimmer_offsets_arr[g_tabIdx]
+    #define g_clicks g_clicks_arr[g_tabIdx]
+    #define g_rightClicks g_rightClicks_arr[g_tabIdx]
+    #define g_keyPressed g_keyPressed_arr[g_tabIdx]
+    #define g_keyReleased g_keyReleased_arr[g_tabIdx]
+    #define g_focusId g_focusId_arr[g_tabIdx]
     void reset() {
         g_clicks.clear();
         g_rightClicks.clear();
@@ -3237,12 +3358,23 @@ namespace Bindings {
         }
     }
 }
+static int g_timerN = 9000;
 namespace Script {
-    LumeMap<int, int> g_timerRefs;
-    LumeMap<LumeString, int> g_canvasClickRefs;
-    int g_timerN = 9000;
-    int g_keyDownRef = LUA_NOREF;
-    lua_State* g_L = nullptr;
+    LumeMap<int, int> g_timerRefs_arr[MAX_LUME_TABS];
+    LumeMap<LumeString, int> g_canvasClickRefs_arr[MAX_LUME_TABS];
+    int g_keyDownRef_arr[MAX_LUME_TABS];
+    lua_State* g_L_arr[MAX_LUME_TABS] = {nullptr};
+    #define g_timerRefs g_timerRefs_arr[g_tabIdx]
+    #define g_canvasClickRefs g_canvasClickRefs_arr[g_tabIdx]
+    #define g_keyDownRef g_keyDownRef_arr[g_tabIdx]
+    #define g_L g_L_arr[g_tabIdx]
+    struct __InitLua {
+        __InitLua() {
+            for (int i = 0; i < MAX_LUME_TABS; i++) {
+                g_keyDownRef_arr[i] = -2;
+            }
+        }
+    } __initLua;
 static int l_set_prop(lua_State* L) {
     Bindings::set_prop(luaL_checkstring(L, 1), luaL_checkstring(L, 2), luaL_checkstring(L, 3));
     return 0;
@@ -3556,6 +3688,7 @@ static int l_gl_delete_list(lua_State* L) {
 }
 static int l_set_timer(lua_State* L) {
     int ms = (int)luaL_checkinteger(L, 1);
+    if (ms < 15) ms = 15;
     luaL_checktype(L, 2, LUA_TFUNCTION);
     lua_pushvalue(L, 2);
     int ref = luaL_ref(L, LUA_REGISTRYINDEX);
@@ -4699,7 +4832,6 @@ void reset() {
     }
     g_canvasClickRefs.clear();
     g_timerRefs.clear();
-    g_timerN = 9000;
     g_mouseWheelDelta = 0;
     g_mouseDeltaX = 0;
     if (g_keyDownRef != LUA_NOREF && g_L) luaL_unref(g_L, LUA_REGISTRYINDEX, g_keyDownRef);
@@ -4726,10 +4858,13 @@ struct PendingPage {
     int navId = 0;
     bool isHistoryNav = false;
 };
-LumeVector<PendingPage> g_pendingPages;
+LumeVector<PendingPage> g_pendingPages_arr[MAX_LUME_TABS];
 LumeMutex g_pageMutex;
-int g_currentNavId = 0;
-static LumeString g_curUrl;
+int g_currentNavId_arr[MAX_LUME_TABS] = {0};
+LumeString g_curUrl_arr[MAX_LUME_TABS];
+#define g_pendingPages g_pendingPages_arr[g_tabIdx]
+#define g_currentNavId g_currentNavId_arr[g_tabIdx]
+#define g_curUrl g_curUrl_arr[g_tabIdx]
 LumeString resolveUrl(const LumeString& url, const LumeString& baseUrl) {
     LumeString target = url;
     if (target.find("file://") == 0) {
@@ -5324,8 +5459,8 @@ namespace Render {
                 auto& inp = Bindings::g_inputs[id];
                 if (inp.placeholder.empty() && pPh[0] != '\0') inp.placeholder = pPh;
                 inp.x = x; inp.y = iy; inp.w = iw; inp.h = ih; inp.multiline = isMulti;
-                bool foc = (Bindings::g_focusId == id);
-                renderQueue.push_back({ z, [this, x, iy, iw, ih, foc, id, isMulti]() {
+                renderQueue.push_back({z, [this, x, iy, iw, ih, id, isMulti]() {
+                    bool foc = (Bindings::g_focusId == id);
                     auto& inp = Bindings::g_inputs[id];
                     HDC dc = this->docDC;
                     HBRUSH br = CreateSolidBrush(foc ? RGB(50, 50, 80) : RGB(40, 40, 60));
@@ -5381,7 +5516,8 @@ namespace Render {
                     };
                     if (inp.text.empty() && !inp.placeholder.empty()) {
                         SetTextColor(dc, RGB(120, 120, 140)); drawLine(0, inp.placeholder.c_str(), inp.placeholder.length(), 0);
-                    } else {
+                    }
+                    else {
                         SetTextColor(dc, RGB(230, 230, 240));
                         int currentY = 0, lineStart = 0;
                         for (int i = 0; i <= inp.text.length(); i++) {
@@ -5575,6 +5711,73 @@ namespace Render {
         int lastW = 0;
         HDC docDC = nullptr;
         LumeVector<Hit> hits;
+        Engine() = default;
+        Engine(const Engine&) = delete;
+        Engine& operator=(const Engine&) = delete;
+        Engine(Engine&& o) noexcept {
+            th_tab = o.th_tab;
+            th_cap = o.th_cap;
+            th_sz = o.th_sz;
+            o.th_tab = nullptr;
+            o.th_cap = 0; o.th_sz = 0;
+            ts_tab = o.ts_tab;
+            ts_cap = o.ts_cap;
+            ts_sz = o.ts_sz;
+            o.ts_tab = nullptr;
+            o.ts_cap = 0; o.ts_sz = 0;
+            est_tab = o.est_tab;
+            est_cap = o.est_cap;
+            est_sz = o.est_sz;
+            o.est_tab = nullptr;
+            o.est_cap = 0; o.est_sz = 0;
+            scrollY = o.scrollY;
+            contentH = o.contentH;
+            curY = o.curY;
+            viewportH = o.viewportH; lastW = o.lastW;
+            glCanvases = static_cast<LumeVector<GLCache>&&>(o.glCanvases);
+            docHits = static_cast<LumeVector<Hit>&&>(o.docHits);
+            hits = static_cast<LumeVector<Hit>&&>(o.hits);
+            renderQueue = static_cast<LumeVector<RenderCmd>&&>(o.renderQueue);
+            blockHeights = static_cast<LumeVector<int>&&>(o.blockHeights);
+            pH = &docHits;
+        }
+        Engine& operator=(Engine&& o) noexcept {
+            if (this != &o) {
+                if (th_tab) HeapFree(GetProcessHeap(), 0, th_tab);
+                if (ts_tab) HeapFree(GetProcessHeap(), 0, ts_tab);
+                if (est_tab) HeapFree(GetProcessHeap(), 0, est_tab);
+                th_tab = o.th_tab;
+                th_cap = o.th_cap;
+                th_sz = o.th_sz;
+                o.th_tab = nullptr;
+                o.th_cap = 0;
+                o.th_sz = 0;
+                ts_tab = o.ts_tab;
+                ts_cap = o.ts_cap;
+                ts_sz = o.ts_sz;
+                o.ts_tab = nullptr;
+                o.ts_cap = 0;
+                o.ts_sz = 0;
+                est_tab = o.est_tab;
+                est_cap = o.est_cap;
+                est_sz = o.est_sz;
+                o.est_tab = nullptr;
+                o.est_cap = 0;
+                o.est_sz = 0;
+                scrollY = o.scrollY;
+                contentH = o.contentH;
+                curY = o.curY;
+                viewportH = o.viewportH;
+                lastW = o.lastW;
+                glCanvases = static_cast<LumeVector<GLCache>&&>(o.glCanvases);
+                docHits = static_cast<LumeVector<Hit>&&>(o.docHits);
+                hits = static_cast<LumeVector<Hit>&&>(o.hits);
+                renderQueue = static_cast<LumeVector<RenderCmd>&&>(o.renderQueue);
+                blockHeights = static_cast<LumeVector<int>&&>(o.blockHeights);
+                pH = &docHits;
+            }
+            return *this;
+        }
         ~Engine() {
             if (th_tab) HeapFree(GetProcessHeap(), 0, th_tab);
             if (ts_tab) HeapFree(GetProcessHeap(), 0, ts_tab);
@@ -6042,10 +6245,19 @@ namespace Pages {
             "  @button{content:\"Back to Home\";url:\"about:home\";background:\"#ff4444\";color:\"#ffffff\";size:16;width:150;height:40;border-radius:6;}\n}\n";
     }
 }
-HTP::Doc g_doc;
-Render::Engine g_ren;
-LumeVector<LumeString> g_hist;
-int g_histPos = -1;
+HTP::Doc g_docs[MAX_LUME_TABS];
+Render::Engine g_rens[MAX_LUME_TABS];
+LumeVector<LumeString> g_hists[MAX_LUME_TABS];
+int g_histPoss[MAX_LUME_TABS];
+struct __InitHist {
+    __InitHist() {
+        for (int i = 0; i < MAX_LUME_TABS; i++) g_histPoss[i] = -1;
+    }
+} __initHist;
+#define g_doc g_docs[g_tabIdx]
+#define g_ren g_rens[g_tabIdx]
+#define g_hist g_hists[g_tabIdx]
+#define g_histPos g_histPoss[g_tabIdx]
 LumeString buildTextHtp(const LumeString& rawText) {
     LumeString htp = "@page {title:\"Text Document\"; background:\"#1e1e1e\";}\n";
     htp += "@column {padding:10; background:\"#1e1e1e\";}\n";
@@ -6167,6 +6379,7 @@ LumeString parseMarkdown(const LumeString& mdText) {
     htp += "}\n";
     return htp;
 }
+void updateTabTitle(int idx);
 void processLCFG(const LumeString& content, const LumeString& lcfgUrl);
 void loadContent(const LumeString& content, const LumeString& url, bool isInternalHtp = false) {
     LumeString cleanUrl = url;
@@ -6263,6 +6476,8 @@ void loadContent(const LumeString& content, const LumeString& url, bool isIntern
     Plugins::checkDynamicUnloads(displayUrl);
     HTP::Parser p;
     g_doc = p.parse(finalContent);
+    g_domIdMap.clear();
+    HTP::indexDomTree(g_doc.root);
     g_curUrl = displayUrl;
     g_ren.setScroll(0);
     struct Runner {
@@ -6284,6 +6499,7 @@ void loadContent(const LumeString& content, const LumeString& url, bool isIntern
     SetWindowTextU(g_mainWnd, (g_doc.title + " - Lume").c_str());
     SetWindowTextU(g_addressBar, url.c_str());
     invalidateDOM();
+    updateTabTitle(g_tabIdx);
 }
 namespace LCFG {
     struct Config {
@@ -6550,6 +6766,127 @@ void histNav(const LumeString& u) {
 }
 void goBack() { if (g_histPos > 0) { g_histPos--; histNav(g_hist[g_histPos]); } }
 void goFwd() { if (g_histPos < (int)g_hist.size() - 1) { g_histPos++; histNav(g_hist[g_histPos]); } }
+#define ID_TAB_BASE 4000
+#define ID_NEW_TAB 4100
+HWND g_tabControl = nullptr;
+WNDPROC g_origTabProc = nullptr;
+void updateTabTitle(int idx) {
+    if (idx < 0 || idx >= g_tabCount || !g_tabControl) return;
+    LumeString title = g_docs[idx].title;
+    if (title.empty()) {
+        title = g_curUrl_arr[idx];
+        if (title.empty()) title = "New Tab";
+    }
+    if (title.length() > 22) title = title.substr(0, 19) + "...";
+    LumeWString wtitle = utf8_to_wstring(title) + L"  \x00D7";
+    TCITEMW tie = { 0 };
+    tie.mask = TCIF_TEXT;
+    tie.pszText = wtitle.data();
+    SendMessageW(g_tabControl, TCM_SETITEMW, idx, (LPARAM)&tie);
+    repositionNewTabBtn();
+}
+void switchTab(int index) {
+    if (index < 0 || index >= g_tabCount) return;
+    GLCanvas::hideAll();
+    g_tabIdx = index;
+    GLCanvas::showAll();
+    TabCtrl_SetCurSel(g_tabControl, index);
+    if (g_mainWnd) {
+        SetWindowTextU(g_addressBar, g_curUrl.c_str());
+        invalidateDOM();
+    }
+}
+void createNewTab() {
+    if (g_tabCount >= MAX_LUME_TABS) return;
+    int newIdx = g_tabCount++;
+    TCITEMW tie = {0};
+    tie.mask = TCIF_TEXT;
+    tie.pszText = (LPWSTR)L"New Tab  \x00D7";
+    SendMessageW(g_tabControl, TCM_INSERTITEMW, newIdx, (LPARAM)&tie);
+    switchTab(newIdx);
+    repositionNewTabBtn();
+    navigateTo("about:home");
+}
+void closeTab(int idx) {
+    if (g_tabCount <= 1) {
+        PostQuitMessage(0);
+        return;
+    }
+    {
+        TabScope scope(idx);
+        Script::reset();
+        GLCanvas::destroyAll();
+    }
+    for (int i = idx; i < g_tabCount - 1; i++) {
+        g_docs[i] = static_cast<HTP::Doc&&>(g_docs[i + 1]);
+        g_rens[i] = static_cast<Render::Engine&&>(g_rens[i + 1]);
+        g_hists[i] = static_cast<LumeVector<LumeString>&&>(g_hists[i + 1]);
+        g_histPoss[i] = g_histPoss[i + 1];
+        g_curUrl_arr[i] = g_curUrl_arr[i + 1];
+        g_currentNavId_arr[i] = g_currentNavId_arr[i + 1];
+        g_pendingPages_arr[i] = static_cast<LumeVector<PendingPage>&&>(g_pendingPages_arr[i + 1]);
+        Canvas::g_bufs_arr[i] = static_cast<LumeMap<LumeString, LumeSharedPtr<Canvas::Buf>>&&>(Canvas::g_bufs_arr[i + 1]);
+        GLCanvas::g_views_arr[i] = static_cast<LumeMap<LumeString, LumeSharedPtr<GLCanvas::GLView>>&&>(GLCanvas::g_views_arr[i + 1]);
+        Plugins::g_activeProtocol_arr[i] = Plugins::g_activeProtocol_arr[i + 1];
+        Plugins::g_activeCustomEngine_arr[i] = Plugins::g_activeCustomEngine_arr[i + 1];
+        Plugins::g_activeCustomPageContext_arr[i] = Plugins::g_activeCustomPageContext_arr[i + 1];
+        Bindings::g_inputs_arr[i] = static_cast<LumeMap<LumeString, Bindings::InputState>&&>(Bindings::g_inputs_arr[i + 1]);
+        Bindings::g_texts_arr[i] = static_cast<LumeMap<LumeString, LumeString>&&>(Bindings::g_texts_arr[i + 1]);
+        Bindings::g_clicks_arr[i] = static_cast<LumeMap<LumeString, LumeAction>&&>(Bindings::g_clicks_arr[i + 1]);
+        Bindings::g_focusId_arr[i] = Bindings::g_focusId_arr[i + 1];
+        Script::g_timerRefs_arr[i] = static_cast<LumeMap<int, int>&&>(Script::g_timerRefs_arr[i + 1]);
+        Script::g_canvasClickRefs_arr[i] = static_cast<LumeMap<LumeString, int>&&>(Script::g_canvasClickRefs_arr[i + 1]);
+        Script::g_L_arr[i] = Script::g_L_arr[i + 1];
+        WasmEngine::instances_arr[i] = static_cast<LumeMap<int, WasmEngine::Instance>&&>(WasmEngine::instances_arr[i + 1]);
+        GLBuffers::buffers_arr[i] = static_cast<LumeMap<int, LumeVector<float>>&&>(GLBuffers::buffers_arr[i + 1]);
+        HTP::g_domIdMap_arr[i] = static_cast<LumeMap<LumeString, LumeSharedPtr<HTP::Elem>>&&>(HTP::g_domIdMap_arr[i + 1]);
+    }
+    Script::g_L_arr[g_tabCount - 1] = nullptr;
+    Plugins::g_activeProtocol_arr[g_tabCount - 1] = nullptr;
+    Plugins::g_activeCustomEngine_arr[g_tabCount - 1] = nullptr;
+    Plugins::g_activeCustomPageContext_arr[g_tabCount - 1] = nullptr;
+    HTP::g_domIdMap_arr[g_tabCount - 1].clear();
+    g_tabCount--;
+    SendMessageW(g_tabControl, TCM_DELETEITEM, idx, 0);
+    if (g_tabIdx >= g_tabCount) g_tabIdx = g_tabCount - 1;
+    switchTab(g_tabIdx);
+    repositionNewTabBtn();
+}
+LRESULT CALLBACK TabProc(HWND h, UINT m, WPARAM w, LPARAM l) {
+    if (m == WM_MBUTTONUP) {
+        TCHITTESTINFO hti;
+        hti.pt.x = GET_X_LPARAM(l);
+        hti.pt.y = GET_Y_LPARAM(l);
+        int idx = (int)SendMessageW(h, TCM_HITTEST, 0, (LPARAM)&hti);
+        if (idx != -1) PostMessageW(GetParent(h), WM_APP + 100, idx, 0);
+        return 0;
+    }
+    if (m == WM_LBUTTONDOWN) {
+        TCHITTESTINFO hti;
+        hti.pt.x = GET_X_LPARAM(l);
+        hti.pt.y = GET_Y_LPARAM(l);
+        int idx = (int)SendMessageW(h, TCM_HITTEST, 0, (LPARAM)&hti);
+        if (idx != -1) {
+            RECT rc;
+            TabCtrl_GetItemRect(h, idx, &rc);
+            if (hti.pt.x >= rc.right - 20 && hti.pt.x <= rc.right - 2) {
+                PostMessageW(GetParent(h), WM_APP + 100, idx, 0);
+                return 0;
+            }
+        }
+    }
+    if (m == WM_MOUSEWHEEL) {
+        int delta = GET_WHEEL_DELTA_WPARAM(w);
+        if (delta > 0) {
+            if (g_tabIdx > 0) switchTab(g_tabIdx - 1);
+        }
+        else if (delta < 0) {
+            if (g_tabIdx < g_tabCount - 1) switchTab(g_tabIdx + 1);
+        }
+        return 0;
+    }
+    return CallWindowProcW(g_origTabProc, h, m, w, l);
+}
 WNDPROC g_origAddr = 0;
 LRESULT CALLBACK AddrProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     if (m == WM_KEYDOWN && w == VK_RETURN) {
@@ -6565,18 +6902,31 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
     static bool g_draggingInput = false;
     switch (msg) {
     case WM_CREATE: {
-        CreateWindowW(L"BUTTON", L"<", WS_CHILD | WS_VISIBLE, 4, 6, 30, 28, hw, (HMENU)ID_BACK, 0, 0);
-        CreateWindowW(L"BUTTON", L">", WS_CHILD | WS_VISIBLE, 38, 6, 30, 28, hw, (HMENU)ID_FWD, 0, 0);
-        CreateWindowW(L"BUTTON", L"R", WS_CHILD | WS_VISIBLE, 72, 6, 30, 28, hw, (HMENU)ID_REF, 0, 0);
-        g_addressBar = CreateWindowW(L"EDIT", L"about:home", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL, 108, 8, 500, 24, hw, (HMENU)ID_ADDR, 0, 0);
+        g_tabControl = CreateWindowW(WC_TABCONTROLW, L"", WS_CHILD | WS_CLIPSIBLINGS | WS_VISIBLE | TCS_FOCUSNEVER, 0, 0, 100, 25, hw, (HMENU)(INT_PTR)ID_TAB_BASE, 0, 0);
+        g_origTabProc = (WNDPROC)SetWindowLongPtrW(g_tabControl, GWLP_WNDPROC, (LONG_PTR)TabProc);
+        HFONT uf = CreateFontW(-14, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, L"Segoe UI");
+        SendMessage(g_tabControl, WM_SETFONT, (WPARAM)uf, 1);
+        g_newTabBtn = CreateWindowW(L"BUTTON", L"+", WS_CHILD | WS_CLIPSIBLINGS | WS_VISIBLE, 0, 0, 25, 25, hw, (HMENU)(INT_PTR)ID_NEW_TAB, 0, 0);
+        SendMessage(g_newTabBtn, WM_SETFONT, (WPARAM)uf, 1);
+        TCITEMW tie = {0};
+        tie.pszText = (LPWSTR)L"New Tab  \x00D7";
+        SendMessageW(g_tabControl, TCM_INSERTITEMW, 0, (LPARAM)&tie);
+        g_tabPrevBtn = CreateWindowW(L"BUTTON", L"\x2039", WS_CHILD | WS_VISIBLE, 0, 0, 24, 24, hw, (HMENU)(INT_PTR)ID_TAB_PREV, 0, 0);
+        g_tabNextBtn = CreateWindowW(L"BUTTON", L"\x203A", WS_CHILD | WS_VISIBLE, 0, 0, 24, 24, hw, (HMENU)(INT_PTR)ID_TAB_NEXT, 0, 0);
+        SendMessage(g_tabPrevBtn, WM_SETFONT, (WPARAM)uf, 1);
+        SendMessage(g_tabNextBtn, WM_SETFONT, (WPARAM)uf, 1);
+        CreateWindowW(L"BUTTON", L"<", WS_CHILD | WS_VISIBLE, 4, 31, 30, 28, hw, (HMENU)ID_BACK, 0, 0);
+        CreateWindowW(L"BUTTON", L">", WS_CHILD | WS_VISIBLE, 38, 31, 30, 28, hw, (HMENU)ID_FWD, 0, 0);
+        CreateWindowW(L"BUTTON", L"R", WS_CHILD | WS_VISIBLE, 72, 31, 30, 28, hw, (HMENU)ID_REF, 0, 0);
+        g_addressBar = CreateWindowW(L"EDIT", L"about:home", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL, 108, 33, 500, 24, hw, (HMENU)ID_ADDR, 0, 0);
         CreateWindowW(L"BUTTON", L"Go", WS_CHILD | WS_VISIBLE, 0, 0, 40, 28, hw, (HMENU)ID_GO, 0, 0);
         g_menuBtn = CreateWindowW(L"BUTTON", L"\x2630", WS_CHILD | WS_VISIBLE, 0, 0, 30, 28, hw, (HMENU)ID_MENU_BTN, 0, 0);
         g_statusBar = CreateWindowW(L"STATIC", L"Ready", WS_CHILD | WS_VISIBLE | SS_LEFT, 0, 0, 800, STATUS_H, hw, 0, 0, 0);
-        HFONT uf = CreateFontW(-14, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, L"Segoe UI");
         SendMessage(g_addressBar, WM_SETFONT, (WPARAM)uf, 1);
         SendMessage(g_statusBar, WM_SETFONT, (WPARAM)uf, 1);
         SendMessage(g_menuBtn, WM_SETFONT, (WPARAM)uf, 1);
         g_origAddr = (WNDPROC)SetWindowLongPtrW(g_addressBar, GWLP_WNDPROC, (LONG_PTR)AddrProc);
+        SetTimer(hw, IDT_FRAME_PACING, 16, NULL);
         navigateTo("about:home");
         return 0;
     }
@@ -6588,15 +6938,19 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
             return 0;
         }
         int w = LOWORD(lp), h = HIWORD(lp);
+        MoveWindow(g_tabControl, 0, 0, w - 56, 28, TRUE);
+        MoveWindow(g_tabPrevBtn, w - 54, 2, 25, 23, TRUE);
+        MoveWindow(g_tabNextBtn, w - 27, 2, 25, 23, TRUE);
+        repositionNewTabBtn();
         int menuW = 30, goW = 40, pad = 4;
         int menuX = w - pad - menuW;
         int goX = menuX - pad - goW;
         int addrW = goX - pad - 108;
         if (addrW < 100) addrW = 100;
-        MoveWindow(g_addressBar, 108, 8, addrW, 24, TRUE);
+        MoveWindow(g_addressBar, 108, 33, addrW, 24, TRUE);
         HWND gb = GetDlgItem(hw, ID_GO);
-        if (gb) MoveWindow(gb, goX, 6, goW, 28, TRUE);
-        MoveWindow(g_menuBtn, menuX, 6, menuW, 28, TRUE);
+        if (gb) MoveWindow(gb, goX, 31, goW, 28, TRUE);
+        MoveWindow(g_menuBtn, menuX, 31, menuW, 28, TRUE);
         MoveWindow(g_statusBar, 0, h - STATUS_H, w, STATUS_H, TRUE);
         g_contentDirty = true;
         InvalidateRect(hw, nullptr, FALSE);
@@ -6648,12 +7002,12 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
                     }
                     else {
                         if (g_domDirty || g_ren.lastW != w) {
-                            GLCanvas::beginLayoutPass();
                             g_ren.updateLayout(g_backDC, w, g_doc);
-                            GLCanvas::endLayoutPass();
                             g_domDirty = false;
                         }
+                        GLCanvas::beginLayoutPass();
                         g_ren.drawToScreen(g_backDC, w, h);
+                        GLCanvas::endLayoutPass();
                     }
                     g_contentDirty = false;
                 }
@@ -6707,10 +7061,14 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
             auto of = SelectObject(dc, FontCache::get(14));
             int mx = GET_X_LPARAM(lp) - inp.x - 6 + inp.scrollX;
             int my = GET_Y_LPARAM(lp) - TOOLBAR_H - inp.y - 4 + g_ren.getScroll() + inp.scrollY;
-            inp.cursor = Bindings::getCursorPosFromXY(dc, inp.text, mx, my, inp.multiline);
+            int curC = Bindings::getCursorPosFromXY(dc, inp.text, mx, my, inp.multiline);
+            if (curC != inp.cursor) {
+                if (inp.selStart == -1) inp.selStart = inp.cursor;
+                inp.cursor = curC;
+                invalidateContent();
+            }
             SelectObject(dc, of);
             ReleaseDC(hw, dc);
-            invalidateDOM();
             return 0;
         }
         if (Plugins::g_activeCustomEngine && Plugins::g_activeCustomPageContext && Plugins::g_activeCustomEngine->on_mouse_move) {
@@ -6816,6 +7174,7 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
                 return 0;
             }
             if (clickedHit.isInput) {
+                static int g_dragAnchor = -1;
                 Bindings::g_focusId = clickedHit.elemId;
                 auto& inp = Bindings::g_inputs[clickedHit.elemId];
                 inp.focused = true;
@@ -6826,9 +7185,10 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
                     if (inp.selStart == -1) inp.selStart = inp.cursor;
                 }
                 else {
-                    inp.selStart = newC;
+                    inp.selStart = -1;
                 }
                 inp.cursor = newC;
+                g_dragAnchor = newC;
                 SelectObject(dc, of);
                 ReleaseDC(hw, dc);
                 g_draggingInput = true;
@@ -6905,7 +7265,7 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
             inp.text.insert(inp.cursor, utf8_char);
             inp.cursor += (int)utf8_char.length();
         }
-        invalidateDOM();
+        invalidateContent();
         return 0;
     }
     case WM_KEYDOWN: {
@@ -7110,6 +7470,18 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
         break;
     case WM_COMMAND: {
         int id = LOWORD(wp);
+        if (id == ID_NEW_TAB) {
+            createNewTab();
+            return 0;
+        }
+        if (id == ID_TAB_PREV) {
+            if (g_tabIdx > 0) switchTab(g_tabIdx - 1);
+            return 0;
+        }
+        if (id == ID_TAB_NEXT) {
+            if (g_tabIdx < g_tabCount - 1) switchTab(g_tabIdx + 1);
+            return 0;
+        }
         if (id == ID_MENU_BTN) {
             HMENU hMenu = CreatePopupMenu();
             HMENU hHistMenu = CreatePopupMenu();
@@ -7185,6 +7557,17 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
         else if (id == ID_REF) navigateTo(g_curUrl);
         return 0;
     }
+    case WM_NOTIFY: {
+        LPNMHDR nm = (LPNMHDR)lp;
+        if (nm->hwndFrom == g_tabControl && nm->code == TCN_SELCHANGE) {
+            switchTab(TabCtrl_GetCurSel(g_tabControl));
+        }
+        return 0;
+    }
+    case WM_APP + 100: {
+        closeTab((int)wp);
+        return 0;
+    }
     case WM_DROPFILES: {
         HDROP hd = (HDROP)wp;
         wchar_t wfp[MAX_PATH] = {};
@@ -7195,17 +7578,38 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
     }
     case WM_TIMER: {
         int id = (int)wp;
-        auto it = Script::g_timerRefs.find(id);
-        if (it != Script::g_timerRefs.end() && Script::g_L) {
-            lua_rawgeti(Script::g_L, LUA_REGISTRYINDEX, it->second);
-            if (lua_pcall(Script::g_L, 0, 0, 0) != 0) {
-                const char* err = lua_tostring(Script::g_L, -1);
-                OutputDebugStringA(err ? err : "Lua timer error\n");
-                KillTimer(hw, id);
-                MessageBoxU(hw, err ? err : "Unknown error", "Lua Timer Error", MB_OK | MB_ICONERROR);
-                lua_pop(Script::g_L, 1);
-                luaL_unref(Script::g_L, LUA_REGISTRYINDEX, it->second);
-                Script::g_timerRefs.erase(it);
+        if (id == IDT_FRAME_PACING) {
+            double now = getHighResTime();
+            static double lastFrameTime = now;
+            double dt = now - lastFrameTime;
+            lastFrameTime = now;
+            if (dt > 0.1) dt = 0.1;
+            for (auto cb : Plugins::g_frameCallbacks) {
+                cb(dt);
+            }
+            if (g_renderPending && g_mainWnd) {
+                g_renderPending = false;
+                if (!g_tabControl || g_tabIdx == TabCtrl_GetCurSel(g_tabControl)) {
+                    RECT cr;
+                    GetClientRect(g_mainWnd, &cr);
+                    RECT contentRect = { 0, TOOLBAR_H, cr.right, cr.bottom - STATUS_H };
+                    InvalidateRect(g_mainWnd, &contentRect, FALSE);
+                }
+            }
+            return 0;
+        }
+        for (int t = 0; t < g_tabCount; t++) {
+            auto it = Script::g_timerRefs_arr[t].find(id);
+            if (it != Script::g_timerRefs_arr[t].end() && Script::g_L_arr[t]) {
+                TabScope scope(t);
+                lua_rawgeti(Script::g_L, LUA_REGISTRYINDEX, it->second);
+                if (lua_pcall(Script::g_L, 0, 0, 0) != 0) {
+                    KillTimer(hw, id);
+                    lua_pop(Script::g_L, 1);
+                    luaL_unref(Script::g_L, LUA_REGISTRYINDEX, it->second);
+                    Script::g_timerRefs.erase(it);
+                }
+                break;
             }
         }
         return 0;
@@ -7238,23 +7642,27 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
     case WM_PAGE_LOADED: {
         LumeLockGuard<LumeMutex> lock(g_pageMutex);
-        for (const auto& pp : g_pendingPages) {
-            if (pp.navId != g_currentNavId) continue;
-            if (!pp.isHistoryNav) {
-                g_hist.push_back(pp.url);
-                if (g_hist.size() > 50) { g_hist.erase(g_hist.begin()); if (g_histPos > 0) g_histPos--; }
-                g_histPos = (int)g_hist.size() - 1;
+        for (int t = 0; t < g_tabCount; t++) {
+            TabScope scope(t);
+            for (const auto& pp : g_pendingPages) {
+                if (pp.navId != g_currentNavId) continue;
+                if (!pp.isHistoryNav) {
+                    g_hist.push_back(pp.url);
+                    if (g_hist.size() > 50) { g_hist.erase(g_hist.begin()); if (g_histPos > 0) g_histPos--; }
+                    g_histPos = (int)g_hist.size() - 1;
+                }
+                if (pp.error) {
+                    loadContent(pp.body, pp.url, true);
+                    setStatus("Err");
+                }
+                else {
+                    loadContent(pp.body, pp.url);
+                    setStatus("OK");
+                }
+                updateTabTitle(t);
             }
-            if (pp.error) {
-                loadContent(pp.body, pp.url, true);
-                setStatus("Err");
-            }
-            else {
-                loadContent(pp.body, pp.url);
-                setStatus("OK");
-            }
+            g_pendingPages.clear();
         }
-        g_pendingPages.clear();
         return 0;
     }
     case WM_NAVIGATE_DEFERRED: {
