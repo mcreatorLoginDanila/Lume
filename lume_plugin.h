@@ -53,7 +53,10 @@ extern "C" {
         void (*on_mouse_move)(void* ctx, int x, int y);
         void (*on_mouse_wheel)(void* ctx, int delta);
     } CustomProtocolHandler;
+    typedef void (*lume_frame_cb)(double dt);
     typedef struct LumeHostAPI {
+        HTP_NodeHandle(*get_node_by_id)(const char* id);
+        void (*set_node_text_fast)(HTP_NodeHandle node, const char* text);
         HWND(*get_main_hwnd)(void);
         void (*invalidate_content)(void);
         void (*set_status)(const char* text);
@@ -132,6 +135,7 @@ extern "C" {
         void (*b_cv_circle)(const char* id, int cx, int cy, int r, const char* color_hex);
         void (*b_cv_line)(const char* id, int x1, int y1, int x2, int y2, const char* color_hex, int t);
         void (*b_cv_text)(const char* id, int x, int y, const char* txt, int sz, const char* color_hex);
+        void (*register_frame_hook)(lume_frame_cb callback);
     } LumeHostAPI;
 #ifdef BUILDING_PLUGIN
 #define LUME_PLUGIN_EXPORT __declspec(dllexport)
