@@ -4925,10 +4925,14 @@ namespace Render {
     private:
         struct RenderCmd {
             int zIndex;
+            int top;
+            int bottom;
             LumeAction drawCall;
-            RenderCmd() : zIndex(0) {}
+            RenderCmd() : zIndex(0), top(0), bottom(0) {}
             template<typename F>
-            RenderCmd(int z, F f) : zIndex(z), drawCall(static_cast<F&&>(f)) {}
+            RenderCmd(int z, int t, int b, F f)
+                : zIndex(z), top(t), bottom(b), drawCall(static_cast<F&&>(f)) {
+            }
         };
         LumeVector<RenderCmd> renderQueue;
         LumeVector<int> blockHeights;
@@ -5198,7 +5202,9 @@ namespace Render {
                     int ew = estW(e, mw);
                     int drawY = y;
                     if (it->second.render) {
-                        renderQueue.push_back({ z, [this, e, x, drawY, ew, eh, it]() {
+                        int eh = estH(e);
+                        int drawY = y;
+                        renderQueue.push_back({z, drawY, drawY + eh, [this, e, x, drawY, ew, eh, it]() {
                             it->second.render(this->docDC, (HTP_NodeHandle)e.get(), x, drawY, ew, eh, this->getScroll());
                         }});
                     }
@@ -5254,13 +5260,16 @@ namespace Render {
             case HTP::EType::COLUMN: {
                 int pad = e->props.getInt("padding", 5), rad = e->props.getInt("border-radius", 4), z = e->props.getInt("z-index", 0);
                 const char* pBg = getRefPtr(e->props, "background");
-                int heightIdx = blockHeights.size(); blockHeights.push_back(0);
+                int heightIdx = blockHeights.size();
+                blockHeights.push_back(0);
                 int startY = y;
+                size_t colCmdIdx = (size_t)-1;
                 if (pBg[0] != '\0') {
                     HTP::Color bgColor = HTP::Color::fromHex(pBg);
-                    renderQueue.push_back({ z, [this, x, startY, mw, bgColor, rad, heightIdx]() {
+                    colCmdIdx = renderQueue.size();
+                    renderQueue.push_back({z, startY, startY, [this, x, startY, mw, bgColor, rad, heightIdx]() {
                         fillRR(this->docDC, x, startY, mw, blockHeights[heightIdx], bgColor, rad);
-                    } });
+                    }});
                 }
                 curY = y + pad;
                 for (auto& c : e->children) {
@@ -5284,6 +5293,9 @@ namespace Render {
                     draw(refDC, c, cx, curY, cwToPass, currentAlign);
                 }
                 blockHeights[heightIdx] = (curY - y) + pad;
+                if (colCmdIdx != (size_t)-1) {
+                    renderQueue[colCmdIdx].bottom = startY + blockHeights[heightIdx];
+                }
                 curY += pad;
                 break;
             }
@@ -5292,11 +5304,13 @@ namespace Render {
                 const char* pBg = getRefPtr(e->props, "background");
                 int heightIdx = blockHeights.size(); blockHeights.push_back(0);
                 int startY = y + mar;
+                size_t blkCmdIdx = (size_t)-1;
                 if (pBg[0] != '\0') {
                     HTP::Color bgColor = HTP::Color::fromHex(pBg);
-                    renderQueue.push_back({ z, [this, x, mar, startY, mw, bgColor, rad, heightIdx]() {
+                    blkCmdIdx = renderQueue.size();
+                    renderQueue.push_back({z, startY, startY, [this, x, mar, startY, mw, bgColor, rad, heightIdx]() {
                         fillRR(this->docDC, x + mar, startY, mw - mar * 2, blockHeights[heightIdx], bgColor, rad);
-                    } });
+                    }});
                 }
                 curY = startY + pad;
                 for (auto& c : e->children) {
@@ -5320,6 +5334,9 @@ namespace Render {
                     draw(refDC, c, cx, curY, cwToPass, currentAlign);
                 }
                 blockHeights[heightIdx] = (curY - startY) + pad;
+                if (blkCmdIdx != (size_t)-1) {
+                    renderQueue[blkCmdIdx].bottom = startY + blockHeights[heightIdx];
+                }
                 curY += pad + mar;
                 break;
             }
@@ -5361,9 +5378,11 @@ namespace Render {
                     SelectObject(refDC, of);
                     set_th(mKey, th);
                 }
-                HTP::Color gradColor; if (pGrad[0] != '\0') gradColor = HTP::Color::fromHex(pGrad);
+                HTP::Color gradColor;
+                if (pGrad[0] != '\0') gradColor = HTP::Color::fromHex(pGrad);
                 LumeString textStr = pCt;
-                renderQueue.push_back({ z, [this, x, drawY, mw, th, f, textStr, dtFormat, col, pGrad, gradColor, shimmer, currentAlign]() {
+                int textBottom = drawY + ((pGrad[0] == '\0') ? th : sz) + 4;
+                renderQueue.push_back({z, drawY, textBottom, [this, x, drawY, mw, th, f, textStr, dtFormat, col, pGrad, gradColor, shimmer, currentAlign]() {
                     HDC dc = this->docDC;
                     if (pGrad[0] != '\0') {
                         int drawX = x;
@@ -5407,18 +5426,29 @@ namespace Render {
                 int drawY = y;
                 LumeString url = resolveUrl(getRefPtr(e->props, "url"), g_curUrl);
                 LumeString textStr = pCt;
-                renderQueue.push_back({ z, [this, x, drawY, ts, f, col, textStr]() {
+                renderQueue.push_back({z, drawY, drawY + ts.cy + 4, [this, x, drawY, ts, f, col, textStr]() {
                     HDC dc = this->docDC;
                     auto of2 = SelectObject(dc, f);
                     SetTextColor(dc, col.cr()); SetBkMode(dc, TRANSPARENT);
-                    RECT rc = { x, drawY, x + ts.cx, drawY + ts.cy };
+                    RECT rc = {x, drawY, x + ts.cx, drawY + ts.cy};
                     DrawTextU(dc, textStr.c_str(), -1, &rc, 0);
-                    HPEN p = CreatePen(PS_SOLID, 1, col.cr()); auto op = SelectObject(dc, p);
-                    MoveToEx(dc, x, drawY + ts.cy - 1, 0); LineTo(dc, x + ts.cx, drawY + ts.cy - 1);
-                    SelectObject(dc, op); DeleteObject(p); SelectObject(dc, of2);
-                } });
-                if (pH) { Hit h; h.r = { x, drawY, x + ts.cx, drawY + ts.cy }; h.url = url; h.zIndex = z; pH->push_back(h); }
-                curY = y + ts.cy + 4; break;
+                    HPEN p = CreatePen(PS_SOLID, 1, col.cr());
+                    auto op = SelectObject(dc, p);
+                    MoveToEx(dc, x, drawY + ts.cy - 1, 0);
+                    LineTo(dc, x + ts.cx, drawY + ts.cy - 1);
+                    SelectObject(dc, op);
+                    DeleteObject(p);
+                    SelectObject(dc, of2);
+                }});
+                if (pH) {
+                    Hit h;
+                    h.r = {x, drawY, x + ts.cx, drawY + ts.cy };
+                    h.url = url;
+                    h.zIndex = z;
+                    pH->push_back(h);
+                }
+                curY = y + ts.cy + 4;
+                break;
             }
             case HTP::EType::BUTTON: {
                 int bw = e->props.getInt("width", 120), bh = e->props.getInt("height", 35), by = y;
@@ -5430,7 +5460,7 @@ namespace Render {
                 int sz = e->props.getInt("size", 14), rad = e->props.getInt("border-radius", 6), z = e->props.getInt("z-index", 0);
                 auto bg = e->props.getColor("background", { 233,69,96 }), col = e->props.getColor("color", { 255,255,255 });
                 LumeString textStr = pCt;
-                renderQueue.push_back({z, [this, x, by, bw, bh, bg, rad, f = FontCache::get(sz, true), col, textStr]() {
+                renderQueue.push_back({z, by, by + bh + 8, [this, x, by, bw, bh, bg, rad, f = FontCache::get(sz, true), col, textStr]() {
                     HDC dc = this->docDC;
                     fillRR(dc, x, by, bw, bh, bg, rad);
                     auto of = SelectObject(dc, f);
@@ -5458,17 +5488,24 @@ namespace Render {
                 LumeString id = (pId[0] == '\0') ? ("inp_" + lume_to_string(y)) : pId;
                 auto& inp = Bindings::g_inputs[id];
                 if (inp.placeholder.empty() && pPh[0] != '\0') inp.placeholder = pPh;
-                inp.x = x; inp.y = iy; inp.w = iw; inp.h = ih; inp.multiline = isMulti;
-                renderQueue.push_back({z, [this, x, iy, iw, ih, id, isMulti]() {
+                inp.x = x;
+                inp.y = iy;
+                inp.w = iw;
+                inp.h = ih;
+                inp.multiline = isMulti;
+                renderQueue.push_back({z, iy, iy + ih + 8, [this, x, iy, iw, ih, id, isMulti]() {
                     bool foc = (Bindings::g_focusId == id);
                     auto& inp = Bindings::g_inputs[id];
                     HDC dc = this->docDC;
                     HBRUSH br = CreateSolidBrush(foc ? RGB(50, 50, 80) : RGB(40, 40, 60));
                     HPEN pn = CreatePen(PS_SOLID, foc ? 2 : 1, foc ? RGB(10, 189, 227) : RGB(100, 100, 140));
-                    auto ob = SelectObject(dc, br); auto op = SelectObject(dc, pn);
+                    auto ob = SelectObject(dc, br);
+                    auto op = SelectObject(dc, pn);
                     RoundRect(dc, x, iy, x + iw, iy + ih, 4, 4);
-                    SelectObject(dc, ob); SelectObject(dc, op);
-                    DeleteObject(br); DeleteObject(pn);
+                    SelectObject(dc, ob);
+                    SelectObject(dc, op);
+                    DeleteObject(br);
+                    DeleteObject(pn);
                     int save = SaveDC(dc);
                     IntersectClipRect(dc, x + 4, iy + 4, x + iw - 4, iy + ih - 4);
                     auto of = SelectObject(dc, FontCache::get(14)); SetBkMode(dc, TRANSPARENT);
@@ -5547,12 +5584,14 @@ namespace Render {
                 LumeString id = (pId[0] == '\0') ? ("cv_" + lume_to_string(y)) : pId;
                 auto bdr = e->props.getColor("border-color", {80,80,100});
                 auto cb = Canvas::get(id, refDC, cw, ch);
-                renderQueue.push_back({z, [this, x, cy, cw, ch, bdr, cb]() {
+                renderQueue.push_back({z, cy, cy + ch + 8, [this, x, cy, cw, ch, bdr, cb]() {
                     HDC dc = this->docDC;
                     HPEN p = CreatePen(PS_SOLID, 1, bdr.cr()); auto op = SelectObject(dc, p);
                     auto ob = SelectObject(dc, GetStockObject(NULL_BRUSH));
                     Rectangle(dc, x - 1, cy - 1, x + cw + 1, cy + ch + 1);
-                    SelectObject(dc, ob); SelectObject(dc, op); DeleteObject(p);
+                    SelectObject(dc, ob);
+                    SelectObject(dc, op);
+                    DeleteObject(p);
                     if (cb->dc) BitBlt(dc, x, cy, cw, ch, cb->dc, 0, 0, SRCCOPY);
                 }});
                 curY = y + ch + 8;
@@ -5564,7 +5603,7 @@ namespace Render {
                 LumeString id = (pId[0] == '\0') ? ("glcv_" + lume_to_string(y)) : pId;
                 auto bdr = e->props.getColor("border-color", {80,80,100});
                 bool autoCapture = e->props.getBool("capture", true);
-                renderQueue.push_back({z, [this, x, cy, cw, ch, bdr]() {
+                renderQueue.push_back({z, cy, cy + ch + 8, [this, x, cy, cw, ch, bdr]() {
                     HDC dc = this->docDC;
                     HPEN p = CreatePen(PS_SOLID, 1, bdr.cr()); auto op = SelectObject(dc, p);
                     auto ob = SelectObject(dc, GetStockObject(NULL_BRUSH));
@@ -5602,11 +5641,14 @@ namespace Render {
             case HTP::EType::DIVIDER: {
                 int t = e->props.getInt("thickness", 1), m = e->props.getInt("margin", 10), drawY = y + m, z = e->props.getInt("z-index", 0);
                 auto col = e->props.getColor("color", { 60,60,80 });
-                renderQueue.push_back({ z, [this, x, mw, drawY, t, col]() {
+                renderQueue.push_back({z, drawY, drawY + t + m * 2, [this, x, mw, drawY, t, col]() {
                     HDC dc = this->docDC;
-                    HPEN p = CreatePen(PS_SOLID, t, col.cr()); auto op = SelectObject(dc, p);
-                    MoveToEx(dc, x, drawY, 0); LineTo(dc, x + mw, drawY);
-                    SelectObject(dc, op); DeleteObject(p);
+                    HPEN p = CreatePen(PS_SOLID, t, col.cr());
+                    auto op = SelectObject(dc, p);
+                    MoveToEx(dc, x, drawY, 0);
+                    LineTo(dc, x + mw, drawY);
+                    SelectObject(dc, op);
+                    DeleteObject(p);
                 } });
                 curY = y + m * 2 + t; break;
             }
@@ -5625,9 +5667,9 @@ namespace Render {
                     SelectObject(refDC, of);
                     set_th(mKey, th);
                 }
-                auto col = e->props.getColor("color", { 200,200,200 });
+                auto col = e->props.getColor("color", {200,200,200});
                 LumeString textStr = pCt;
-                renderQueue.push_back({ z, [this, x, by, drawY, mw, th, col, f, textStr]() {
+                renderQueue.push_back({z, drawY, drawY + th + 4, [this, x, by, drawY, mw, th, col, f, textStr]() {
                     HDC dc = this->docDC;
                     HBRUSH b = CreateSolidBrush(col.cr());
                     HPEN pn = CreatePen(PS_SOLID, 1, col.cr());
@@ -5669,7 +5711,7 @@ namespace Render {
                 auto bdr = e->props.getColor("border-color", {80,80,100});
                 auto imgSp = (pSrc[0] != '\0') ? ImageCache::get(resolveUrl(pSrc, g_curUrl)) : nullptr;
                 LumeString altStr = pAlt;
-                renderQueue.push_back({ z, [this, x, drawY, iw, ih, bdr, imgSp, altStr]() {
+                renderQueue.push_back({z, drawY, drawY + ih + 8, [this, x, drawY, iw, ih, bdr, imgSp, altStr]() {
                     HDC dc = this->docDC;
                     if (imgSp && imgSp.get()) {
                         Gdiplus::Graphics g(dc);
@@ -5816,6 +5858,11 @@ namespace Render {
             for (auto& cmd : renderQueue) {
                 int currentScroll = scrollY;
                 if (cmd.zIndex != 0) currentScroll = scrollY - (scrollY * cmd.zIndex / 10);
+                int drawTop = cmd.top - currentScroll;
+                int drawBottom = cmd.bottom - currentScroll;
+                if (drawBottom < 0 || drawTop > h) {
+                    continue;
+                }
                 SetViewportOrgEx(targetDC, 0, -currentScroll, NULL);
                 cmd.drawCall();
             }
@@ -6425,6 +6472,15 @@ void loadContent(const LumeString& content, const LumeString& url, bool isIntern
         g_ren.setScroll(0);
         SetWindowTextU(g_mainWnd, (LumeString("Lume [") + scheme + LumeString("] - ") + displayUrl).c_str());
         SetWindowTextU(g_addressBar, url.c_str());
+        LumeString clean = displayUrl;
+        size_t schemePos = clean.find("://");
+        if (schemePos != LumeString::npos) clean = clean.substr(schemePos + 3);
+        while (!clean.empty() && clean.back() == '/') clean.pop_back();
+        size_t lastSlash = clean.find_last_of("/\\");
+        LumeString pageName = (lastSlash != LumeString::npos) ? clean.substr(lastSlash + 1) : clean;
+        if (pageName.empty()) pageName = scheme;
+        g_doc.title = "[" + scheme + "] " + pageName;
+        updateTabTitle(g_tabIdx);
         invalidateDOM();
         return;
     }
@@ -6449,6 +6505,13 @@ void loadContent(const LumeString& content, const LumeString& url, bool isIntern
         g_ren.setScroll(0);
         SetWindowTextU(g_mainWnd, (LumeString("Lume (Custom Render) - ") + displayUrl).c_str());
         SetWindowTextU(g_addressBar, url.c_str());
+        LumeString pageName = displayUrl;
+        auto lastSlash = pageName.find_last_of("/\\");
+        if (lastSlash != LumeString::npos && lastSlash + 1 < pageName.length()) {
+            pageName = pageName.substr(lastSlash + 1);
+        }
+        g_doc.title = pageName;
+        updateTabTitle(g_tabIdx);
         invalidateDOM();
         return;
     }
