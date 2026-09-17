@@ -6212,7 +6212,7 @@ namespace Pages {
   end
   local timer_id = nil
   on_click('btn_load_plg', function()
-    local ok = plugin_from_net("https://raw.githubusercontent.com/Lume-corp/LumeSources/refs/heads/main/plugins/aaOfficial/V0.6.1/sysmon.dll")
+    local ok = plugin_from_net("https://raw.githubusercontent.com/Lume-corp/LumeSources/refs/heads/main/plugins/aaOfficial/V0.7.1/sysmon.dll")
     if ok then
       set_text('plg_status', 'Status: Loaded & Active!')
       set_prop('plg_status', 'color', '#10b981')
