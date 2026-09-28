@@ -177,35 +177,296 @@ struct LumePair {
     T2 second;
     LumePair() = default;
     LumePair(const T1& a, const T2& b) : first(a), second(b) {}
+    LumePair(T1&& a, T2&& b) : first(static_cast<T1&&>(a)), second(static_cast<T2&&>(b)) {}
+};
+template<typename T> struct LumeIsScalar {
+    static constexpr bool value = false;
+};
+template<> struct LumeIsScalar<int> {
+    static constexpr bool value = true; };
+template<> struct LumeIsScalar<unsigned int> {
+    static constexpr bool value = true;
+};
+template<> struct LumeIsScalar<long> {
+    static constexpr bool value = true;
+};
+template<> struct LumeIsScalar<unsigned long> {
+    static constexpr bool value = true;
+};
+template<> struct LumeIsScalar<long long> {
+    static constexpr bool value = true;
+};
+template<> struct LumeIsScalar<unsigned long long> {
+    static constexpr bool value = true;
+};
+template<> struct LumeIsScalar<short> {
+    static constexpr bool value = true;
+};
+template<> struct LumeIsScalar<unsigned short> {
+    static constexpr bool value = true;
+};
+template<> struct LumeIsScalar<char> {
+    static constexpr bool value = true;
+};
+template<> struct LumeIsScalar<unsigned char> {
+    static constexpr bool value = true;
+};
+template<typename U> struct LumeIsScalar<U*> {
+    static constexpr bool value = true;
+};
+template<typename T>
+struct LumeHasher {
+    uint64_t operator()(const T& val) const {
+        if constexpr (LumeIsScalar<T>::value) {
+            uint64_t v = (uint64_t)val;
+            v ^= v >> 30;
+            v *= 0xbf58476d1ce4e5b9ULL;
+            v ^= v >> 27;
+            v *= 0x94d049bb133111ebULL;
+            v ^= v >> 31;
+            return v;
+        }
+        else {
+            uint64_t h = 14695981039346656037ULL;
+            const auto* p = val.data();
+            size_t len = val.size();
+            for (size_t i = 0; i < len; ++i) {
+                h ^= (uint64_t)(uint8_t)p[i];
+                h *= 1099511628211ULL;
+            }
+            return h;
+        }
+    }
 };
 template<typename K, typename V>
 class LumeMap {
 private:
-    LumeVector<LumePair<K, V>> m_data;
+    struct Node {
+        uint8_t state = 0;
+        union {
+            LumePair<K, V> kv;
+        };
+        Node() : state(0) {}
+        ~Node() {
+            if (state == 1) kv.~LumePair();
+        }
+    };
+    Node* m_nodes = nullptr;
+    size_t m_capacity = 0;
+    size_t m_size = 0;
+    size_t m_tombstones = 0;
+    void rehash(size_t newCap) {
+        if (newCap < 16) newCap = 16;
+        Node* oldNodes = m_nodes;
+        size_t oldCap = m_capacity;
+        m_capacity = newCap;
+        m_nodes = new Node[m_capacity];
+        m_size = 0;
+        m_tombstones = 0;
+        if (oldNodes) {
+            size_t mask = m_capacity - 1;
+            for (size_t i = 0; i < oldCap; ++i) {
+                if (oldNodes[i].state == 1) {
+                    uint64_t h = LumeHasher<K>{}(oldNodes[i].kv.first);
+                    size_t idx = h & mask;
+                    while (m_nodes[idx].state != 0) {
+                        idx = (idx + 1) & mask;
+                    }
+                    new (&m_nodes[idx].kv) LumePair<K, V>(
+                        static_cast<K&&>(oldNodes[i].kv.first),
+                        static_cast<V&&>(oldNodes[i].kv.second)
+                    );
+                    m_nodes[idx].state = 1;
+                    m_size++;
+                }
+            }
+            delete[] oldNodes;
+        }
+    }
 public:
-    using iterator = LumePair<K, V>*;
+    struct iterator {
+        Node* m_ptr = nullptr;
+        Node* m_end = nullptr;
+        void advance() {
+            while (m_ptr < m_end && m_ptr->state != 1) {
+                m_ptr++;
+            }
+        }
+        iterator() = default;
+        iterator(Node* p, Node* e) : m_ptr(p), m_end(e) {
+            advance();
+        }
+        LumePair<K, V>& operator*() const {
+            return m_ptr->kv;
+        }
+        LumePair<K, V>* operator->() const {
+            return &m_ptr->kv;
+        }
+        iterator& operator++() {
+            if (m_ptr < m_end) {
+                m_ptr++;
+                advance();
+            }
+            return *this;
+        }
+        bool operator==(const iterator& o) const {
+            return m_ptr == o.m_ptr;
+        }
+        bool operator!=(const iterator& o) const {
+            return m_ptr != o.m_ptr;
+        }
+    };
     LumeMap() = default;
+    LumeMap(const LumeMap& o) {
+        if (o.m_capacity > 0) {
+            m_capacity = o.m_capacity;
+            m_nodes = new Node[m_capacity];
+            for (size_t i = 0; i < m_capacity; ++i) {
+                if (o.m_nodes[i].state == 1) {
+                    new (&m_nodes[i].kv) LumePair<K, V>(o.m_nodes[i].kv);
+                    m_nodes[i].state = 1;
+                    m_size++;
+                }
+            }
+        }
+    }
+    LumeMap(LumeMap&& o) noexcept {
+        m_nodes = o.m_nodes;
+        m_capacity = o.m_capacity;
+        m_size = o.m_size;
+        m_tombstones = o.m_tombstones;
+        o.m_nodes = nullptr;
+        o.m_capacity = 0;
+        o.m_size = 0;
+        o.m_tombstones = 0;
+    }
+    LumeMap& operator=(const LumeMap& o) {
+        if (this != &o) {
+            clear();
+            if (m_nodes) delete[] m_nodes;
+            m_nodes = nullptr;
+            m_capacity = 0;
+            if (o.m_capacity > 0) {
+                m_capacity = o.m_capacity;
+                m_nodes = new Node[m_capacity];
+                for (size_t i = 0; i < m_capacity; ++i) {
+                    if (o.m_nodes[i].state == 1) {
+                        new (&m_nodes[i].kv) LumePair<K, V>(o.m_nodes[i].kv);
+                        m_nodes[i].state = 1;
+                        m_size++;
+                    }
+                }
+            }
+        }
+        return *this;
+    }
+    LumeMap& operator=(LumeMap&& o) noexcept {
+        if (this != &o) {
+            clear();
+            if (m_nodes) delete[] m_nodes;
+            m_nodes = o.m_nodes;
+            m_capacity = o.m_capacity;
+            m_size = o.m_size;
+            m_tombstones = o.m_tombstones;
+            o.m_nodes = nullptr;
+            o.m_capacity = 0;
+            o.m_size = 0;
+            o.m_tombstones = 0;
+        }
+        return *this;
+    }
+    ~LumeMap() {
+        if (m_nodes) delete[] m_nodes;
+    }
     V& operator[](const K& key) {
-        for (auto& p : m_data) if (p.first == key) return p.second;
-        m_data.push_back(LumePair<K, V>(key, V()));
-        return m_data.back().second;
+        if (m_capacity == 0 || (m_size + m_tombstones) * 2 >= m_capacity) {
+            rehash(m_capacity == 0 ? 16 : m_capacity * 2);
+        }
+        size_t mask = m_capacity - 1;
+        uint64_t h = LumeHasher<K>{}(key);
+        size_t idx = h & mask;
+        int64_t firstDel = -1;
+        while (true) {
+            Node& n = m_nodes[idx];
+            if (n.state == 0) {
+                size_t ins = (firstDel != -1) ? (size_t)firstDel : idx;
+                new (&m_nodes[ins].kv) LumePair<K, V>(key, V());
+                if (m_nodes[ins].state == 2) m_tombstones--;
+                m_nodes[ins].state = 1;
+                m_size++;
+                return m_nodes[ins].kv.second;
+            }
+            if (n.state == 1) {
+                if (n.kv.first == key) return n.kv.second;
+            }
+            else if (n.state == 2 && firstDel == -1) {
+                firstDel = (int64_t)idx;
+            }
+            idx = (idx + 1) & mask;
+        }
     }
     iterator find(const K& key) {
-        for (auto it = m_data.begin(); it != m_data.end(); ++it) {
-            if (it->first == key) return it;
+        if (m_size == 0 || m_capacity == 0) return end();
+        size_t mask = m_capacity - 1;
+        uint64_t h = LumeHasher<K>{}(key);
+        size_t idx = h & mask;
+        while (true) {
+            Node& n = m_nodes[idx];
+            if (n.state == 0) return end();
+            if (n.state == 1 && n.kv.first == key) {
+                return iterator(&m_nodes[idx], &m_nodes[m_capacity]);
+            }
+            idx = (idx + 1) & mask;
         }
-        return m_data.end();
     }
     void erase(iterator it) {
-        if (it >= m_data.begin() && it < m_data.end()) m_data.erase(it);
+        if (it != end() && it.m_ptr && it.m_ptr->state == 1) {
+            it.m_ptr->kv.~LumePair();
+            it.m_ptr->state = 2;
+            m_size--;
+            m_tombstones++;
+        }
     }
     void erase(const K& key) {
         auto it = find(key);
-        if (it != end()) m_data.erase(it);
+        if (it != end()) erase(it);
     }
-    void clear() { m_data.clear(); }
-    iterator begin() { return m_data.begin(); }
-    iterator end() { return m_data.end(); }
+    void clear() {
+        if (m_nodes) {
+            for (size_t i = 0; i < m_capacity; ++i) {
+                if (m_nodes[i].state == 1) {
+                    m_nodes[i].kv.~LumePair();
+                }
+                m_nodes[i].state = 0;
+            }
+        }
+        m_size = 0;
+        m_tombstones = 0;
+    }
+    size_t size() const {
+        return m_size;
+    }
+    bool empty() const {
+        return m_size == 0;
+    }
+    iterator begin() {
+        if (!m_nodes || m_size == 0) return end();
+        return iterator(&m_nodes[0], &m_nodes[m_capacity]);
+    }
+    iterator end() {
+        if (!m_nodes) return iterator(nullptr, nullptr);
+        return iterator(&m_nodes[m_capacity], &m_nodes[m_capacity]);
+    }
+
+    iterator begin() const {
+        if (!m_nodes || m_size == 0) return end();
+        return iterator(&m_nodes[0], &m_nodes[m_capacity]);
+    }
+
+    iterator end() const {
+        if (!m_nodes) return iterator(nullptr, nullptr);
+        return iterator(&m_nodes[m_capacity], &m_nodes[m_capacity]);
+    }
 };
 template<typename Iter, typename Compare>
 void LumeStableSort(Iter first, Iter last, Compare comp) {
@@ -223,56 +484,93 @@ void LumeStableSort(Iter first, Iter last, Compare comp) {
 template<typename T>
 class LumeBasicString {
 private:
+    static constexpr size_t SSO_CAP = 15;
     T* m_data = nullptr;
     size_t m_size = 0;
     size_t m_capacity = 0;
+    T m_sso[SSO_CAP + 1];
     void grow(size_t minCap) {
-        size_t newCap = m_capacity == 0 ? 15 : m_capacity * 2;
+        size_t newCap = m_capacity == 0 ? (SSO_CAP * 2) : (m_capacity * 2);
         if (newCap < minCap) newCap = minCap;
+        if (newCap <= SSO_CAP) return;
         HANDLE hHeap = GetProcessHeap();
-        if (!m_data) m_data = (T*)HeapAlloc(hHeap, 0, (newCap + 1) * sizeof(T));
-        else m_data = (T*)HeapReAlloc(hHeap, 0, m_data, (newCap + 1) * sizeof(T));
+        T* newData = (T*)HeapAlloc(hHeap, 0, (newCap + 1) * sizeof(T));
+        if (m_size > 0 && m_data) {
+            for (size_t i = 0; i < m_size; ++i) newData[i] = m_data[i];
+        }
+        newData[m_size] = 0;
+        if (m_data && m_data != m_sso) {
+            HeapFree(hHeap, 0, m_data);
+        }
+        m_data = newData;
         m_capacity = newCap;
-        m_data[m_size] = 0;
     }
 public:
     static const size_t npos = (size_t)-1;
     using iterator = T*;
     using const_iterator = const T*;
-    LumeBasicString() { grow(15); }
+    LumeBasicString() {
+        m_data = m_sso;
+        m_sso[0] = 0;
+        m_size = 0;
+        m_capacity = SSO_CAP;
+    }
     LumeBasicString(const T* str) {
-        size_t len = 0; while (str && str[len]) len++;
-        if (len > 0) {
-            grow(len);
-            append(str, len);
+        m_data = m_sso;
+        m_sso[0] = 0;
+        m_size = 0;
+        m_capacity = SSO_CAP;
+        if (str) {
+            size_t len = 0;
+            while (str[len]) len++;
+            if (len > 0) append(str, len);
         }
-        else grow(15);
     }
     LumeBasicString(const T* str, size_t len) {
-        if (len > 0) {
-            grow(len);
-            append(str, len);
-        }
-        else grow(15);
+        m_data = m_sso;
+        m_sso[0] = 0;
+        m_size = 0;
+        m_capacity = SSO_CAP;
+        if (str && len > 0) append(str, len);
     }
     LumeBasicString(size_t count, T ch) {
-        grow(count);
+        m_data = m_sso;
+        m_sso[0] = 0;
+        m_size = 0;
+        m_capacity = SSO_CAP;
+        if (count > SSO_CAP) grow(count);
         for (size_t i = 0; i < count; ++i) m_data[i] = ch;
         m_size = count;
         m_data[m_size] = 0;
     }
     LumeBasicString(const LumeBasicString& o) {
-        if (o.m_size > 0) {
-            grow(o.m_size);
-            append(o.m_data, o.m_size);
-        }
-        else grow(15);
+        m_data = m_sso;
+        m_sso[0] = 0;
+        m_size = 0;
+        m_capacity = SSO_CAP;
+        if (o.m_size > 0) append(o.m_data, o.m_size);
     }
-    LumeBasicString(LumeBasicString&& o) noexcept : m_data(o.m_data), m_size(o.m_size), m_capacity(o.m_capacity) {
-        o.m_data = nullptr; o.m_size = 0; o.m_capacity = 0;
+    LumeBasicString(LumeBasicString&& o) noexcept {
+        if (o.m_data == o.m_sso) {
+            m_data = m_sso;
+            m_capacity = SSO_CAP;
+            m_size = o.m_size;
+            for (size_t i = 0; i <= m_size; ++i) m_sso[i] = o.m_sso[i];
+        }
+        else {
+            m_data = o.m_data;
+            m_size = o.m_size;
+            m_capacity = o.m_capacity;
+        }
+        o.m_data = o.m_sso;
+        o.m_sso[0] = 0;
+        o.m_size = 0;
+        o.m_capacity = SSO_CAP;
     }
     ~LumeBasicString() {
-        if (m_data) HeapFree(GetProcessHeap(), 0, m_data);
+        if (m_data && m_data != m_sso) {
+            HeapFree(GetProcessHeap(), 0, m_data);
+        }
     }
     LumeBasicString& operator=(const LumeBasicString& o) {
         if (this != &o) {
@@ -283,33 +581,59 @@ public:
     }
     LumeBasicString& operator=(LumeBasicString&& o) noexcept {
         if (this != &o) {
-            if (m_data) HeapFree(GetProcessHeap(), 0, m_data);
-            m_data = o.m_data; m_size = o.m_size; m_capacity = o.m_capacity;
-            o.m_data = nullptr; o.m_size = 0; o.m_capacity = 0;
+            if (m_data && m_data != m_sso) {
+                HeapFree(GetProcessHeap(), 0, m_data);
+            }
+            if (o.m_data == o.m_sso) {
+                m_data = m_sso;
+                m_capacity = SSO_CAP;
+                m_size = o.m_size;
+                for (size_t i = 0; i <= m_size; ++i) m_sso[i] = o.m_sso[i];
+            }
+            else {
+                m_data = o.m_data;
+                m_size = o.m_size;
+                m_capacity = o.m_capacity;
+            }
+            o.m_data = o.m_sso;
+            o.m_sso[0] = 0;
+            o.m_size = 0;
+            o.m_capacity = SSO_CAP;
         }
         return *this;
     }
     LumeBasicString& operator=(const T* str) {
         clear();
-        size_t len = 0; while (str && str[len]) len++;
-        if (len > 0) append(str, len);
+        if (str) {
+            size_t len = 0;
+            while (str[len]) len++;
+            if (len > 0) append(str, len);
+        }
         return *this;
     }
     void append(const T* str, size_t len) {
-        if (len == 0) return;
+        if (len == 0 || !str) return;
         if (m_size + len > m_capacity) grow(m_size + len);
         for (size_t i = 0; i < len; ++i) m_data[m_size + i] = str[i];
         m_size += len;
         m_data[m_size] = 0;
     }
-    LumeBasicString& operator+=(const LumeBasicString& o) { append(o.m_data, o.size()); return *this; }
+    LumeBasicString& operator+=(const LumeBasicString& o) {
+        append(o.m_data, o.size());
+        return *this;
+    }
     LumeBasicString& operator+=(const T* str) {
         size_t len = 0; while (str && str[len]) len++;
         append(str, len); return *this;
     }
-    LumeBasicString& operator+=(T ch) {append(&ch, 1); return *this;}
+    LumeBasicString& operator+=(T ch) {
+        append(&ch, 1);
+        return *this;
+    }
     friend LumeBasicString operator+(const LumeBasicString& lhs, const LumeBasicString& rhs) {
-        LumeBasicString res = lhs; res += rhs; return res;
+        LumeBasicString res = lhs;
+        res += rhs;
+        return res;
     }
     friend LumeBasicString operator+(const LumeBasicString& lhs, const T* rhs) {
         LumeBasicString res = lhs;
@@ -341,10 +665,18 @@ public:
         }
         return i == m_size && str[i] == 0;
     }
-    bool operator!=(const LumeBasicString& o) const {return !(*this == o);}
-    bool operator!=(const T* str) const {return !(*this == str);}
-    friend bool operator==(const T* lhs, const LumeBasicString& rhs) {return rhs == lhs;}
-    friend bool operator!=(const T* lhs, const LumeBasicString& rhs) {return rhs != lhs;}
+    bool operator!=(const LumeBasicString& o) const {
+        return !(*this == o);
+    }
+    bool operator!=(const T* str) const {
+        return !(*this == str);
+    }
+    friend bool operator==(const T* lhs, const LumeBasicString& rhs) {
+        return rhs == lhs;
+    }
+    friend bool operator!=(const T* lhs, const LumeBasicString& rhs) {
+        return rhs != lhs;
+    }
     bool operator<(const LumeBasicString& o) const {
         size_t minLen = m_size < o.m_size ? m_size : o.m_size;
         for (size_t i = 0; i < minLen; ++i) {
@@ -353,16 +685,39 @@ public:
         }
         return m_size < o.m_size;
     }
-    const T* c_str() const {return m_data ? m_data : (const T*)"\0\0";}
-    T* data() {return m_data;}
-    const T* data() const {return m_data;}
-    size_t size() const {return m_size;}
-    size_t length() const {return m_size;}
-    bool empty() const {return m_size == 0;}
-    iterator begin() {return m_data;}
-    iterator end() {return m_data + m_size;}
-    const_iterator begin() const {return m_data;}
-    const_iterator end() const {return m_data + m_size;}
+    const T* c_str() const {
+        return m_data ? m_data : (const T*)"\0\0";
+    }
+    T* data() {
+        return m_data;
+    }
+    const T* data() const {
+        return m_data;
+    }
+    size_t size() const {
+        return m_size;
+    }
+    size_t length() const {
+        return m_size;
+    }
+    bool empty() const {
+        return m_size == 0;
+    }
+    size_t capacity() const {
+        return m_capacity;
+    }
+    iterator begin() {
+        return m_data;
+    }
+    iterator end() {
+        return m_data + m_size;
+    }
+    const_iterator begin() const {
+        return m_data;
+    }
+    const_iterator end() const {
+        return m_data + m_size;
+    }
     size_t rfind(const T* str, size_t pos = npos) const {
         size_t len = 0; while (str && str[len]) len++;
         if (len == 0) return pos < m_size ? pos : m_size;
@@ -387,25 +742,42 @@ public:
     }
     iterator erase(iterator it) {
         if (m_data && it >= m_data && it < m_data + m_size) {
-            size_t pos = it - m_data;
-            erase(pos, 1);
-            return m_data + pos;
+            size_t p = it - m_data;
+            erase(p, 1);
+            return m_data + p;
         }
         return end();
     }
-    void clear() { m_size = 0; if (m_data) m_data[0] = 0; }
+    void clear() {
+        m_size = 0;
+        if (m_data) m_data[0] = 0;
+    }
     void resize(size_t n) {
         if (n > m_capacity) grow(n);
-        if (n > m_size && m_data) {for (size_t i = m_size; i < n; ++i) m_data[i] = 0;}
+        if (n > m_size && m_data) {
+            for (size_t i = m_size; i < n; ++i) m_data[i] = 0;
+        }
         m_size = n;
         if (m_data) m_data[m_size] = 0;
     }
-    void reserve(size_t n) {if (n > m_capacity) grow(n);}
-    T& operator[](size_t i) {return m_data[i];}
-    const T& operator[](size_t i) const {return m_data[i];}
-    T& front() {return m_data[0];}
-    T& back() {return m_data[m_size - 1];}
-    void push_back(T ch) {append(&ch, 1);}
+    void reserve(size_t n) {
+        if (n > m_capacity) grow(n);
+    }
+    T& operator[](size_t i) {
+        return m_data[i];
+    }
+    const T& operator[](size_t i) const {
+        return m_data[i];
+    }
+    T& front() {
+        return m_data[0];
+    }
+    T& back() {
+        return m_data[m_size - 1];
+    }
+    void push_back(T ch) {
+        append(&ch, 1);
+    }
     void pop_back() {
         if (m_size > 0 && m_data) {
             m_size--;
@@ -423,7 +795,9 @@ public:
         for (size_t i = pos; i < m_size; ++i) if (m_data[i] == ch) return i;
         return npos;
     }
-    size_t find(const LumeBasicString& str, size_t pos = 0) const {return find(str.c_str(), pos);}
+    size_t find(const LumeBasicString& str, size_t pos = 0) const {
+        return find(str.c_str(), pos);
+    }
     size_t find(const T* str, size_t pos = 0) const {
         size_t len = 0; while (str && str[len]) len++;
         if (len == 0) return pos <= m_size ? pos : npos;
@@ -431,7 +805,10 @@ public:
         for (size_t i = pos; i <= m_size - len; ++i) {
             bool match = true;
             for (size_t j = 0; j < len; ++j) {
-                if (m_data[i + j] != str[j]) { match = false; break; }
+                if (m_data[i + j] != str[j]) {
+                    match = false;
+                    break;
+                }
             }
             if (match) return i;
         }
@@ -795,10 +1172,10 @@ HWND g_statusBar = nullptr;
 HWND g_menuBtn = nullptr;
 const int TOOLBAR_H = 65;
 const int STATUS_H = 24;
-#define MAX_LUME_TABS 10
+#define MAX_LUME_TABS 64
 int g_tabIdx = 0;
 int g_tabCount = 1;
-HWND g_tabBtns[MAX_LUME_TABS] = { nullptr };
+HWND g_tabBtns[MAX_LUME_TABS] = {nullptr};
 HWND g_newTabBtn = nullptr;
 #define ID_ADDR 1001
 #define ID_GO   1002
@@ -849,18 +1226,36 @@ void repositionNewTabBtn() {
     if (!g_tabControl || !g_newTabBtn) return;
     HWND hParent = GetParent(g_tabControl);
     if (!hParent) return;
-    RECT rcLast = {0};
-    if (g_tabCount > 0 && TabCtrl_GetItemRect(g_tabControl, g_tabCount - 1, &rcLast)) {
-        RECT cr;
-        GetClientRect(hParent, &cr);
-        int btnW = 24, btnH = 22;
-        int x = rcLast.right + 4;
-        int y = rcLast.top + (rcLast.bottom - rcLast.top - btnH) / 2;
-        if (x + btnW > cr.right - 58) {
-            x = cr.right - 58 - btnW;
-        }
-        SetWindowPos(g_newTabBtn, HWND_TOP, x, y, btnW, btnH, SWP_SHOWWINDOW);
+    RECT cr;
+    GetClientRect(hParent, &cr);
+    int w = cr.right;
+    int btnW = 24, btnH = 22;
+    const int targetTabW = 140;
+    int updownW = GetSystemMetrics(SM_CXVSCROLL) * 2;
+    if (updownW < 34) updownW = 34;
+    int totalNeeded = g_tabCount * targetTabW;
+    int maxSpaceForTabs = w - btnW - 8;
+    int tabW = targetTabW;
+    int finalTabCtrlW = maxSpaceForTabs;
+    int xBtn = w - btnW - 2;
+    if (totalNeeded <= maxSpaceForTabs) {
+        tabW = targetTabW;
+        SendMessageW(g_tabControl, TCM_SETITEMSIZE, 0, MAKELPARAM(tabW, 25));
+        xBtn = (g_tabCount * tabW) + 4;
+        MoveWindow(g_tabControl, 0, 0, maxSpaceForTabs, 28, TRUE);
     }
+    else {
+        int availForTabs = maxSpaceForTabs - updownW;
+        if (availForTabs < targetTabW) availForTabs = targetTabW;
+        int numVisible = availForTabs / targetTabW;
+        if (numVisible < 1) numVisible = 1;
+        tabW = availForTabs / numVisible;
+        SendMessageW(g_tabControl, TCM_SETITEMSIZE, 0, MAKELPARAM(tabW, 25));
+        finalTabCtrlW = (numVisible * tabW) + updownW;
+        MoveWindow(g_tabControl, 0, 0, finalTabCtrlW, 28, TRUE);
+        xBtn = finalTabCtrlW + 2;
+    }
+    SetWindowPos(g_newTabBtn, HWND_TOP, xBtn, 3, btnW, btnH, SWP_SHOWWINDOW);
 }
 void ensureBackbuffer(HDC hdc, int w, int h) {
     if (g_backDC && g_backW == w && g_backH == h) return;
@@ -907,14 +1302,17 @@ struct TabScope {
 };
 static bool g_renderPending = false;
 void invalidateDOM() {
-    g_domDirty = true;
-    g_contentDirty = true;
-    g_renderPending = true;
+    if (!g_tabControl || g_tabIdx == TabCtrl_GetCurSel(g_tabControl)) {
+        g_domDirty = true;
+        g_contentDirty = true;
+        g_renderPending = true;
+    }
 }
-
 void invalidateContent() {
-    g_contentDirty = true;
-    g_renderPending = true;
+    if (!g_tabControl || g_tabIdx == TabCtrl_GetCurSel(g_tabControl)) {
+        g_contentDirty = true;
+        g_renderPending = true;
+    }
 }
 void invalidateRect(int x, int y, int w, int h) {
     if (!g_mainWnd) return;
@@ -1611,8 +2009,10 @@ namespace AsyncNet {
             });
     }
 }
+void updateTabTitle(int idx);
 namespace WasmEngine {
     int load(const LumeString& wasmBytes);
+    int call(int inst_id, const char* func, int num_args, unsigned __int64* args, int num_results, unsigned __int64* results);
 }
 namespace Bindings {
     extern LumeMap<LumeString, LumeString> g_texts_arr[];
@@ -1659,6 +2059,7 @@ namespace Bindings {
 }
 namespace Script {
     extern lua_State* g_L;
+    void exec(const LumeString& code);
 }
 extern HTP::Doc g_docs[];
 #ifndef g_doc
@@ -1707,9 +2108,15 @@ namespace Plugins {
         if (id.empty() || (id[0] >= '0' && id[0] <= '9')) id = "plugin_" + id;
         return id;
     }
-    static void hostInvalidateContent() {invalidateContent();}
-    static void hostSetStatus(const char* t) {setStatus(t ? t : "");}
-    static void hostNavigateTo(const char* u) { if (u) navigateTo(u); }
+    static void hostInvalidateContent() {
+        invalidateContent();
+    }
+    static void hostSetStatus(const char* t) {
+        setStatus(t ? t : "");
+    }
+    static void hostNavigateTo(const char* u) {
+        if (u) navigateTo(u);
+    }
     LumeMap<LumeString, CustomTagHandler> g_customTags;
     LumeMap<LumeString, CustomPageHandler> g_customPages;
     CustomPageHandler* g_activeCustomEngine_arr[MAX_LUME_TABS] = { nullptr };
@@ -1868,14 +2275,30 @@ namespace Plugins {
             *out_body = nullptr;
         }
     }
-    static void host_free_string(char* s) {if (s) HeapFree(GetProcessHeap(), 0, s);}
-    static int host_is_key_pressed(int vk) {return Bindings::is_key_pressed(vk) ? 1 : 0;}
-    static int host_is_key_released(int vk) {return Bindings::is_key_released(vk) ? 1 : 0;}
-    static int host_key_down(int vk) {return Bindings::key_down(vk) ? 1 : 0;}
-    static int host_capture_mouse(const char* id, int mode) {return Bindings::capture_mouse(id, mode) ? 1 : 0;}
-    static int host_is_mouse_captured() {return Bindings::is_mouse_captured() ? 1 : 0;}
-    static int host_is_fullscreen() {return Bindings::is_fullscreen() ? 1 : 0;}
-    static int host_window_active() {return Bindings::window_active() ? 1 : 0;}
+    static void host_free_string(char* s) {
+        if (s) HeapFree(GetProcessHeap(), 0, s);
+    }
+    static int host_is_key_pressed(int vk) {
+        return Bindings::is_key_pressed(vk) ? 1 : 0;
+    }
+    static int host_is_key_released(int vk) {
+        return Bindings::is_key_released(vk) ? 1 : 0;
+    }
+    static int host_key_down(int vk) {
+        return Bindings::key_down(vk) ? 1 : 0;
+    }
+    static int host_capture_mouse(const char* id, int mode) {
+        return Bindings::capture_mouse(id, mode) ? 1 : 0;
+    }
+    static int host_is_mouse_captured() {
+        return Bindings::is_mouse_captured() ? 1 : 0;
+    }
+    static int host_is_fullscreen() {
+        return Bindings::is_fullscreen() ? 1 : 0;
+    }
+    static int host_window_active() {
+        return Bindings::window_active() ? 1 : 0;
+    }
     static void host_register_click_handler(const char* id, void(*cb)(void*), void* ctx) {
         LumeString sid = id;
         Bindings::on_click(id, LumeAction([sid, cb, ctx]() {if (cb) cb(ctx);}));
@@ -1899,6 +2322,104 @@ namespace Plugins {
             lua_pop(L, 1);
         }
         lua_setglobal(L, name);
+    }
+    static void hostExecScript(const char* code) {
+        if (code) Script::exec(code);
+    }
+    static void hostSetPageTitle(const char* title) {
+        if (title) {
+            g_doc.title = title;
+            updateTabTitle(g_tabIdx);
+        }
+    }
+    static double hostGetTime(void) {
+        return getHighResTime();
+    }
+    static unsigned int hostGlLoadTexture(const char* path) {
+        if (!path || !*path) return 0;
+        wchar_t wpath[MAX_PATH];
+        MultiByteToWideChar(CP_UTF8, 0, path, -1, wpath, MAX_PATH);
+        Gdiplus::Bitmap bmp(wpath);
+        if (bmp.GetLastStatus() != Gdiplus::Ok) return 0;
+        int w = bmp.GetWidth();
+        int h = bmp.GetHeight();
+        LumeVector<unsigned char> pixels(w * h * 4);
+        Gdiplus::Rect rect(0, 0, w, h);
+        Gdiplus::BitmapData bmpData;
+        bmp.LockBits(&rect, Gdiplus::ImageLockModeRead, PixelFormat32bppARGB, &bmpData);
+        const unsigned char* src = (const unsigned char*)bmpData.Scan0;
+        int stride = bmpData.Stride;
+        for (int y = 0; y < h; y++) {
+            for (int x = 0; x < w; x++) {
+                int i = y * stride + x * 4;
+                int p = (y * w + x) * 4;
+                pixels[p + 0] = src[i + 2];
+                pixels[p + 1] = src[i + 1];
+                pixels[p + 2] = src[i + 0];
+                pixels[p + 3] = src[i + 3];
+            }
+        }
+        bmp.UnlockBits(&bmpData);
+        GLuint texID = 0;
+        glGenTextures(1, &texID);
+        glBindTexture(GL_TEXTURE_2D, texID);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+        return (unsigned int)texID;
+    }
+    static void hostDownloadAsync(const char* url, const char* filename) {
+        if (url && filename) AsyncNet::startDownload(url, filename);
+    }
+    static char* hostReadFile(const char* path, size_t* out_len) {
+        if (!path) return nullptr;
+        LumeString s = fastReadFile(path);
+        if (s.empty()) {
+            if (out_len) *out_len = 0;
+            return nullptr;
+        }
+        char* buf = (char*)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, s.size() + 1);
+        if (buf) {
+            memcpy(buf, s.data(), s.size());
+            buf[s.size()] = 0;
+            if (out_len) *out_len = s.size();
+        }
+        return buf;
+    }
+    static void hostClipboardSet(const char* text) {
+        if (!text || !g_mainWnd) return;
+        if (OpenClipboard(g_mainWnd)) {
+            EmptyClipboard();
+            int len = lstrlenA(text);
+            HGLOBAL hg = GlobalAlloc(GMEM_MOVEABLE, len + 1);
+            if (hg) {
+                memcpy(GlobalLock(hg), text, len + 1);
+                GlobalUnlock(hg);
+                SetClipboardData(CF_TEXT, hg);
+            }
+            CloseClipboard();
+        }
+    }
+    static char* hostClipboardGet(void) {
+        if (!g_mainWnd) return nullptr;
+        char* res = nullptr;
+        if (OpenClipboard(g_mainWnd)) {
+            HANDLE h = GetClipboardData(CF_TEXT);
+            if (h) {
+                const char* cl = (const char*)GlobalLock(h);
+                if (cl) {
+                    int len = lstrlenA(cl);
+                    res = (char*)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, len + 1);
+                    if (res) memcpy(res, cl, len + 1);
+                    GlobalUnlock(h);
+                }
+            }
+            CloseClipboard();
+        }
+        return res;
+    }
+    static int hostWasmCall(int inst_id, const char* func, int num_args, unsigned __int64* args, int num_results, unsigned __int64* results) {
+        return WasmEngine::call(inst_id, func, num_args, args, num_results, results);
     }
     void initHostAPI() {
         g_hostAPI.get_main_hwnd = hostGetMainHwnd;
@@ -1982,6 +2503,15 @@ namespace Plugins {
         g_hostAPI.register_frame_hook = hostRegisterFrameHook;
         g_hostAPI.get_node_by_id = hostGetNodeById;
         g_hostAPI.set_node_text_fast = hostSetNodeTextFast;
+        g_hostAPI.exec_script = hostExecScript;
+        g_hostAPI.set_page_title = hostSetPageTitle;
+        g_hostAPI.get_time = hostGetTime;
+        g_hostAPI.gl_load_texture = hostGlLoadTexture;
+        g_hostAPI.download_async = hostDownloadAsync;
+        g_hostAPI.read_file = hostReadFile;
+        g_hostAPI.clipboard_set = hostClipboardSet;
+        g_hostAPI.clipboard_get = hostClipboardGet;
+        g_hostAPI.wasm_call = hostWasmCall;
     }
     void discoverPlugins() {
         wchar_t ep[MAX_PATH] = {};
@@ -2867,7 +3397,27 @@ namespace WasmEngine {
     static LumeMap<int, Instance> instances_arr[MAX_LUME_TABS];
     #define instances instances_arr[g_tabIdx]
     static int nextId = 1;
-    void init() {if (!env) env = m3_NewEnvironment();}
+    void init() {
+        if (!env) env = m3_NewEnvironment();
+    }
+    int call(int inst_id, const char* funcName, int num_args, unsigned __int64* args, int num_results, unsigned __int64* results) {
+        auto it = instances.find(inst_id);
+        if (it == instances.end()) return -1;
+        IM3Function func;
+        M3Result res = m3_FindFunction(&func, it->second.runtime, funcName);
+        if (res) return -1;
+        LumeVector<const void*> argPtrs(num_args, nullptr);
+        for (int i = 0; i < num_args; ++i) argPtrs[i] = &args[i];
+        res = m3_Call(func, num_args, argPtrs.data());
+        if (res) return -1;
+        if (num_results > 0 && results) {
+            LumeVector<const void*> retPtrs(num_results, nullptr);
+            for (int i = 0; i < num_results; ++i) retPtrs[i] = &results[i];
+            res = m3_GetResults(func, num_results, retPtrs.data());
+            if (res) return -1;
+        }
+        return 0;
+    }
     int load(const LumeString& wasmBytes) {
         if (!env) init();
         IM3Runtime runtime = m3_NewRuntime(env, 64 * 1024, nullptr);
@@ -3149,6 +3699,8 @@ namespace Bindings {
             HTP::Parser p;
             HTP::Doc temp = p.parse(htp);
             e->children = temp.root->children;
+            g_domIdMap.clear();
+            HTP::indexDomTree(g_doc.root);
             invalidateDOM();
         }
     }
@@ -3161,6 +3713,9 @@ namespace Bindings {
             if (i != g_inputs.end()) i->second.text = nv;
             if (HTP::findById(::g_doc.root, id)) {
                 invalidateDOM();
+            }
+            else {
+                invalidateContent();
             }
         }
     }
@@ -3358,7 +3913,7 @@ namespace Bindings {
         }
     }
 }
-static int g_timerN = 9000;
+static int g_timerN = 10000;
 namespace Script {
     LumeMap<int, int> g_timerRefs_arr[MAX_LUME_TABS];
     LumeMap<LumeString, int> g_canvasClickRefs_arr[MAX_LUME_TABS];
@@ -3842,6 +4397,7 @@ namespace FastJson {
         }
         void* ptr = doc->head->data + doc->head->used;
         doc->head->used += size;
+        ZeroMemory(ptr, size);
         return ptr;
     }
     static void Free(Doc* doc) {
@@ -4396,8 +4952,14 @@ static int l_gl_draw_buffer(lua_State* L) {
     }
     return 0;
 }
-static int l_gl_fogf(lua_State* L) {glFogf((GLenum)luaL_checkinteger(L, 1), (GLfloat)luaL_checknumber(L, 2)); return 0;}
-static int l_gl_fogi(lua_State* L) {glFogi((GLenum)luaL_checkinteger(L, 1), (GLint)luaL_checkinteger(L, 2)); return 0;}
+static int l_gl_fogf(lua_State* L) {
+    glFogf((GLenum)luaL_checkinteger(L, 1), (GLfloat)luaL_checknumber(L, 2));
+    return 0;
+}
+static int l_gl_fogi(lua_State* L) {
+    glFogi((GLenum)luaL_checkinteger(L, 1), (GLint)luaL_checkinteger(L, 2));
+    return 0;
+}
 static int l_gl_fogfv(lua_State* L) {
     GLenum pname = (GLenum)luaL_checkinteger(L, 1);
     GLfloat params[4] = {
@@ -4413,8 +4975,14 @@ static int l_gl_render_mode(lua_State* L) {
     lua_pushinteger(L, glRenderMode((GLenum)luaL_checkinteger(L, 1)));
     return 1;
 }
-static int l_gl_tex_genf(lua_State* L) {glTexGenf((GLenum)luaL_checkinteger(L, 1), (GLenum)luaL_checkinteger(L, 2), (GLfloat)luaL_checknumber(L, 3)); return 0;}
-static int l_gl_tex_geni(lua_State* L) {glTexGeni((GLenum)luaL_checkinteger(L, 1), (GLenum)luaL_checkinteger(L, 2), (GLint)luaL_checkinteger(L, 3)); return 0;}
+static int l_gl_tex_genf(lua_State* L) {
+    glTexGenf((GLenum)luaL_checkinteger(L, 1), (GLenum)luaL_checkinteger(L, 2), (GLfloat)luaL_checknumber(L, 3));
+    return 0;
+}
+static int l_gl_tex_geni(lua_State* L) {
+    glTexGeni((GLenum)luaL_checkinteger(L, 1), (GLenum)luaL_checkinteger(L, 2), (GLint)luaL_checkinteger(L, 3));
+    return 0;
+}
 static int l_gl_tex_genfv(lua_State* L) {
     GLenum coord = (GLenum)luaL_checkinteger(L, 1);
     GLenum pname = (GLenum)luaL_checkinteger(L, 2);
@@ -4445,7 +5013,10 @@ static int l_gl_load_texture_mipmapped(lua_State* L) {
     wchar_t wpath[MAX_PATH];
     MultiByteToWideChar(CP_UTF8, 0, path, -1, wpath, MAX_PATH);
     Gdiplus::Bitmap bmp(wpath);
-    if (bmp.GetLastStatus() != Gdiplus::Ok) { lua_pushnil(L); return 1; }
+    if (bmp.GetLastStatus() != Gdiplus::Ok) {
+        lua_pushnil(L);
+        return 1;
+    }
     int w = bmp.GetWidth();
     int h = bmp.GetHeight();
     LumeVector<unsigned char> pixels(w * h * 4);
@@ -4485,7 +5056,10 @@ static int l_gl_print(lua_State* L) {
     HGLRC ctx = wglGetCurrentContext();
     if (!hdc || !ctx) return 0;
     uint64_t hash = 2166136261u;
-    for (const char* p = fontName; *p; ++p) { hash ^= (uint8_t)*p; hash *= 16777619u; }
+    for (const char* p = fontName; *p; ++p) {
+        hash ^= (uint8_t)*p;
+        hash *= 16777619u;
+    }
     hash ^= (uint64_t)sz;
     HFONT font = FontCache::get(sz, false, false, fontName);
     GLuint base = GLFont::get(hdc, ctx, font, hash);
@@ -4597,11 +5171,28 @@ static int l_wasm_call(lua_State* L) {
     for (int i = 0; i < numArgs; ++i) {
         int luaArgIdx = 3 + i;
         switch (m3_GetArgType(func, i)) {
-        case c_m3Type_i32: { int32_t v = (int32_t)luaL_optinteger(L, luaArgIdx, 0); CopyMemory(&argValues[i], &v, 4); break; }
-        case c_m3Type_i64: { int64_t v = (int64_t)luaL_optinteger(L, luaArgIdx, 0); CopyMemory(&argValues[i], &v, 8); break; }
-        case c_m3Type_f32: { float v = (float)luaL_optnumber(L, luaArgIdx, 0.0);    CopyMemory(&argValues[i], &v, 4); break; }
-        case c_m3Type_f64: { double v = (double)luaL_optnumber(L, luaArgIdx, 0.0);  CopyMemory(&argValues[i], &v, 8); break; }
-        default: break;
+        case c_m3Type_i32: {
+            int32_t v = (int32_t)luaL_optinteger(L, luaArgIdx, 0);
+            CopyMemory(&argValues[i], &v, 4);
+            break;
+        }
+        case c_m3Type_i64: {
+            int64_t v = (int64_t)luaL_optinteger(L, luaArgIdx, 0);
+            CopyMemory(&argValues[i], &v, 8);
+            break;
+        }
+        case c_m3Type_f32: {
+            float v = (float)luaL_optnumber(L, luaArgIdx, 0.0);
+            CopyMemory(&argValues[i], &v, 4);
+            break;
+        }
+        case c_m3Type_f64: {
+            double v = (double)luaL_optnumber(L, luaArgIdx, 0.0);
+            CopyMemory(&argValues[i], &v, 8);
+            break;
+        }
+        default:
+            break;
         }
         argPtrs[i] = &argValues[i];
     }
@@ -4621,11 +5212,22 @@ static int l_wasm_call(lua_State* L) {
     int pushed = 0;
     for (int i = 0; i < numRets; ++i) {
         switch (m3_GetRetType(func, i)) {
-        case c_m3Type_i32: lua_pushinteger(L, *(int32_t*)&retValues[i]); pushed++; break;
-        case c_m3Type_i64: lua_pushinteger(L, *(int64_t*)&retValues[i]); pushed++; break;
-        case c_m3Type_f32: lua_pushnumber(L, *(float*)&retValues[i]); pushed++; break;
-        case c_m3Type_f64: lua_pushnumber(L, *(double*)&retValues[i]); pushed++; break;
-        default: break;
+        case c_m3Type_i32:
+            lua_pushinteger(L, *(int32_t*)&retValues[i]);
+            pushed++;
+            break;
+        case c_m3Type_i64:
+            lua_pushinteger(L, *(int64_t*)&retValues[i]);
+            pushed++;
+            break;
+        case c_m3Type_f32:
+            lua_pushnumber(L, *(float*)&retValues[i]);
+            pushed++;
+            break;
+        case c_m3Type_f64:
+            lua_pushnumber(L, *(double*)&retValues[i]); pushed++; break;
+        default:
+            break;
         }
     }
     return pushed;
@@ -4921,39 +5523,44 @@ namespace Render {
         bool autoCapture = true;
         void* customData = nullptr;
     };
+    enum CmdType : uint8_t {
+        CMD_ROUND_RECT,
+        CMD_TEXT,
+        CMD_LINK,
+        CMD_BUTTON,
+        CMD_INPUT,
+        CMD_CANVAS,
+        CMD_GL_CANVAS,
+        CMD_DIVIDER,
+        CMD_ITEM,
+        CMD_IMAGE,
+        CMD_CUSTOM_TAG
+    };
+    struct RenderCmd {
+        CmdType type;
+        int zIndex = 0;
+        int top = 0;
+        int bottom = 0;
+        int x = 0, y = 0, w = 0, h = 0;
+        HTP::Color col1, col2;
+        int param1 = 0, param2 = 0;
+        float floatParam = 0.0f;
+        HFONT font = nullptr;
+        LumeString text;
+        LumeSharedPtr<Gdiplus::Image> img;
+        LumeSharedPtr<Canvas::Buf> cb;
+        LumeSharedPtr<HTP::Elem> elem;
+        CustomTagHandler customHandler;
+    };
     class Engine {
     private:
-        struct RenderCmd {
-            int zIndex;
-            int top;
-            int bottom;
-            LumeAction drawCall;
-            RenderCmd() : zIndex(0), top(0), bottom(0) {}
-            template<typename F>
-            RenderCmd(int z, int t, int b, F f)
-                : zIndex(z), top(t), bottom(b), drawCall(static_cast<F&&>(f)) {
-            }
-        };
         LumeVector<RenderCmd> renderQueue;
         LumeVector<int> blockHeights;
-    private:
-        struct TH_Entry {
-            uint64_t k;
-            int v;
-            bool occ;
-        };
+        struct TH_Entry {uint64_t k; int v; bool occ;};
         TH_Entry* th_tab = nullptr; size_t th_cap = 0, th_sz = 0;
-        struct TS_Entry {
-            uint64_t k;
-            SIZE v;
-            bool occ;
-        };
+        struct TS_Entry {uint64_t k; SIZE v; bool occ;};
         TS_Entry* ts_tab = nullptr; size_t ts_cap = 0, ts_sz = 0;
-        struct Est_Entry {
-            const HTP::Elem* k;
-            int v;
-            bool occ;
-        };
+        struct Est_Entry {const HTP::Elem* k; int v; bool occ;};
         Est_Entry* est_tab = nullptr; size_t est_cap = 0, est_sz = 0;
         void clear_th() {
             if (th_tab && th_cap > 0) {
@@ -4973,6 +5580,7 @@ namespace Render {
                 est_sz = 0;
             }
         }
+
         int* get_th(uint64_t k) {
             if (!th_cap) return nullptr;
             size_t idx = (k ^ (k >> 32)) & (th_cap - 1);
@@ -4984,8 +5592,7 @@ namespace Render {
         }
         void set_th(uint64_t k, int v) {
             if (th_sz >= th_cap / 2) {
-                size_t oCap = th_cap;
-                TH_Entry* oTab = th_tab;
+                size_t oCap = th_cap; TH_Entry* oTab = th_tab;
                 th_cap = oCap == 0 ? 16 : oCap * 2;
                 th_tab = (TH_Entry*)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, th_cap * sizeof(TH_Entry));
                 th_sz = 0;
@@ -4999,7 +5606,8 @@ namespace Render {
                 if (th_tab[idx].k == k) {
                     th_tab[idx].v = v;
                     return;
-                } idx = (idx + 1) & (th_cap - 1);
+                }
+                idx = (idx + 1) & (th_cap - 1);
             }
             th_tab[idx] = {k, v, true}; th_sz++;
         }
@@ -5031,21 +5639,21 @@ namespace Render {
                 }
                 idx = (idx + 1) & (ts_cap - 1);
             }
-            ts_tab[idx] = {k, v, true};
-            ts_sz++;
+            ts_tab[idx] = {k, v, true}; ts_sz++;
         }
-
         int* get_est(const HTP::Elem* k) {
             if (!est_cap) return nullptr;
             uint64_t ptr = (uint64_t)k;
             size_t idx = (ptr ^ (ptr >> 32)) & (est_cap - 1);
-            while (est_tab[idx].occ) {if (est_tab[idx].k == k) return &est_tab[idx].v; idx = (idx + 1) & (est_cap - 1);}
+            while (est_tab[idx].occ) {
+                if (est_tab[idx].k == k) return &est_tab[idx].v;
+                idx = (idx + 1) & (est_cap - 1);
+            }
             return nullptr;
         }
         void set_est(const HTP::Elem* k, int v) {
             if (est_sz >= est_cap / 2) {
-                size_t oCap = est_cap;
-                Est_Entry* oTab = est_tab;
+                size_t oCap = est_cap; Est_Entry* oTab = est_tab;
                 est_cap = oCap == 0 ? 16 : oCap * 2;
                 est_tab = (Est_Entry*)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, est_cap * sizeof(Est_Entry));
                 est_sz = 0;
@@ -5054,23 +5662,26 @@ namespace Render {
                     HeapFree(GetProcessHeap(), 0, oTab);
                 }
             }
-            uint64_t ptr = (uint64_t)k; size_t idx = (ptr ^ (ptr >> 32)) & (est_cap - 1);
+            uint64_t ptr = (uint64_t)k;
+            size_t idx = (ptr ^ (ptr >> 32)) & (est_cap - 1);
             while (est_tab[idx].occ) {
                 if (est_tab[idx].k == k) {
                     est_tab[idx].v = v;
                     return;
-                } idx = (idx + 1) & (est_cap - 1);
+                }
+                idx = (idx + 1) & (est_cap - 1);
             }
-            est_tab[idx] = {k, v, true};
-            est_sz++;
+            est_tab[idx] = {k, v, true}; est_sz++;
         }
         int scrollY = 0, contentH = 0, curY = 0;
         int viewportH = 0;
-        struct GLCache { LumeString id; int x, y, w, h; };
+        struct GLCache {LumeString id; int x, y, w, h;};
         LumeVector<GLCache> glCanvases;
         LumeVector<Hit> docHits;
         LumeVector<Hit>* pH = nullptr;
-        inline const char* getRefPtr(const HTP::Props& p, const char* k) const {return p.get(k, "");}
+        inline const char* getRefPtr(const HTP::Props& p, const char* k) const {
+            return p.get(k, "");
+        }
         uint64_t hashText(const char* str, int w, HFONT f) {
             uint64_t h = 2166136261u;
             while (*str) { h ^= (uint8_t)*str++; h *= 16777619u; }
@@ -5108,18 +5719,19 @@ namespace Render {
                 res = e->props.getInt("height", 28) + 8;
                 break;
             case HTP::EType::DIVIDER:
-                res = e->props.getInt("margin", 10) * 2 + e->props.getInt("thickness", 1); break;
+                res = e->props.getInt("margin", 10) * 2 + e->props.getInt("thickness", 1);
+                break;
             case HTP::EType::IMAGE:
                 res = e->props.getInt("height", 100) + 8;
                 break;
             case HTP::EType::BR:
-                res = e->props.getInt("size", 16); break;
+                res = e->props.getInt("size", 16);
+                break;
             case HTP::EType::CANVAS: case HTP::EType::GL_CANVAS:
                 res = e->props.getInt("height", 200) + 8;
                 break;
             case HTP::EType::SCRIPT:
-                res = 0;
-                break;
+                res = 0; break;
             case HTP::EType::BLOCK: case HTP::EType::COLUMN: {
                 int h = e->props.getInt("padding", 10) * 2 + e->props.getInt("margin", 5) * 2;
                 for (auto& c : e->children) h += estH(c);
@@ -5127,12 +5739,16 @@ namespace Render {
                 break;
             }
             case HTP::EType::ROW: {
-                int m = 0; for (auto& c : e->children) m = lume_max(m, estH(c));
-                res = m + e->props.getInt("margin", 5) * 2; break;
+                int m = 0;
+                for (auto& c : e->children) m = lume_max(m, estH(c));
+                res = m + e->props.getInt("margin", 5) * 2;
+                break;
             }
             case HTP::EType::LIST: {
-                int h = 0; for (auto& c : e->children) h += estH(c);
-                res = h; break;
+                int h = 0;
+                for (auto& c : e->children) h += estH(c);
+                res = h;
+                break;
             }
             case HTP::EType::UNKNOWN: {
                 auto it = Plugins::g_customTags.find(e->tag);
@@ -5141,7 +5757,8 @@ namespace Render {
                 }
                 break;
             }
-            default: break;
+            default:
+                break;
             }
             set_est(e.get(), res);
             return res;
@@ -5151,24 +5768,37 @@ namespace Render {
             int w = e->props.getInt("width", 0);
             if (w > 0) return w;
             switch (e->type) {
-            case HTP::EType::BUTTON: return 120;
-            case HTP::EType::INPUT_FIELD: return 250;
-            case HTP::EType::IMAGE: return 100;
-            case HTP::EType::CANVAS: case HTP::EType::GL_CANVAS: return 400;
+            case HTP::EType::BUTTON:
+                return 120;
+            case HTP::EType::INPUT_FIELD:
+                return 250;
+            case HTP::EType::IMAGE:
+                return 100;
+            case HTP::EType::CANVAS: case HTP::EType::GL_CANVAS:
+                return 400;
             case HTP::EType::ROW: {
                 int rowW = 0, gap = e->props.getInt("gap", 10), nc = 0;
-                for (auto& c : e->children) { rowW += estW(c, mw); nc++; }
+                for (auto& c : e->children) {
+                    rowW += estW(c, mw);
+                    nc++;
+                }
                 if (nc > 1) rowW += gap * (nc - 1);
                 return rowW + e->props.getInt("margin", 5) * 2 + e->props.getInt("padding", 0) * 2;
             }
             case HTP::EType::COLUMN: {
                 int maxW = 0;
-                for (auto& c : e->children) { int cw = estW(c, mw); if (cw > maxW) maxW = cw; }
+                for (auto& c : e->children) {
+                    int cw = estW(c, mw);
+                    if (cw > maxW) maxW = cw;
+                }
                 return maxW + e->props.getInt("padding", 5) * 2;
             }
             case HTP::EType::BLOCK: {
                 int maxW = 0;
-                for (auto& c : e->children) { int cw = estW(c, mw); if (cw > maxW) maxW = cw; }
+                for (auto& c : e->children) {
+                    int cw = estW(c, mw);
+                    if (cw > maxW) maxW = cw;
+                }
                 return maxW + e->props.getInt("padding", 10) * 2 + e->props.getInt("margin", 5) * 2;
             }
             case HTP::EType::UNKNOWN: {
@@ -5202,11 +5832,15 @@ namespace Render {
                     int ew = estW(e, mw);
                     int drawY = y;
                     if (it->second.render) {
-                        int eh = estH(e);
-                        int drawY = y;
-                        renderQueue.push_back({z, drawY, drawY + eh, [this, e, x, drawY, ew, eh, it]() {
-                            it->second.render(this->docDC, (HTP_NodeHandle)e.get(), x, drawY, ew, eh, this->getScroll());
-                        }});
+                        RenderCmd cmd;
+                        cmd.type = CMD_CUSTOM_TAG;
+                        cmd.zIndex = z;
+                        cmd.top = drawY;
+                        cmd.bottom = drawY + eh;
+                        cmd.x = x; cmd.y = drawY; cmd.w = ew; cmd.h = eh;
+                        cmd.elem = e;
+                        cmd.customHandler = it->second;
+                        renderQueue.push_back(cmd);
                     }
                     if (pH && it->second.on_click) {
                         Hit h; h.r = { x, drawY, x + ew, drawY + eh };
@@ -5235,8 +5869,16 @@ namespace Render {
                 int nc = 0, fw = 0, fc = 0, totalContentWidth = 0;
                 for (auto& c : e->children) {
                     nc++; int w = c->props.getInt("width", 0);
-                    if (w > 0) { fw += w; totalContentWidth += w; }
-                    else { fc++; int est = estW(c, 0); if (est > 0) { fw += est; totalContentWidth += est; } }
+                    if (w > 0) {
+                        fw += w; totalContentWidth += w;
+                    }
+                    else {
+                        fc++; int est = estW(c, 0);
+                        if (est > 0) {
+                            fw += est;
+                            totalContentWidth += est;
+                        }
+                    }
                 }
                 if (nc > 1) totalContentWidth += gap * (nc - 1);
                 int avail = mw - mar * 2 - pad * 2, flexW = 0;
@@ -5250,26 +5892,38 @@ namespace Render {
                 for (auto& c : e->children) {
                     int cw = c->props.getInt("width", 0);
                     if (cw == 0) cw = estW(c, flexW > 0 ? flexW : 100);
-                    int sv = curY; curY = ry;
+                    int sv = curY;
+                    curY = ry;
                     draw(refDC, c, cx, ry, cw, "left");
-                    int ch = curY - ry; if (ch > maxH) maxH = ch;
-                    cx += cw + gap; curY = sv;
+                    int ch = curY - ry;
+                    if (ch > maxH) maxH = ch;
+                    cx += cw + gap;
+                    curY = sv;
                 }
-                curY = ry + maxH + mar; break;
+                curY = ry + maxH + mar;
+                break;
             }
             case HTP::EType::COLUMN: {
                 int pad = e->props.getInt("padding", 5), rad = e->props.getInt("border-radius", 4), z = e->props.getInt("z-index", 0);
                 const char* pBg = getRefPtr(e->props, "background");
-                int heightIdx = blockHeights.size();
+                int heightIdx = (int)blockHeights.size();
                 blockHeights.push_back(0);
                 int startY = y;
                 size_t colCmdIdx = (size_t)-1;
                 if (pBg[0] != '\0') {
-                    HTP::Color bgColor = HTP::Color::fromHex(pBg);
                     colCmdIdx = renderQueue.size();
-                    renderQueue.push_back({z, startY, startY, [this, x, startY, mw, bgColor, rad, heightIdx]() {
-                        fillRR(this->docDC, x, startY, mw, blockHeights[heightIdx], bgColor, rad);
-                    }});
+                    RenderCmd cmd;
+                    cmd.type = CMD_ROUND_RECT;
+                    cmd.zIndex = z;
+                    cmd.top = startY;
+                    cmd.bottom = startY;
+                    cmd.x = x;
+                    cmd.y = startY;
+                    cmd.w = mw;
+                    cmd.col1 = HTP::Color::fromHex(pBg);
+                    cmd.param1 = heightIdx;
+                    cmd.param2 = rad;
+                    renderQueue.push_back(cmd);
                 }
                 curY = y + pad;
                 for (auto& c : e->children) {
@@ -5302,15 +5956,24 @@ namespace Render {
             case HTP::EType::BLOCK: {
                 int pad = e->props.getInt("padding", 10), mar = e->props.getInt("margin", 5), rad = e->props.getInt("border-radius", 6), z = e->props.getInt("z-index", 0);
                 const char* pBg = getRefPtr(e->props, "background");
-                int heightIdx = blockHeights.size(); blockHeights.push_back(0);
+                int heightIdx = (int)blockHeights.size();
+                blockHeights.push_back(0);
                 int startY = y + mar;
                 size_t blkCmdIdx = (size_t)-1;
                 if (pBg[0] != '\0') {
-                    HTP::Color bgColor = HTP::Color::fromHex(pBg);
                     blkCmdIdx = renderQueue.size();
-                    renderQueue.push_back({z, startY, startY, [this, x, mar, startY, mw, bgColor, rad, heightIdx]() {
-                        fillRR(this->docDC, x + mar, startY, mw - mar * 2, blockHeights[heightIdx], bgColor, rad);
-                    }});
+                    RenderCmd cmd;
+                    cmd.type = CMD_ROUND_RECT;
+                    cmd.zIndex = z;
+                    cmd.top = startY;
+                    cmd.bottom = startY;
+                    cmd.x = x + mar;
+                    cmd.y = startY;
+                    cmd.w = mw - mar * 2;
+                    cmd.col1 = HTP::Color::fromHex(pBg);
+                    cmd.param1 = heightIdx;
+                    cmd.param2 = rad;
+                    renderQueue.push_back(cmd);
                 }
                 curY = startY + pad;
                 for (auto& c : e->children) {
@@ -5320,8 +5983,7 @@ namespace Render {
                     if (currentAlign == "center") {
                         int ew = estW(c, cmw);
                         if (ew < cmw) {
-                            cx += (cmw - ew) / 2;
-                            cwToPass = ew;
+                            cx += (cmw - ew) / 2; cwToPass = ew;
                         }
                     }
                     else if (currentAlign == "right") {
@@ -5352,12 +6014,14 @@ namespace Render {
                     }
                 }
                 int sz = e->props.getInt("size", 16);
-                auto col = e->props.getColor("color", { 255,255,255 });
+                auto col = e->props.getColor("color", {255, 255, 255});
                 const char* pGrad = getRefPtr(e->props, "gradient");
                 int offset_y = 0; float shimmer = 0.0f;
                 if (pId[0] != '\0') {
-                    auto oi = Bindings::g_offsets_y.find(pId); if (oi != Bindings::g_offsets_y.end()) offset_y = oi->second;
-                    auto si = Bindings::g_shimmer_offsets.find(pId); if (si != Bindings::g_shimmer_offsets.end()) shimmer = si->second;
+                    auto oi = Bindings::g_offsets_y.find(pId);
+                    if (oi != Bindings::g_offsets_y.end()) offset_y = oi->second;
+                    auto si = Bindings::g_shimmer_offsets.find(pId);
+                    if (si != Bindings::g_shimmer_offsets.end()) shimmer = si->second;
                 }
                 int z = e->props.getInt("z-index", 0);
                 const char* pFontName = getRefPtr(e->props, "font");
@@ -5369,7 +6033,9 @@ namespace Render {
                 else if (currentAlign == "right") dtFormat |= DT_RIGHT;
                 uint64_t mKey = hashText(pCt, mw, f);
                 int* tIt = get_th(mKey);
-                if (tIt) {th = *tIt;}
+                if (tIt) {
+                    th = *tIt;
+                }
                 else {
                     auto of = SelectObject(refDC, f);
                     RECT rcCalc = {x, 0, x + mw, 10000};
@@ -5378,31 +6044,20 @@ namespace Render {
                     SelectObject(refDC, of);
                     set_th(mKey, th);
                 }
-                HTP::Color gradColor;
-                if (pGrad[0] != '\0') gradColor = HTP::Color::fromHex(pGrad);
-                LumeString textStr = pCt;
                 int textBottom = drawY + ((pGrad[0] == '\0') ? th : sz) + 4;
-                renderQueue.push_back({z, drawY, textBottom, [this, x, drawY, mw, th, f, textStr, dtFormat, col, pGrad, gradColor, shimmer, currentAlign]() {
-                    HDC dc = this->docDC;
-                    if (pGrad[0] != '\0') {
-                        int drawX = x;
-                        if (currentAlign == "center" || currentAlign == "right") {
-                            SIZE ts; auto of = SelectObject(dc, f);
-                            GetTextExtentPoint32U(dc, textStr.c_str(), lstrlenA(textStr.c_str()), &ts);
-                            SelectObject(dc, of);
-                            if (currentAlign == "center") drawX = x + (mw - ts.cx) / 2;
-                            else if (currentAlign == "right") drawX = x + (mw - ts.cx);
-                        }
-                        GradientText::draw(dc, textStr.c_str(), f, drawX, drawY, col, gradColor, shimmer);
-                    }
-                    else {
-                        auto of = SelectObject(dc, f);
-                        SetTextColor(dc, col.cr()); SetBkMode(dc, TRANSPARENT);
-                        RECT rcDraw = { x, drawY, x + mw, drawY + th };
-                        DrawTextU(dc, textStr.c_str(), -1, &rcDraw, dtFormat);
-                        SelectObject(dc, of);
-                    }
-                } });
+                RenderCmd cmd;
+                cmd.type = CMD_TEXT;
+                cmd.zIndex = z;
+                cmd.top = drawY; cmd.bottom = textBottom;
+                cmd.x = x; cmd.y = drawY; cmd.w = mw; cmd.h = th;
+                cmd.col1 = col;
+                cmd.font = f;
+                cmd.text = pCt;
+                cmd.param1 = (int)dtFormat;
+                cmd.param2 = (pGrad[0] != '\0') ? 1 : 0;
+                if (cmd.param2) cmd.col2 = HTP::Color::fromHex(pGrad);
+                cmd.floatParam = shimmer;
+                renderQueue.push_back(cmd);
                 curY = y + ((pGrad[0] == '\0') ? th : sz) + 4;
                 break;
             }
@@ -5410,10 +6065,10 @@ namespace Render {
                 const char* pCt = getRefPtr(e->props, "content");
                 if (pCt[0] == '\0') pCt = "[link]";
                 int sz = e->props.getInt("size", 16);
-                auto col = e->props.getColor("color", { 10,189,227 });
+                auto col = e->props.getColor("color", { 10, 189, 227 });
                 int z = e->props.getInt("z-index", 0);
                 HFONT f = FontCache::get(sz);
-                SIZE ts = {0, 0};
+                SIZE ts = { 0, 0 };
                 uint64_t mKey = hashText(pCt, 0, f);
                 SIZE* tIt = get_ts(mKey);
                 if (tIt) ts = *tIt;
@@ -5425,24 +6080,17 @@ namespace Render {
                 }
                 int drawY = y;
                 LumeString url = resolveUrl(getRefPtr(e->props, "url"), g_curUrl);
-                LumeString textStr = pCt;
-                renderQueue.push_back({z, drawY, drawY + ts.cy + 4, [this, x, drawY, ts, f, col, textStr]() {
-                    HDC dc = this->docDC;
-                    auto of2 = SelectObject(dc, f);
-                    SetTextColor(dc, col.cr()); SetBkMode(dc, TRANSPARENT);
-                    RECT rc = {x, drawY, x + ts.cx, drawY + ts.cy};
-                    DrawTextU(dc, textStr.c_str(), -1, &rc, 0);
-                    HPEN p = CreatePen(PS_SOLID, 1, col.cr());
-                    auto op = SelectObject(dc, p);
-                    MoveToEx(dc, x, drawY + ts.cy - 1, 0);
-                    LineTo(dc, x + ts.cx, drawY + ts.cy - 1);
-                    SelectObject(dc, op);
-                    DeleteObject(p);
-                    SelectObject(dc, of2);
-                }});
+                RenderCmd cmd;
+                cmd.type = CMD_LINK;
+                cmd.zIndex = z;
+                cmd.top = drawY; cmd.bottom = drawY + ts.cy + 4;
+                cmd.x = x; cmd.y = drawY; cmd.w = ts.cx; cmd.h = ts.cy;
+                cmd.font = f;
+                cmd.col1 = col;
+                cmd.text = pCt;
+                renderQueue.push_back(cmd);
                 if (pH) {
-                    Hit h;
-                    h.r = {x, drawY, x + ts.cx, drawY + ts.cy };
+                    Hit h; h.r = { x, drawY, x + ts.cx, drawY + ts.cy };
                     h.url = url;
                     h.zIndex = z;
                     pH->push_back(h);
@@ -5458,24 +6106,21 @@ namespace Render {
                 LumeString url = (pUrl[0] == '\0') ? pAct : pUrl;
                 if (!url.empty()) url = resolveUrl(url, g_curUrl);
                 int sz = e->props.getInt("size", 14), rad = e->props.getInt("border-radius", 6), z = e->props.getInt("z-index", 0);
-                auto bg = e->props.getColor("background", { 233,69,96 }), col = e->props.getColor("color", { 255,255,255 });
-                LumeString textStr = pCt;
-                renderQueue.push_back({z, by, by + bh + 8, [this, x, by, bw, bh, bg, rad, f = FontCache::get(sz, true), col, textStr]() {
-                    HDC dc = this->docDC;
-                    fillRR(dc, x, by, bw, bh, bg, rad);
-                    auto of = SelectObject(dc, f);
-                    SetTextColor(dc, col.cr()); SetBkMode(dc, TRANSPARENT);
-                    RECT rc = {x, by, x + bw, by + bh};
-                    DrawTextU(dc, textStr.c_str(), -1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-                    SelectObject(dc, of);
-                }});
+                auto bg = e->props.getColor("background", {233, 69, 96}), col = e->props.getColor("color", {255, 255, 255});
+                RenderCmd cmd;
+                cmd.type = CMD_BUTTON;
+                cmd.zIndex = z;
+                cmd.top = by; cmd.bottom = by + bh + 8;
+                cmd.x = x; cmd.y = by; cmd.w = bw; cmd.h = bh;
+                cmd.col1 = bg; cmd.col2 = col;
+                cmd.param1 = rad;
+                cmd.font = FontCache::get(sz, true);
+                cmd.text = pCt;
+                renderQueue.push_back(cmd);
                 if (pH) {
                     Hit h; h.r = {x, by, x + bw, by + bh};
-                    h.url = url;
-                    h.action = pAct;
-                    h.elemId = pId;
-                    h.isBtn = true;
-                    h.zIndex = z;
+                    h.url = url; h.action = pAct; h.elemId = pId;
+                    h.isBtn = true; h.zIndex = z;
                     pH->push_back(h);
                 }
                 curY = y + bh + 8;
@@ -5493,86 +6138,20 @@ namespace Render {
                 inp.w = iw;
                 inp.h = ih;
                 inp.multiline = isMulti;
-                renderQueue.push_back({z, iy, iy + ih + 8, [this, x, iy, iw, ih, id, isMulti]() {
-                    bool foc = (Bindings::g_focusId == id);
-                    auto& inp = Bindings::g_inputs[id];
-                    HDC dc = this->docDC;
-                    HBRUSH br = CreateSolidBrush(foc ? RGB(50, 50, 80) : RGB(40, 40, 60));
-                    HPEN pn = CreatePen(PS_SOLID, foc ? 2 : 1, foc ? RGB(10, 189, 227) : RGB(100, 100, 140));
-                    auto ob = SelectObject(dc, br);
-                    auto op = SelectObject(dc, pn);
-                    RoundRect(dc, x, iy, x + iw, iy + ih, 4, 4);
-                    SelectObject(dc, ob);
-                    SelectObject(dc, op);
-                    DeleteObject(br);
-                    DeleteObject(pn);
-                    int save = SaveDC(dc);
-                    IntersectClipRect(dc, x + 4, iy + 4, x + iw - 4, iy + ih - 4);
-                    auto of = SelectObject(dc, FontCache::get(14)); SetBkMode(dc, TRANSPARENT);
-                    int fontH = 16;
-                    int curX = 0, curY = 0;
-                    if (foc) {
-                        Bindings::getXYFromCursor(dc, inp.text, inp.cursor, isMulti, curX, curY);
-                        if (curX - inp.scrollX > iw - 16) inp.scrollX = curX - (iw - 16);
-                        if (curX - inp.scrollX < 0) inp.scrollX = curX;
-                        if (curY - inp.scrollY > ih - fontH - 8) inp.scrollY = curY - (ih - fontH - 8);
-                        if (curY - inp.scrollY < 0) inp.scrollY = curY;
-                    }
-                    else {
-                        if (!isMulti) inp.scrollX = 0;
-                        inp.scrollY = 0;
-                    }
-                    int drawX = x + 6 - inp.scrollX;
-                    int drawY = iy + 4 - inp.scrollY;
-                    auto drawLine = [&](int ly, const char* str, int len, int lineStartIdx) {
-                        if (foc && inp.selStart != -1 && inp.selStart != inp.cursor) {
-                            int s = lume_max(lineStartIdx, lume_min(inp.cursor, inp.selStart));
-                            int e = lume_max(lineStartIdx, lume_min(lineStartIdx + len, lume_max(inp.cursor, inp.selStart)));
-                            if (s < e) {
-                                SIZE pre = {0,0}, sel = {0,0};
-                                GetTextExtentPoint32U(dc, str, s - lineStartIdx, &pre);
-                                GetTextExtentPoint32U(dc, str + (s - lineStartIdx), e - s, &sel);
-                                RECT sr = {drawX + pre.cx, drawY + ly, drawX + pre.cx + sel.cx, drawY + ly + fontH};
-                                HBRUSH selBr = CreateSolidBrush(RGB(0, 120, 215));
-                                FillRect(dc, &sr, selBr);
-                                DeleteObject(selBr);
-                            }
-                        }
-                        RECT rc = {drawX, drawY + ly, x + iw, drawY + ly + fontH};
-                        DrawTextU(dc, str, len, &rc, DT_SINGLELINE | DT_NOCLIP);
-                        if (foc && inp.cursor >= lineStartIdx && inp.cursor <= lineStartIdx + len) {
-                            SIZE pre = {0,0};
-                            GetTextExtentPoint32U(dc, str, inp.cursor - lineStartIdx, &pre);
-                            HPEN cpen = CreatePen(PS_SOLID, 1, RGB(255, 255, 255));
-                            auto ocp = SelectObject(dc, cpen);
-                            MoveToEx(dc, drawX + pre.cx, drawY + ly, 0);
-                            LineTo(dc, drawX + pre.cx, drawY + ly + fontH);
-                            SelectObject(dc, ocp);
-                            DeleteObject(cpen);
-                        }
-                    };
-                    if (inp.text.empty() && !inp.placeholder.empty()) {
-                        SetTextColor(dc, RGB(120, 120, 140)); drawLine(0, inp.placeholder.c_str(), inp.placeholder.length(), 0);
-                    }
-                    else {
-                        SetTextColor(dc, RGB(230, 230, 240));
-                        int currentY = 0, lineStart = 0;
-                        for (int i = 0; i <= inp.text.length(); i++) {
-                            if (i == inp.text.length() || inp.text[i] == '\n') {
-                                drawLine(currentY, inp.text.c_str() + lineStart, i - lineStart, lineStart);
-                                currentY += fontH;
-                                lineStart = i + 1;
-                            }
-                        }
-                    }
-                    SelectObject(dc, of);
-                    RestoreDC(dc, save);
-                }});
+                RenderCmd cmd;
+                cmd.type = CMD_INPUT;
+                cmd.zIndex = z;
+                cmd.top = iy; cmd.bottom = iy + ih + 8;
+                cmd.x = x;
+                cmd.y = iy;
+                cmd.w = iw;
+                cmd.h = ih;
+                cmd.text = id;
+                cmd.param1 = isMulti ? 1 : 0;
+                renderQueue.push_back(cmd);
                 if (pH) {
                     Hit h; h.r = {x, iy, x + iw, iy + ih};
-                    h.elemId = id;
-                    h.isInput = true;
-                    h.zIndex = z;
+                    h.elemId = id; h.isInput = true; h.zIndex = z;
                     pH->push_back(h);
                 }
                 curY = y + ih + 8;
@@ -5582,18 +6161,16 @@ namespace Render {
                 int ch = e->props.getInt("height", 200), cy = y, cw = e->props.getInt("width", 400), z = e->props.getInt("z-index", 0);
                 const char* pId = getRefPtr(e->props, "id");
                 LumeString id = (pId[0] == '\0') ? ("cv_" + lume_to_string(y)) : pId;
-                auto bdr = e->props.getColor("border-color", {80,80,100});
+                auto bdr = e->props.getColor("border-color", {80, 80, 100});
                 auto cb = Canvas::get(id, refDC, cw, ch);
-                renderQueue.push_back({z, cy, cy + ch + 8, [this, x, cy, cw, ch, bdr, cb]() {
-                    HDC dc = this->docDC;
-                    HPEN p = CreatePen(PS_SOLID, 1, bdr.cr()); auto op = SelectObject(dc, p);
-                    auto ob = SelectObject(dc, GetStockObject(NULL_BRUSH));
-                    Rectangle(dc, x - 1, cy - 1, x + cw + 1, cy + ch + 1);
-                    SelectObject(dc, ob);
-                    SelectObject(dc, op);
-                    DeleteObject(p);
-                    if (cb->dc) BitBlt(dc, x, cy, cw, ch, cb->dc, 0, 0, SRCCOPY);
-                }});
+                RenderCmd cmd;
+                cmd.type = CMD_CANVAS;
+                cmd.zIndex = z;
+                cmd.top = cy; cmd.bottom = cy + ch + 8;
+                cmd.x = x; cmd.y = cy; cmd.w = cw; cmd.h = ch;
+                cmd.col1 = bdr;
+                cmd.cb = cb;
+                renderQueue.push_back(cmd);
                 curY = y + ch + 8;
                 break;
             }
@@ -5601,36 +6178,20 @@ namespace Render {
                 int ch = e->props.getInt("height", 200), cw = e->props.getInt("width", 400), cy = y, z = e->props.getInt("z-index", 0);
                 const char* pId = getRefPtr(e->props, "id");
                 LumeString id = (pId[0] == '\0') ? ("glcv_" + lume_to_string(y)) : pId;
-                auto bdr = e->props.getColor("border-color", {80,80,100});
+                auto bdr = e->props.getColor("border-color", {80, 80, 100});
                 bool autoCapture = e->props.getBool("capture", true);
-                renderQueue.push_back({z, cy, cy + ch + 8, [this, x, cy, cw, ch, bdr]() {
-                    HDC dc = this->docDC;
-                    HPEN p = CreatePen(PS_SOLID, 1, bdr.cr()); auto op = SelectObject(dc, p);
-                    auto ob = SelectObject(dc, GetStockObject(NULL_BRUSH));
-                    Rectangle(dc, x - 1, cy - 1, x + cw + 1, cy + ch + 1);
-                    SelectObject(dc, ob);
-                    SelectObject(dc, op);
-                    DeleteObject(p);
-                    if (!g_opt_gpu || !GLLoader::available()) {
-                        HBRUSH fb = CreateSolidBrush(RGB(40, 40, 60));
-                        RECT fr = {x, cy, x + cw, cy + ch};
-                        FillRect(dc, &fr, fb);
-                        DeleteObject(fb);
-                        auto of = SelectObject(dc, FontCache::get(14));
-                        SetTextColor(dc, RGB(150, 150, 170));
-                        SetBkMode(dc, TRANSPARENT);
-                        RECT rc = {x, cy, x + cw, cy + ch};
-                        DrawTextU(dc, "GPU Disabled", -1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-                        SelectObject(dc, of);
-                    }
-                }});
-                glCanvases.push_back({id, x, cy, cw, ch});
+                RenderCmd cmd;
+                cmd.type = CMD_GL_CANVAS;
+                cmd.zIndex = z;
+                cmd.top = cy; cmd.bottom = cy + ch + 8;
+                cmd.x = x; cmd.y = cy; cmd.w = cw; cmd.h = ch;
+                cmd.col1 = bdr;
+                renderQueue.push_back(cmd);
+                glCanvases.push_back({ id, x, cy, cw, ch });
                 if (pH) {
-                    Hit h; h.r = {x, cy, x + cw, cy + ch};
+                    Hit h; h.r = { x, cy, x + cw, cy + ch };
                     h.isGLCanvas = true; h.canvasId = id;
-                    h.canvasW = cw;
-                    h.canvasH = ch;
-                    h.zIndex = z;
+                    h.canvasW = cw; h.canvasH = ch; h.zIndex = z;
                     h.autoCapture = autoCapture;
                     pH->push_back(h);
                 }
@@ -5640,17 +6201,17 @@ namespace Render {
             }
             case HTP::EType::DIVIDER: {
                 int t = e->props.getInt("thickness", 1), m = e->props.getInt("margin", 10), drawY = y + m, z = e->props.getInt("z-index", 0);
-                auto col = e->props.getColor("color", { 60,60,80 });
-                renderQueue.push_back({z, drawY, drawY + t + m * 2, [this, x, mw, drawY, t, col]() {
-                    HDC dc = this->docDC;
-                    HPEN p = CreatePen(PS_SOLID, t, col.cr());
-                    auto op = SelectObject(dc, p);
-                    MoveToEx(dc, x, drawY, 0);
-                    LineTo(dc, x + mw, drawY);
-                    SelectObject(dc, op);
-                    DeleteObject(p);
-                } });
-                curY = y + m * 2 + t; break;
+                auto col = e->props.getColor("color", {60, 60, 80});
+                RenderCmd cmd;
+                cmd.type = CMD_DIVIDER;
+                cmd.zIndex = z;
+                cmd.top = drawY; cmd.bottom = drawY + t + m * 2;
+                cmd.x = x; cmd.y = drawY; cmd.w = mw;
+                cmd.param1 = t;
+                cmd.col1 = col;
+                renderQueue.push_back(cmd);
+                curY = y + m * 2 + t;
+                break;
             }
             case HTP::EType::ITEM: {
                 const char* pCt = getRefPtr(e->props, "content");
@@ -5661,33 +6222,25 @@ namespace Render {
                 if (tIt) th = *tIt;
                 else {
                     auto of = SelectObject(refDC, f);
-                    RECT rcCalc = {x, 0, x + mw, 200};
+                    RECT rcCalc = { x, 0, x + mw, 200 };
                     DrawTextU(refDC, pCt, -1, &rcCalc, DT_WORDBREAK | DT_CALCRECT);
                     th = rcCalc.bottom - rcCalc.top;
                     SelectObject(refDC, of);
                     set_th(mKey, th);
                 }
-                auto col = e->props.getColor("color", {200,200,200});
-                LumeString textStr = pCt;
-                renderQueue.push_back({z, drawY, drawY + th + 4, [this, x, by, drawY, mw, th, col, f, textStr]() {
-                    HDC dc = this->docDC;
-                    HBRUSH b = CreateSolidBrush(col.cr());
-                    HPEN pn = CreatePen(PS_SOLID, 1, col.cr());
-                    auto ob = SelectObject(dc, b);
-                    auto op = SelectObject(dc, pn);
-                    Ellipse(dc, x - 12, by, x - 4, by + 6);
-                    SelectObject(dc, ob);
-                    SelectObject(dc, op);
-                    DeleteObject(b);
-                    DeleteObject(pn);
-                    auto of2 = SelectObject(dc, f);
-                    SetTextColor(dc, col.cr());
-                    SetBkMode(dc, TRANSPARENT);
-                    RECT rcDraw = {x, drawY, x + mw, drawY + th};
-                    DrawTextU(dc, textStr.c_str(), -1, &rcDraw, DT_WORDBREAK);
-                    SelectObject(dc, of2);
-                }});
-                curY = y + th + 4; break;
+                auto col = e->props.getColor("color", {200, 200, 200});
+                RenderCmd cmd;
+                cmd.type = CMD_ITEM;
+                cmd.zIndex = z;
+                cmd.top = drawY; cmd.bottom = drawY + th + 4;
+                cmd.x = x; cmd.y = drawY; cmd.w = mw; cmd.h = th;
+                cmd.col1 = col;
+                cmd.param1 = by;
+                cmd.font = f;
+                cmd.text = pCt;
+                renderQueue.push_back(cmd);
+                curY = y + th + 4;
+                break;
             }
             case HTP::EType::LIST: {
                 int cy = y;
@@ -5708,47 +6261,260 @@ namespace Render {
                 const char* pSrc = getRefPtr(e->props, "src");
                 const char* pAlt = getRefPtr(e->props, "alt");
                 if (pAlt[0] == '\0') pAlt = "[image]";
-                auto bdr = e->props.getColor("border-color", {80,80,100});
+                auto bdr = e->props.getColor("border-color", { 80, 80, 100 });
                 auto imgSp = (pSrc[0] != '\0') ? ImageCache::get(resolveUrl(pSrc, g_curUrl)) : nullptr;
-                LumeString altStr = pAlt;
-                renderQueue.push_back({z, drawY, drawY + ih + 8, [this, x, drawY, iw, ih, bdr, imgSp, altStr]() {
-                    HDC dc = this->docDC;
-                    if (imgSp && imgSp.get()) {
-                        Gdiplus::Graphics g(dc);
-                        g.DrawImage(imgSp.get(), x, drawY, iw, ih);
-                        HPEN p = CreatePen(PS_SOLID, 1, bdr.cr());
-                        auto op = SelectObject(dc, p);
-                        auto ob = SelectObject(dc, GetStockObject(NULL_BRUSH));
-                        Rectangle(dc, x, drawY, x + iw, drawY + ih);
-                        SelectObject(dc, ob);
-                        SelectObject(dc, op);
-                        DeleteObject(p);
-                    }
-                    else {
-                        HBRUSH b = CreateSolidBrush(RGB(50, 50, 70));
-                        HPEN p = CreatePen(PS_SOLID, 1, bdr.cr());
-                        auto ob = SelectObject(dc, b);
-                        auto op = SelectObject(dc, p);
-                        Rectangle(dc, x, drawY, x + iw, drawY + ih);
-                        SelectObject(dc, ob);
-                        SelectObject(dc, op);
-                        DeleteObject(b);
-                        DeleteObject(p);
-                        auto of = SelectObject(dc, FontCache::get(12));
-                        SetTextColor(dc, RGB(150, 150, 170));
-                        SetBkMode(dc, TRANSPARENT);
-                        RECT rc = {x + 4, drawY + 4, x + iw - 4, drawY + ih - 4};
-                        DrawTextU(dc, altStr.c_str(), -1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-                        SelectObject(dc, of);
-                    }
-                }});
+                RenderCmd cmd;
+                cmd.type = CMD_IMAGE;
+                cmd.zIndex = z;
+                cmd.top = drawY; cmd.bottom = drawY + ih + 8;
+                cmd.x = x; cmd.y = drawY; cmd.w = iw; cmd.h = ih;
+                cmd.col1 = bdr;
+                cmd.img = imgSp;
+                cmd.text = pAlt;
+                renderQueue.push_back(cmd);
                 curY = y + ih + 8;
                 break;
             }
-            default: break;
+            default:
+                break;
             }
             if (curY > contentH) contentH = curY;
         }
+        void executeCmd(HDC dc, const RenderCmd& cmd) {
+            switch (cmd.type) {
+            case CMD_ROUND_RECT: {
+                int actualH = (cmd.param1 >= 0 && cmd.param1 < (int)blockHeights.size())
+                    ? blockHeights[cmd.param1] : cmd.h;
+                fillRR(dc, cmd.x, cmd.y, cmd.w, actualH, cmd.col1, cmd.param2);
+                break;
+            }
+            case CMD_TEXT: {
+                if (cmd.param2) {
+                    int drawX = cmd.x;
+                    if (cmd.param1 & DT_CENTER || cmd.param1 & DT_RIGHT) {
+                        SIZE ts;
+                        HFONT of = (HFONT)SelectObject(dc, cmd.font);
+                        GetTextExtentPoint32U(dc, cmd.text.c_str(), (int)cmd.text.length(), &ts);
+                        SelectObject(dc, of);
+                        if (cmd.param1 & DT_CENTER) drawX = cmd.x + (cmd.w - ts.cx) / 2;
+                        else if (cmd.param1 & DT_RIGHT) drawX = cmd.x + (cmd.w - ts.cx);
+                    }
+                    GradientText::draw(dc, cmd.text.c_str(), cmd.font, drawX, cmd.y, cmd.col1, cmd.col2, cmd.floatParam);
+                }
+                else {
+                    HFONT of = (HFONT)SelectObject(dc, cmd.font);
+                    SetTextColor(dc, cmd.col1.cr());
+                    SetBkMode(dc, TRANSPARENT);
+                    RECT rcDraw = { cmd.x, cmd.y, cmd.x + cmd.w, cmd.y + cmd.h };
+                    DrawTextU(dc, cmd.text.c_str(), -1, &rcDraw, (UINT)cmd.param1);
+                    SelectObject(dc, of);
+                }
+                break;
+            }
+            case CMD_LINK: {
+                HFONT of = (HFONT)SelectObject(dc, cmd.font);
+                SetTextColor(dc, cmd.col1.cr());
+                SetBkMode(dc, TRANSPARENT);
+                RECT rc = { cmd.x, cmd.y, cmd.x + cmd.w, cmd.y + cmd.h };
+                DrawTextU(dc, cmd.text.c_str(), -1, &rc, 0);
+                HPEN p = CreatePen(PS_SOLID, 1, cmd.col1.cr());
+                HPEN op = (HPEN)SelectObject(dc, p);
+                MoveToEx(dc, cmd.x, cmd.y + cmd.h - 1, 0);
+                LineTo(dc, cmd.x + cmd.w, cmd.y + cmd.h - 1);
+                SelectObject(dc, op);
+                DeleteObject(p);
+                SelectObject(dc, of);
+                break;
+            }
+            case CMD_BUTTON: {
+                fillRR(dc, cmd.x, cmd.y, cmd.w, cmd.h, cmd.col1, cmd.param1);
+                HFONT of = (HFONT)SelectObject(dc, cmd.font);
+                SetTextColor(dc, cmd.col2.cr());
+                SetBkMode(dc, TRANSPARENT);
+                RECT rc = {cmd.x, cmd.y, cmd.x + cmd.w, cmd.y + cmd.h};
+                DrawTextU(dc, cmd.text.c_str(), -1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                SelectObject(dc, of);
+                break;
+            }
+            case CMD_INPUT: {
+                bool foc = (Bindings::g_focusId == cmd.text);
+                auto& inp = Bindings::g_inputs[cmd.text];
+                bool isMulti = (cmd.param1 != 0);
+                HBRUSH br = CreateSolidBrush(foc ? RGB(50, 50, 80) : RGB(40, 40, 60));
+                HPEN pn = CreatePen(PS_SOLID, foc ? 2 : 1, foc ? RGB(10, 189, 227) : RGB(100, 100, 140));
+                auto ob = SelectObject(dc, br);
+                auto op = SelectObject(dc, pn);
+                RoundRect(dc, cmd.x, cmd.y, cmd.x + cmd.w, cmd.y + cmd.h, 4, 4);
+                SelectObject(dc, ob);
+                SelectObject(dc, op);
+                DeleteObject(br);
+                DeleteObject(pn);
+                int save = SaveDC(dc);
+                IntersectClipRect(dc, cmd.x + 4, cmd.y + 4, cmd.x + cmd.w - 4, cmd.y + cmd.h - 4);
+                auto of = SelectObject(dc, FontCache::get(14));
+                SetBkMode(dc, TRANSPARENT);
+                int fontH = 16;
+                int curX = 0, curYPos = 0;
+                if (foc) {
+                    Bindings::getXYFromCursor(dc, inp.text, inp.cursor, isMulti, curX, curYPos);
+                    if (curX - inp.scrollX > cmd.w - 16) inp.scrollX = curX - (cmd.w - 16);
+                    if (curX - inp.scrollX < 0) inp.scrollX = curX;
+                    if (curYPos - inp.scrollY > cmd.h - fontH - 8) inp.scrollY = curYPos - (cmd.h - fontH - 8);
+                    if (curYPos - inp.scrollY < 0) inp.scrollY = curYPos;
+                }
+                else {
+                    if (!isMulti) inp.scrollX = 0;
+                    inp.scrollY = 0;
+                }
+                int drawX = cmd.x + 6 - inp.scrollX;
+                int drawY = cmd.y + 4 - inp.scrollY;
+                auto drawLine = [&](int ly, const char* str, int len, int lineStartIdx) {
+                    if (foc && inp.selStart != -1 && inp.selStart != inp.cursor) {
+                        int s = lume_max(lineStartIdx, lume_min(inp.cursor, inp.selStart));
+                        int e = lume_max(lineStartIdx, lume_min(lineStartIdx + len, lume_max(inp.cursor, inp.selStart)));
+                        if (s < e) {
+                            SIZE pre = { 0, 0 }, sel = { 0, 0 };
+                            GetTextExtentPoint32U(dc, str, s - lineStartIdx, &pre);
+                            GetTextExtentPoint32U(dc, str + (s - lineStartIdx), e - s, &sel);
+                            RECT sr = { drawX + pre.cx, drawY + ly, drawX + pre.cx + sel.cx, drawY + ly + fontH };
+                            HBRUSH selBr = CreateSolidBrush(RGB(0, 120, 215));
+                            FillRect(dc, &sr, selBr);
+                            DeleteObject(selBr);
+                        }
+                    }
+                    RECT rc = {drawX, drawY + ly, cmd.x + cmd.w, drawY + ly + fontH};
+                    DrawTextU(dc, str, len, &rc, DT_SINGLELINE | DT_NOCLIP);
+                    if (foc && inp.cursor >= lineStartIdx && inp.cursor <= lineStartIdx + len) {
+                        SIZE pre = { 0, 0 };
+                        GetTextExtentPoint32U(dc, str, inp.cursor - lineStartIdx, &pre);
+                        HPEN cpen = CreatePen(PS_SOLID, 1, RGB(255, 255, 255));
+                        auto ocp = SelectObject(dc, cpen);
+                        MoveToEx(dc, drawX + pre.cx, drawY + ly, 0);
+                        LineTo(dc, drawX + pre.cx, drawY + ly + fontH);
+                        SelectObject(dc, ocp);
+                        DeleteObject(cpen);
+                    }
+                };
+                if (inp.text.empty() && !inp.placeholder.empty()) {
+                    SetTextColor(dc, RGB(120, 120, 140));
+                    drawLine(0, inp.placeholder.c_str(), (int)inp.placeholder.length(), 0);
+                }
+                else {
+                    SetTextColor(dc, RGB(230, 230, 240));
+                    int currentY = 0, lineStart = 0;
+                    for (int i = 0; i <= (int)inp.text.length(); i++) {
+                        if (i == (int)inp.text.length() || inp.text[i] == '\n') {
+                            drawLine(currentY, inp.text.c_str() + lineStart, i - lineStart, lineStart);
+                            currentY += fontH;
+                            lineStart = i + 1;
+                        }
+                    }
+                }
+                SelectObject(dc, of);
+                RestoreDC(dc, save);
+                break;
+            }
+            case CMD_CANVAS: {
+                HPEN p = CreatePen(PS_SOLID, 1, cmd.col1.cr());
+                auto op = SelectObject(dc, p);
+                auto ob = SelectObject(dc, GetStockObject(NULL_BRUSH));
+                Rectangle(dc, cmd.x - 1, cmd.y - 1, cmd.x + cmd.w + 1, cmd.y + cmd.h + 1);
+                SelectObject(dc, ob);
+                SelectObject(dc, op);
+                DeleteObject(p);
+                if (cmd.cb && cmd.cb->dc) {
+                    BitBlt(dc, cmd.x, cmd.y, cmd.w, cmd.h, cmd.cb->dc, 0, 0, SRCCOPY);
+                }
+                break;
+            }
+            case CMD_GL_CANVAS: {
+                HPEN p = CreatePen(PS_SOLID, 1, cmd.col1.cr());
+                auto op = SelectObject(dc, p);
+                auto ob = SelectObject(dc, GetStockObject(NULL_BRUSH));
+                Rectangle(dc, cmd.x - 1, cmd.y - 1, cmd.x + cmd.w + 1, cmd.y + cmd.h + 1);
+                SelectObject(dc, ob);
+                SelectObject(dc, op);
+                DeleteObject(p);
+                if (!g_opt_gpu || !GLLoader::available()) {
+                    HBRUSH fb = CreateSolidBrush(RGB(40, 40, 60));
+                    RECT fr = { cmd.x, cmd.y, cmd.x + cmd.w, cmd.y + cmd.h };
+                    FillRect(dc, &fr, fb);
+                    DeleteObject(fb);
+                    auto of = SelectObject(dc, FontCache::get(14));
+                    SetTextColor(dc, RGB(150, 150, 170));
+                    SetBkMode(dc, TRANSPARENT);
+                    RECT rc = { cmd.x, cmd.y, cmd.x + cmd.w, cmd.y + cmd.h };
+                    DrawTextU(dc, "GPU Disabled", -1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                    SelectObject(dc, of);
+                }
+                break;
+            }
+            case CMD_DIVIDER: {
+                HPEN p = CreatePen(PS_SOLID, cmd.param1, cmd.col1.cr());
+                auto op = SelectObject(dc, p);
+                MoveToEx(dc, cmd.x, cmd.y, 0);
+                LineTo(dc, cmd.x + cmd.w, cmd.y);
+                SelectObject(dc, op);
+                DeleteObject(p);
+                break;
+            }
+            case CMD_ITEM: {
+                HBRUSH b = CreateSolidBrush(cmd.col1.cr());
+                HPEN pn = CreatePen(PS_SOLID, 1, cmd.col1.cr());
+                auto ob = SelectObject(dc, b);
+                auto op = SelectObject(dc, pn);
+                Ellipse(dc, cmd.x - 12, cmd.param1, cmd.x - 4, cmd.param1 + 6);
+                SelectObject(dc, ob);
+                SelectObject(dc, op);
+                DeleteObject(b);
+                DeleteObject(pn);
+                auto of2 = SelectObject(dc, cmd.font);
+                SetTextColor(dc, cmd.col1.cr());
+                SetBkMode(dc, TRANSPARENT);
+                RECT rcDraw = { cmd.x, cmd.y, cmd.x + cmd.w, cmd.y + cmd.h };
+                DrawTextU(dc, cmd.text.c_str(), -1, &rcDraw, DT_WORDBREAK);
+                SelectObject(dc, of2);
+                break;
+            }
+            case CMD_IMAGE: {
+                if (cmd.img && cmd.img.get()) {
+                    Gdiplus::Graphics g(dc);
+                    g.DrawImage(cmd.img.get(), cmd.x, cmd.y, cmd.w, cmd.h);
+                    HPEN p = CreatePen(PS_SOLID, 1, cmd.col1.cr());
+                    auto op = SelectObject(dc, p);
+                    auto ob = SelectObject(dc, GetStockObject(NULL_BRUSH));
+                    Rectangle(dc, cmd.x, cmd.y, cmd.x + cmd.w, cmd.y + cmd.h);
+                    SelectObject(dc, ob);
+                    SelectObject(dc, op);
+                    DeleteObject(p);
+                }
+                else {
+                    HBRUSH b = CreateSolidBrush(RGB(50, 50, 70));
+                    HPEN p = CreatePen(PS_SOLID, 1, cmd.col1.cr());
+                    auto ob = SelectObject(dc, b);
+                    auto op = SelectObject(dc, p);
+                    Rectangle(dc, cmd.x, cmd.y, cmd.x + cmd.w, cmd.y + cmd.h);
+                    SelectObject(dc, ob);
+                    SelectObject(dc, op);
+                    DeleteObject(b);
+                    DeleteObject(p);
+                    auto of = SelectObject(dc, FontCache::get(12));
+                    SetTextColor(dc, RGB(150, 150, 170));
+                    SetBkMode(dc, TRANSPARENT);
+                    RECT rc = { cmd.x + 4, cmd.y + 4, cmd.x + cmd.w - 4, cmd.y + cmd.h - 4 };
+                    DrawTextU(dc, cmd.text.c_str(), -1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                    SelectObject(dc, of);
+                }
+                break;
+            }
+            case CMD_CUSTOM_TAG: {
+                if (cmd.customHandler.render && cmd.elem) {
+                    cmd.customHandler.render(dc, (HTP_NodeHandle)cmd.elem.get(), cmd.x, cmd.y, cmd.w, cmd.h, getScroll());
+                }
+                break;
+            }
+        }
+    }
     public:
         int lastW = 0;
         HDC docDC = nullptr;
@@ -5761,17 +6527,20 @@ namespace Render {
             th_cap = o.th_cap;
             th_sz = o.th_sz;
             o.th_tab = nullptr;
-            o.th_cap = 0; o.th_sz = 0;
+            o.th_cap = 0;
+            o.th_sz = 0;
             ts_tab = o.ts_tab;
             ts_cap = o.ts_cap;
             ts_sz = o.ts_sz;
             o.ts_tab = nullptr;
-            o.ts_cap = 0; o.ts_sz = 0;
+            o.ts_cap = 0;
+            o.ts_sz = 0;
             est_tab = o.est_tab;
             est_cap = o.est_cap;
             est_sz = o.est_sz;
             o.est_tab = nullptr;
-            o.est_cap = 0; o.est_sz = 0;
+            o.est_cap = 0;
+            o.est_sz = 0;
             scrollY = o.scrollY;
             contentH = o.contentH;
             curY = o.curY;
@@ -5788,9 +6557,7 @@ namespace Render {
                 if (th_tab) HeapFree(GetProcessHeap(), 0, th_tab);
                 if (ts_tab) HeapFree(GetProcessHeap(), 0, ts_tab);
                 if (est_tab) HeapFree(GetProcessHeap(), 0, est_tab);
-                th_tab = o.th_tab;
-                th_cap = o.th_cap;
-                th_sz = o.th_sz;
+                th_tab = o.th_tab; th_cap = o.th_cap; th_sz = o.th_sz;
                 o.th_tab = nullptr;
                 o.th_cap = 0;
                 o.th_sz = 0;
@@ -5798,14 +6565,12 @@ namespace Render {
                 ts_cap = o.ts_cap;
                 ts_sz = o.ts_sz;
                 o.ts_tab = nullptr;
-                o.ts_cap = 0;
-                o.ts_sz = 0;
+                o.ts_cap = 0; o.ts_sz = 0;
                 est_tab = o.est_tab;
                 est_cap = o.est_cap;
                 est_sz = o.est_sz;
                 o.est_tab = nullptr;
-                o.est_cap = 0;
-                o.est_sz = 0;
+                o.est_cap = 0; o.est_sz = 0;
                 scrollY = o.scrollY;
                 contentH = o.contentH;
                 curY = o.curY;
@@ -5825,9 +6590,15 @@ namespace Render {
             if (ts_tab) HeapFree(GetProcessHeap(), 0, ts_tab);
             if (est_tab) HeapFree(GetProcessHeap(), 0, est_tab);
         }
-        int totalH() const {return contentH;}
-        void setScroll(int y) {scrollY = lume_max(0, y);}
-        int getScroll() const {return scrollY;}
+        int totalH() const {
+            return contentH;
+        }
+        void setScroll(int y) {
+            scrollY = lume_max(0, y);
+        }
+        int getScroll() const {
+            return scrollY;
+        }
         void updateLayout(HDC tdc, int w, HTP::Doc& doc) {
             if (w != lastW) {
                 clear_th();
@@ -5842,14 +6613,14 @@ namespace Render {
             draw(tdc, doc.root, 10, 10, w - 20, "left");
             LumeStableSort(renderQueue.begin(), renderQueue.end(), [](const RenderCmd& a, const RenderCmd& b) {
                 return a.zIndex < b.zIndex;
-                });
+            });
             LumeStableSort(docHits.begin(), docHits.end(), [](const Hit& a, const Hit& b) {
                 return a.zIndex > b.zIndex;
-                });
+            });
         }
         void drawToScreen(HDC targetDC, int w, int h) {
             HBRUSH bgBrush = CreateSolidBrush(::g_doc.bg.cr());
-            RECT r = { 0, 0, w, h };
+            RECT r = {0, 0, w, h};
             FillRect(targetDC, &r, bgBrush);
             DeleteObject(bgBrush);
             POINT originalOrg;
@@ -5860,11 +6631,9 @@ namespace Render {
                 if (cmd.zIndex != 0) currentScroll = scrollY - (scrollY * cmd.zIndex / 10);
                 int drawTop = cmd.top - currentScroll;
                 int drawBottom = cmd.bottom - currentScroll;
-                if (drawBottom < 0 || drawTop > h) {
-                    continue;
-                }
+                if (drawBottom < 0 || drawTop > h) continue;
                 SetViewportOrgEx(targetDC, 0, -currentScroll, NULL);
-                cmd.drawCall();
+                executeCmd(targetDC, cmd);
             }
             this->docDC = nullptr;
             SetViewportOrgEx(targetDC, originalOrg.x, originalOrg.y, NULL);
@@ -5942,9 +6711,9 @@ namespace Pages {
         @column {background:"#18181b"; padding:25; border-radius:10; width:280;
             @text {content:"WebAssembly"; size:20; color:"#fafafa"; bold:"true";}
             @divider {color:"#27272a"; thickness:1; margin:15;}
-            @text {content:"Run C/Rust/Zig binaries directly inside your pages at native speeds."; size:15; color:"#a1a1aa";}
+            @text {content:"Run compiled C/Rust/Zig bytecode safely inside your pages using the wasm3 interpreter."; size:15; color:"#a1a1aa";}
             @br {size:20;}
-            @button { content:"WASM Demo"; width:140; height:35; background:"#3b82f6"; color:"#ffffff"; border-radius:6; url:"about:wasm";}
+            @button {content:"WASM Demo"; width:140; height:35; background:"#3b82f6"; color:"#ffffff"; border-radius:6; url:"about:wasm";}
             @br {size:30;}
         }
     }
@@ -6003,29 +6772,45 @@ namespace Pages {
   @text {content:"The architecture behind the custom engine."; size:18; color:"#a1a1aa"; italic:"true"; align:"center";}
 }
 @block {align:"center"; padding:20; margin:0; background:"#09090b";
+    /* Ряд 1: Рендеринг и Lua */
     @row {align:"center"; gap:20;
         @column {background:"#18181b"; padding:25; border-radius:10; width:300;
             @text {content:"[*] Custom Rendering"; size:20; color:"#fafafa"; bold:"true";}
             @divider {color:"#27272a"; thickness:1; margin:15;}
-            @text {content:"No CEF or Chromium overhead. Everything is drawn natively using WinAPI, GDI+, and custom layout algorithms."; size:15; color:"#a1a1aa";}
+            @text {content:"No CEF or Chromium overhead. Everything is drawn natively using WinAPI, GDI+, double-buffered rendering, and custom layout algorithms."; size:15; color:"#a1a1aa";}
         }
         @column {background:"#18181b"; padding:25; border-radius:10; width:300;
             @text {content:"[+] Lua 5.4 Powered"; size:20; color:"#fafafa"; bold:"true";}
             @divider {color:"#27272a"; thickness:1; margin:15; }
-            @text {content:"Fast and lightweight scripting. Direct bindings to DOM elements, inputs, and canvases without JS bloat."; size:15; color:"#a1a1aa";}
+            @text {content:"Lightweight embedded scripting. Direct bindings to DOM nodes, 2D canvas drawing, high-res frame pacing, and keyboard/mouse events."; size:15; color:"#a1a1aa";}
         }
     }
     @br {size:20;}
+    /* Ряд 2: OpenGL и Плагины */
     @row {align:"center"; gap:20;
         @column {background:"#18181b"; padding:25; border-radius:10; width:300;
-            @text {content:"[>] OpenGL Integration"; size:20; color:"#fafafa"; bold:"true";}
+            @text {content:"[>] OpenGL Acceleration"; size:20; color:"#fafafa"; bold:"true";}
             @divider {color:"#27272a"; thickness:1; margin:15;}
-            @text {content:"Hardware-accelerated canvases embedded directly into the UI flow with full mouse capture support."; size:15; color:"#a1a1aa";}
+            @text {content:"Hardware-accelerated 3D viewports embedded into the document with relative mouse capture, fullscreen support, and OBJ/BBModel loaders."; size:15; color:"#a1a1aa";}
         }
         @column {background:"#18181b"; padding:25; border-radius:10; width:300;
-            @text {content:"[~] Native Plugins"; size:20; color:"#fafafa"; bold:"true";}
+            @text {content:"[~] Native Plugin System"; size:20; color:"#fafafa"; bold:"true";}
             @divider {color:"#27272a"; thickness:1; margin:15;}
-            @text {content:"Extend the engine dynamically using C++ DLLs. Add new network protocols, physics, or OS integrations."; size:15; color:"#a1a1aa";}
+            @text {content:"Dynamic C++ DLL architecture. Extend the browser with custom tags, custom page format engines, and low-level system integrations."; size:15; color:"#a1a1aa";}
+        }
+    }
+    @br {size:20;}
+    /* Ряд 3: WASM и Сеть (Ровно 6 карточек) */
+    @row {align:"center"; gap:20;
+        @column {background:"#18181b"; padding:25; border-radius:10; width:300;
+            @text {content:"[#] WebAssembly Runtime"; size:20; color:"#fafafa"; bold:"true";}
+            @divider {color:"#27272a"; thickness:1; margin:15;}
+            @text {content:"Sandboxed execution via the wasm3 interpreter. Run compiled C, Rust, or Zig bytecode safely inside your HTP pages."; size:15; color:"#a1a1aa";}
+        }
+        @column {background:"#18181b"; padding:25; border-radius:10; width:300;
+            @text {content:"[@] Network & WinHTTP"; size:20; color:"#fafafa"; bold:"true";}
+            @divider {color:"#27272a"; thickness:1; margin:15;}
+            @text {content:"Native async HTTP/HTTPS client with SSL validation, background streaming downloads, and support for pluggable protocol handlers."; size:15; color:"#a1a1aa";}
         }
     }
     @br {size:40;}
@@ -6835,17 +7620,13 @@ HWND g_tabControl = nullptr;
 WNDPROC g_origTabProc = nullptr;
 void updateTabTitle(int idx) {
     if (idx < 0 || idx >= g_tabCount || !g_tabControl) return;
-    LumeString title = g_docs[idx].title;
-    if (title.empty()) {
-        title = g_curUrl_arr[idx];
+    if (idx == g_tabIdx && g_mainWnd) {
+        LumeString title = g_docs[idx].title;
+        if (title.empty()) title = g_curUrl_arr[idx];
         if (title.empty()) title = "New Tab";
+        SetWindowTextU(g_mainWnd, (title + " - Lume").c_str());
     }
-    if (title.length() > 22) title = title.substr(0, 19) + "...";
-    LumeWString wtitle = utf8_to_wstring(title) + L"  \x00D7";
-    TCITEMW tie = { 0 };
-    tie.mask = TCIF_TEXT;
-    tie.pszText = wtitle.data();
-    SendMessageW(g_tabControl, TCM_SETITEMW, idx, (LPARAM)&tie);
+    InvalidateRect(g_tabControl, NULL, FALSE);
     repositionNewTabBtn();
 }
 void switchTab(int index) {
@@ -6854,17 +7635,19 @@ void switchTab(int index) {
     g_tabIdx = index;
     GLCanvas::showAll();
     TabCtrl_SetCurSel(g_tabControl, index);
+    SendMessageW(g_tabControl, TCM_SETCURFOCUS, index, 0);
     if (g_mainWnd) {
         SetWindowTextU(g_addressBar, g_curUrl.c_str());
         invalidateDOM();
     }
+    repositionNewTabBtn();
 }
 void createNewTab() {
     if (g_tabCount >= MAX_LUME_TABS) return;
     int newIdx = g_tabCount++;
-    TCITEMW tie = {0};
+    TCITEMW tie = { 0 };
     tie.mask = TCIF_TEXT;
-    tie.pszText = (LPWSTR)L"New Tab  \x00D7";
+    tie.pszText = (LPWSTR)L"";
     SendMessageW(g_tabControl, TCM_INSERTITEMW, newIdx, (LPARAM)&tie);
     switchTab(newIdx);
     repositionNewTabBtn();
@@ -6903,6 +7686,12 @@ void closeTab(int idx) {
         WasmEngine::instances_arr[i] = static_cast<LumeMap<int, WasmEngine::Instance>&&>(WasmEngine::instances_arr[i + 1]);
         GLBuffers::buffers_arr[i] = static_cast<LumeMap<int, LumeVector<float>>&&>(GLBuffers::buffers_arr[i + 1]);
         HTP::g_domIdMap_arr[i] = static_cast<LumeMap<LumeString, LumeSharedPtr<HTP::Elem>>&&>(HTP::g_domIdMap_arr[i + 1]);
+        Bindings::g_rightClicks_arr[i] = static_cast<LumeMap<LumeString, LumeAction>&&>(Bindings::g_rightClicks_arr[i + 1]);
+        Bindings::g_offsets_y_arr[i] = static_cast<LumeMap<LumeString, int>&&>(Bindings::g_offsets_y_arr[i + 1]);
+        Bindings::g_shimmer_offsets_arr[i] = static_cast<LumeMap<LumeString, float>&&>(Bindings::g_shimmer_offsets_arr[i + 1]);
+        memcpy(Bindings::g_keyPressed_arr[i], Bindings::g_keyPressed_arr[i + 1], sizeof(Bindings::g_keyPressed_arr[0]));
+        memcpy(Bindings::g_keyReleased_arr[i], Bindings::g_keyReleased_arr[i + 1], sizeof(Bindings::g_keyReleased_arr[0]));
+        Script::g_keyDownRef_arr[i] = Script::g_keyDownRef_arr[i + 1];
     }
     Script::g_L_arr[g_tabCount - 1] = nullptr;
     Plugins::g_activeProtocol_arr[g_tabCount - 1] = nullptr;
@@ -6916,6 +7705,8 @@ void closeTab(int idx) {
     repositionNewTabBtn();
 }
 LRESULT CALLBACK TabProc(HWND h, UINT m, WPARAM w, LPARAM l) {
+    static int g_hoverTabIdx = -1;
+    static bool g_hoverCross = false;
     if (m == WM_MBUTTONUP) {
         TCHITTESTINFO hti;
         hti.pt.x = GET_X_LPARAM(l);
@@ -6923,6 +7714,35 @@ LRESULT CALLBACK TabProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         int idx = (int)SendMessageW(h, TCM_HITTEST, 0, (LPARAM)&hti);
         if (idx != -1) PostMessageW(GetParent(h), WM_APP + 100, idx, 0);
         return 0;
+    }
+    if (m == WM_MOUSEMOVE) {
+        TRACKMOUSEEVENT tme = {sizeof(tme), TME_LEAVE, h, 0};
+        TrackMouseEvent(&tme);
+        POINT pt = {GET_X_LPARAM(l), GET_Y_LPARAM(l)};
+        TCHITTESTINFO hti = { pt };
+        int idx = (int)SendMessageW(h, TCM_HITTEST, 0, (LPARAM)&hti);
+        int newHoverIdx = -1;
+        bool newHoverCross = false;
+        if (idx != -1) {
+            RECT rc;
+            TabCtrl_GetItemRect(h, idx, &rc);
+            if (pt.x >= rc.right - 22 && pt.x <= rc.right - 4) {
+                newHoverIdx = idx;
+                newHoverCross = true;
+            }
+        }
+        if (newHoverIdx != g_hoverTabIdx || newHoverCross != g_hoverCross) {
+            g_hoverTabIdx = newHoverIdx;
+            g_hoverCross = newHoverCross;
+            InvalidateRect(h, NULL, FALSE);
+        }
+    }
+    if (m == WM_MOUSELEAVE) {
+        if (g_hoverCross) {
+            g_hoverTabIdx = -1;
+            g_hoverCross = false;
+            InvalidateRect(h, NULL, FALSE);
+        }
     }
     if (m == WM_LBUTTONDOWN) {
         TCHITTESTINFO hti;
@@ -6932,21 +7752,42 @@ LRESULT CALLBACK TabProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         if (idx != -1) {
             RECT rc;
             TabCtrl_GetItemRect(h, idx, &rc);
-            if (hti.pt.x >= rc.right - 20 && hti.pt.x <= rc.right - 2) {
+            if (hti.pt.x >= rc.right - 22 && hti.pt.x <= rc.right - 2) {
                 PostMessageW(GetParent(h), WM_APP + 100, idx, 0);
                 return 0;
             }
         }
     }
-    if (m == WM_MOUSEWHEEL) {
-        int delta = GET_WHEEL_DELTA_WPARAM(w);
-        if (delta > 0) {
-            if (g_tabIdx > 0) switchTab(g_tabIdx - 1);
+    if (m == WM_PAINT) {
+        LRESULT res = CallWindowProcW(g_origTabProc, h, m, w, l);
+        HDC hdc = GetDC(h);
+        HFONT hFont = (HFONT)SendMessageW(h, WM_GETFONT, 0, 0);
+        HFONT hOldFont = (HFONT)SelectObject(hdc, hFont);
+        SetBkMode(hdc, TRANSPARENT);
+        int curSel = TabCtrl_GetCurSel(h);
+        for (int i = 0; i < g_tabCount; i++) {
+            RECT rc;
+            if (!TabCtrl_GetItemRect(h, i, &rc)) continue;
+            RECT rcText = {rc.left + 8, rc.top + 1, rc.right - 24, rc.bottom};
+            LumeString title = g_docs[i].title;
+            if (title.empty()) title = g_curUrl_arr[i];
+            if (title.empty()) title = "New Tab";
+            LumeWString wtitle = utf8_to_wstring(title);
+            SetTextColor(hdc, (i == curSel) ? RGB(0, 102, 204) : RGB(50, 50, 50));
+            DrawTextW(hdc, wtitle.c_str(), -1, &rcText, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+            RECT rcClose = {rc.right - 20, rc.top + 1, rc.right - 4, rc.bottom};
+            bool isCrossHovered = (g_hoverCross && g_hoverTabIdx == i);
+            SetTextColor(hdc, isCrossHovered ? RGB(230, 40, 40) : RGB(140, 140, 140));
+            DrawTextW(hdc, L"\x00D7", 1, &rcClose, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         }
-        else if (delta < 0) {
-            if (g_tabIdx < g_tabCount - 1) switchTab(g_tabIdx + 1);
-        }
-        return 0;
+        SelectObject(hdc, hOldFont);
+        ReleaseDC(h, hdc);
+        return res;
+    }
+    if (m == WM_HSCROLL) {
+        LRESULT res = CallWindowProcW(g_origTabProc, h, m, w, l);
+        InvalidateRect(h, NULL, TRUE);
+        return res;
     }
     return CallWindowProcW(g_origTabProc, h, m, w, l);
 }
@@ -6965,19 +7806,16 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
     static bool g_draggingInput = false;
     switch (msg) {
     case WM_CREATE: {
-        g_tabControl = CreateWindowW(WC_TABCONTROLW, L"", WS_CHILD | WS_CLIPSIBLINGS | WS_VISIBLE | TCS_FOCUSNEVER, 0, 0, 100, 25, hw, (HMENU)(INT_PTR)ID_TAB_BASE, 0, 0);
+        g_tabControl = CreateWindowW(WC_TABCONTROLW, L"", WS_CHILD | WS_CLIPSIBLINGS | WS_CLIPCHILDREN | WS_VISIBLE | TCS_FOCUSNEVER | TCS_FIXEDWIDTH, 0, 0, 100, 28, hw, (HMENU)(INT_PTR)ID_TAB_BASE, 0, 0);
         g_origTabProc = (WNDPROC)SetWindowLongPtrW(g_tabControl, GWLP_WNDPROC, (LONG_PTR)TabProc);
         HFONT uf = CreateFontW(-14, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, L"Segoe UI");
         SendMessage(g_tabControl, WM_SETFONT, (WPARAM)uf, 1);
         g_newTabBtn = CreateWindowW(L"BUTTON", L"+", WS_CHILD | WS_CLIPSIBLINGS | WS_VISIBLE, 0, 0, 25, 25, hw, (HMENU)(INT_PTR)ID_NEW_TAB, 0, 0);
         SendMessage(g_newTabBtn, WM_SETFONT, (WPARAM)uf, 1);
         TCITEMW tie = {0};
-        tie.pszText = (LPWSTR)L"New Tab  \x00D7";
+        tie.mask = TCIF_TEXT;
+        tie.pszText = (LPWSTR)L"";
         SendMessageW(g_tabControl, TCM_INSERTITEMW, 0, (LPARAM)&tie);
-        g_tabPrevBtn = CreateWindowW(L"BUTTON", L"\x2039", WS_CHILD | WS_VISIBLE, 0, 0, 24, 24, hw, (HMENU)(INT_PTR)ID_TAB_PREV, 0, 0);
-        g_tabNextBtn = CreateWindowW(L"BUTTON", L"\x203A", WS_CHILD | WS_VISIBLE, 0, 0, 24, 24, hw, (HMENU)(INT_PTR)ID_TAB_NEXT, 0, 0);
-        SendMessage(g_tabPrevBtn, WM_SETFONT, (WPARAM)uf, 1);
-        SendMessage(g_tabNextBtn, WM_SETFONT, (WPARAM)uf, 1);
         CreateWindowW(L"BUTTON", L"<", WS_CHILD | WS_VISIBLE, 4, 31, 30, 28, hw, (HMENU)ID_BACK, 0, 0);
         CreateWindowW(L"BUTTON", L">", WS_CHILD | WS_VISIBLE, 38, 31, 30, 28, hw, (HMENU)ID_FWD, 0, 0);
         CreateWindowW(L"BUTTON", L"R", WS_CHILD | WS_VISIBLE, 72, 31, 30, 28, hw, (HMENU)ID_REF, 0, 0);
@@ -7001,9 +7839,9 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
             return 0;
         }
         int w = LOWORD(lp), h = HIWORD(lp);
-        MoveWindow(g_tabControl, 0, 0, w - 56, 28, TRUE);
-        MoveWindow(g_tabPrevBtn, w - 54, 2, 25, 23, TRUE);
-        MoveWindow(g_tabNextBtn, w - 27, 2, 25, 23, TRUE);
+        int btnW = 24;
+        int tabW = w - btnW - 4;
+        MoveWindow(g_tabControl, 0, 0, tabW > 0 ? tabW : 0, 28, TRUE);
         repositionNewTabBtn();
         int menuW = 30, goW = 40, pad = 4;
         int menuX = w - pad - menuW;
@@ -7537,14 +8375,6 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
             createNewTab();
             return 0;
         }
-        if (id == ID_TAB_PREV) {
-            if (g_tabIdx > 0) switchTab(g_tabIdx - 1);
-            return 0;
-        }
-        if (id == ID_TAB_NEXT) {
-            if (g_tabIdx < g_tabCount - 1) switchTab(g_tabIdx + 1);
-            return 0;
-        }
         if (id == ID_MENU_BTN) {
             HMENU hMenu = CreatePopupMenu();
             HMENU hHistMenu = CreatePopupMenu();
@@ -7704,27 +8534,37 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
         InvalidateRect(hw, nullptr, FALSE);
         return 0;
     case WM_PAGE_LOADED: {
-        LumeLockGuard<LumeMutex> lock(g_pageMutex);
-        for (int t = 0; t < g_tabCount; t++) {
-            TabScope scope(t);
-            for (const auto& pp : g_pendingPages) {
-                if (pp.navId != g_currentNavId) continue;
-                if (!pp.isHistoryNav) {
-                    g_hist.push_back(pp.url);
-                    if (g_hist.size() > 50) { g_hist.erase(g_hist.begin()); if (g_histPos > 0) g_histPos--; }
-                    g_histPos = (int)g_hist.size() - 1;
+        LumeVector<LumePair<int, PendingPage>> toProcess;
+        {
+            LumeLockGuard<LumeMutex> lock(g_pageMutex);
+            for (int t = 0; t < g_tabCount; t++) {
+                for (const auto& pp : g_pendingPages_arr[t]) {
+                    if (pp.navId == g_currentNavId_arr[t]) {
+                        toProcess.push_back({ t, pp });
+                    }
                 }
-                if (pp.error) {
-                    loadContent(pp.body, pp.url, true);
-                    setStatus("Err");
-                }
-                else {
-                    loadContent(pp.body, pp.url);
-                    setStatus("OK");
-                }
-                updateTabTitle(t);
+                g_pendingPages_arr[t].clear();
             }
-            g_pendingPages.clear();
+        }
+        for (auto& item : toProcess) {
+            int t = item.first;
+            if (t >= g_tabCount) continue;
+            TabScope scope(t);
+            auto& pp = item.second;
+            if (!pp.isHistoryNav) {
+                g_hist.push_back(pp.url);
+                if (g_hist.size() > 50) { g_hist.erase(g_hist.begin()); if (g_histPos > 0) g_histPos--; }
+                g_histPos = (int)g_hist.size() - 1;
+            }
+            if (pp.error) {
+                loadContent(pp.body, pp.url, true);
+                setStatus("Err");
+            }
+            else {
+                loadContent(pp.body, pp.url);
+                setStatus("OK");
+            }
+            updateTabTitle(t);
         }
         return 0;
     }
