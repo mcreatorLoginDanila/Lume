@@ -1131,38 +1131,160 @@ double getHighResTime() {
     QueryPerformanceCounter(&now);
     return (double)(now.QuadPart - g_perfStart.QuadPart) * g_perfFreqInv;
 }
+#define GL_ARRAY_BUFFER 0x8892
+#define GL_ELEMENT_ARRAY_BUFFER 0x8893
+#define GL_STATIC_DRAW 0x88E4
+#define GL_DYNAMIC_DRAW 0x88E8
+#define GL_FRAGMENT_SHADER 0x8B30
+#define GL_VERTEX_SHADER 0x8B31
+#define GL_COMPILE_STATUS 0x8B81
+#define GL_LINK_STATUS 0x8B82
+#define GL_INFO_LOG_LENGTH 0x8B84
+#define WGL_CONTEXT_MAJOR_VERSION_ARB 0x2091
+#define WGL_CONTEXT_MINOR_VERSION_ARB 0x2092
+#define WGL_CONTEXT_PROFILE_MASK_ARB 0x9126
+#define WGL_CONTEXT_CORE_PROFILE_BIT_ARB  0x00000001
+typedef char GLchar;
+typedef ptrdiff_t GLsizeiptr;
+typedef ptrdiff_t GLintptr;
+typedef void (APIENTRY* PFNGLGENVERTEXARRAYSPROC)(GLsizei n, GLuint* arrays);
+typedef void (APIENTRY* PFNGLBINDVERTEXARRAYPROC)(GLuint array);
+typedef void (APIENTRY* PFNGLDELETEVERTEXARRAYSPROC)(GLsizei n, const GLuint* arrays);
+typedef void (APIENTRY* PFNGLGENBUFFERSPROC)(GLsizei n, GLuint* buffers);
+typedef void (APIENTRY* PFNGLBINDBUFFERPROC)(GLenum target, GLuint buffer);
+typedef void (APIENTRY* PFNGLBUFFERDATAPROC)(GLenum target, GLsizeiptr size, const void* data, GLenum usage);
+typedef void (APIENTRY* PFNGLBUFFERSUBDATAPROC)(GLenum target, GLintptr offset, GLsizeiptr size, const void* data);
+typedef void (APIENTRY* PFNGLDELETEBUFFERSPROC)(GLsizei n, const GLuint* buffers);
+typedef void (APIENTRY* PFNGLENABLEVERTEXATTRIBARRAYPROC)(GLuint index);
+typedef void (APIENTRY* PFNGLDISABLEVERTEXATTRIBARRAYPROC)(GLuint index);
+typedef void (APIENTRY* PFNGLVERTEXATTRIBPOINTERPROC)(GLuint index, GLint size, GLenum type, GLboolean normalized, GLsizei stride, const void* pointer);
+typedef GLuint(APIENTRY* PFNGLCREATESHADERPROC)(GLenum type);
+typedef void (APIENTRY* PFNGLSHADERSOURCEPROC)(GLuint shader, GLsizei count, const GLchar* const* string, const GLint* length);
+typedef void (APIENTRY* PFNGLCOMPILESHADERPROC)(GLuint shader);
+typedef void (APIENTRY* PFNGLGETSHADERIVPROC)(GLuint shader, GLenum pname, GLint* params);
+typedef void (APIENTRY* PFNGLGETSHADERINFOLOGPROC)(GLuint shader, GLsizei bufSize, GLsizei* length, GLchar* infoLog);
+typedef void (APIENTRY* PFNGLDELETESHADERPROC)(GLuint shader);
+typedef GLuint(APIENTRY* PFNGLCREATEPROGRAMPROC)(void);
+typedef void (APIENTRY* PFNGLATTACHSHADERPROC)(GLuint program, GLuint shader);
+typedef void (APIENTRY* PFNGLLINKPROGRAMPROC)(GLuint program);
+typedef void (APIENTRY* PFNGLGETPROGRAMIVPROC)(GLuint program, GLenum pname, GLint* params);
+typedef void (APIENTRY* PFNGLGETPROGRAMINFOLOGPROC)(GLuint program, GLsizei bufSize, GLsizei* length, GLchar* infoLog);
+typedef void (APIENTRY* PFNGLUSEPROGRAMPROC)(GLuint program);
+typedef void (APIENTRY* PFNGLDELETEPROGRAMPROC)(GLuint program);
+typedef GLint(APIENTRY* PFNGLGETUNIFORMLOCATIONPROC)(GLuint program, const GLchar* name);
+typedef void (APIENTRY* PFNGLUNIFORM1FPROC)(GLint location, GLfloat v0);
+typedef void (APIENTRY* PFNGLUNIFORM2FPROC)(GLint location, GLfloat v0, GLfloat v1);
+typedef void (APIENTRY* PFNGLUNIFORM3FPROC)(GLint location, GLfloat v0, GLfloat v1, GLfloat v2);
+typedef void (APIENTRY* PFNGLUNIFORM4FPROC)(GLint location, GLfloat v0, GLfloat v1, GLfloat v2, GLfloat v3);
+typedef void (APIENTRY* PFNGLUNIFORM1IPROC)(GLint location, GLint v0);
+typedef void (APIENTRY* PFNGLUNIFORMMATRIX4FVPROC)(GLint location, GLsizei count, GLboolean transpose, const GLfloat* value);
+typedef void (APIENTRY* PFNGLACTIVETEXTUREPROC)(GLenum texture);
+typedef void (APIENTRY* PFNGLGENERATEMIPMAPPROC)(GLenum target);
+typedef HGLRC(WINAPI* PFNWGLCREATECONTEXTATTRIBSARBPROC)(HDC hDC, HGLRC hShareContext, const int* attribList);
+#define DEF_GL_FUNC(type, name) type name = nullptr
+DEF_GL_FUNC(PFNGLGENVERTEXARRAYSPROC, glGenVertexArrays);
+DEF_GL_FUNC(PFNGLBINDVERTEXARRAYPROC, glBindVertexArray);
+DEF_GL_FUNC(PFNGLDELETEVERTEXARRAYSPROC, glDeleteVertexArrays);
+DEF_GL_FUNC(PFNGLGENBUFFERSPROC, glGenBuffers);
+DEF_GL_FUNC(PFNGLBINDBUFFERPROC, glBindBuffer);
+DEF_GL_FUNC(PFNGLBUFFERDATAPROC, glBufferData);
+DEF_GL_FUNC(PFNGLBUFFERSUBDATAPROC, glBufferSubData);
+DEF_GL_FUNC(PFNGLDELETEBUFFERSPROC, glDeleteBuffers);
+DEF_GL_FUNC(PFNGLENABLEVERTEXATTRIBARRAYPROC, glEnableVertexAttribArray);
+DEF_GL_FUNC(PFNGLDISABLEVERTEXATTRIBARRAYPROC, glDisableVertexAttribArray);
+DEF_GL_FUNC(PFNGLVERTEXATTRIBPOINTERPROC, glVertexAttribPointer);
+DEF_GL_FUNC(PFNGLCREATESHADERPROC, glCreateShader);
+DEF_GL_FUNC(PFNGLSHADERSOURCEPROC, glShaderSource);
+DEF_GL_FUNC(PFNGLCOMPILESHADERPROC, glCompileShader);
+DEF_GL_FUNC(PFNGLGETSHADERIVPROC, glGetShaderiv);
+DEF_GL_FUNC(PFNGLGETSHADERINFOLOGPROC, glGetShaderInfoLog);
+DEF_GL_FUNC(PFNGLDELETESHADERPROC, glDeleteShader);
+DEF_GL_FUNC(PFNGLCREATEPROGRAMPROC, glCreateProgram);
+DEF_GL_FUNC(PFNGLATTACHSHADERPROC, glAttachShader);
+DEF_GL_FUNC(PFNGLLINKPROGRAMPROC, glLinkProgram);
+DEF_GL_FUNC(PFNGLGETPROGRAMIVPROC, glGetProgramiv);
+DEF_GL_FUNC(PFNGLGETPROGRAMINFOLOGPROC, glGetProgramInfoLog);
+DEF_GL_FUNC(PFNGLUSEPROGRAMPROC, glUseProgram);
+DEF_GL_FUNC(PFNGLDELETEPROGRAMPROC, glDeleteProgram);
+DEF_GL_FUNC(PFNGLGETUNIFORMLOCATIONPROC, glGetUniformLocation);
+DEF_GL_FUNC(PFNGLUNIFORM1FPROC, glUniform1f);
+DEF_GL_FUNC(PFNGLUNIFORM2FPROC, glUniform2f);
+DEF_GL_FUNC(PFNGLUNIFORM3FPROC, glUniform3f);
+DEF_GL_FUNC(PFNGLUNIFORM4FPROC, glUniform4f);
+DEF_GL_FUNC(PFNGLUNIFORM1IPROC, glUniform1i);
+DEF_GL_FUNC(PFNGLUNIFORMMATRIX4FVPROC, glUniformMatrix4fv);
+DEF_GL_FUNC(PFNGLACTIVETEXTUREPROC, glActiveTexture);
+DEF_GL_FUNC(PFNGLGENERATEMIPMAPPROC, glGenerateMipmap);
+DEF_GL_FUNC(PFNWGLCREATECONTEXTATTRIBSARBPROC, wglCreateContextAttribsARB);
 namespace GLLoader {
-static HMODULE hGL = nullptr;
-static PFN_wglCreateContext pfn_wglCreateContext = nullptr;
-static PFN_wglMakeCurrent pfn_wglMakeCurrent = nullptr;
-static PFN_wglDeleteContext pfn_wglDeleteContext = nullptr;
-static bool g_loaded = false;
-bool load() {
-    if (g_loaded) return hGL != nullptr;
-    g_loaded = true;
-    char sysDir[MAX_PATH] = {};
-    GetSystemDirectoryA(sysDir, MAX_PATH);
-    LumeString glPath = LumeString(sysDir) + "\\opengl32.dll";
-    hGL = LoadLibraryA(glPath.c_str());
-    if (!hGL) return false;
-    pfn_wglCreateContext = (PFN_wglCreateContext)GetProcAddress(hGL, "wglCreateContext");
-    pfn_wglMakeCurrent = (PFN_wglMakeCurrent)GetProcAddress(hGL, "wglMakeCurrent");
-    pfn_wglDeleteContext = (PFN_wglDeleteContext)GetProcAddress(hGL, "wglDeleteContext");
-    if (!pfn_wglCreateContext || !pfn_wglMakeCurrent || !pfn_wglDeleteContext) {
-        FreeLibrary(hGL);
-        hGL = nullptr;
-        return false;
+    static HMODULE hGL = nullptr;
+    static bool g_loaded = false;
+    bool load() {
+        if (g_loaded) return true;
+        char sysDir[MAX_PATH] = {};
+        GetSystemDirectoryA(sysDir, MAX_PATH);
+        LumeString glPath = LumeString(sysDir) + "\\opengl32.dll";
+        hGL = LoadLibraryA(glPath.c_str());
+        if (!hGL) return false;
+        HWND dummyWnd = CreateWindowA("STATIC", "", WS_POPUP, 0, 0, 1, 1, nullptr, nullptr, nullptr, nullptr);
+        HDC dummyDC = GetDC(dummyWnd);
+        PIXELFORMATDESCRIPTOR pfd = { sizeof(pfd), 1, PFD_DRAW_TO_WINDOW | PFD_SUPPORT_OPENGL | PFD_DOUBLEBUFFER, PFD_TYPE_RGBA, 32 };
+        int pf = ChoosePixelFormat(dummyDC, &pfd);
+        SetPixelFormat(dummyDC, pf, &pfd);
+        HGLRC dummyRC = wglCreateContext(dummyDC);
+        wglMakeCurrent(dummyDC, dummyRC);
+        #define LOAD_PROC(type, name) name = (type)wglGetProcAddress(#name)
+        LOAD_PROC(PFNWGLCREATECONTEXTATTRIBSARBPROC, wglCreateContextAttribsARB);
+        LOAD_PROC(PFNGLGENVERTEXARRAYSPROC, glGenVertexArrays);
+        LOAD_PROC(PFNGLBINDVERTEXARRAYPROC, glBindVertexArray);
+        LOAD_PROC(PFNGLDELETEVERTEXARRAYSPROC, glDeleteVertexArrays);
+        LOAD_PROC(PFNGLGENBUFFERSPROC, glGenBuffers);
+        LOAD_PROC(PFNGLBINDBUFFERPROC, glBindBuffer);
+        LOAD_PROC(PFNGLBUFFERDATAPROC, glBufferData);
+        LOAD_PROC(PFNGLBUFFERSUBDATAPROC, glBufferSubData);
+        LOAD_PROC(PFNGLDELETEBUFFERSPROC, glDeleteBuffers);
+        LOAD_PROC(PFNGLENABLEVERTEXATTRIBARRAYPROC, glEnableVertexAttribArray);
+        LOAD_PROC(PFNGLDISABLEVERTEXATTRIBARRAYPROC, glDisableVertexAttribArray);
+        LOAD_PROC(PFNGLVERTEXATTRIBPOINTERPROC, glVertexAttribPointer);
+        LOAD_PROC(PFNGLCREATESHADERPROC, glCreateShader);
+        LOAD_PROC(PFNGLSHADERSOURCEPROC, glShaderSource);
+        LOAD_PROC(PFNGLCOMPILESHADERPROC, glCompileShader);
+        LOAD_PROC(PFNGLGETSHADERIVPROC, glGetShaderiv);
+        LOAD_PROC(PFNGLGETSHADERINFOLOGPROC, glGetShaderInfoLog);
+        LOAD_PROC(PFNGLDELETESHADERPROC, glDeleteShader);
+        LOAD_PROC(PFNGLCREATEPROGRAMPROC, glCreateProgram);
+        LOAD_PROC(PFNGLATTACHSHADERPROC, glAttachShader);
+        LOAD_PROC(PFNGLLINKPROGRAMPROC, glLinkProgram);
+        LOAD_PROC(PFNGLGETPROGRAMIVPROC, glGetProgramiv);
+        LOAD_PROC(PFNGLGETPROGRAMINFOLOGPROC, glGetProgramInfoLog);
+        LOAD_PROC(PFNGLUSEPROGRAMPROC, glUseProgram);
+        LOAD_PROC(PFNGLDELETEPROGRAMPROC, glDeleteProgram);
+        LOAD_PROC(PFNGLGETUNIFORMLOCATIONPROC, glGetUniformLocation);
+        LOAD_PROC(PFNGLUNIFORM1FPROC, glUniform1f);
+        LOAD_PROC(PFNGLUNIFORM2FPROC, glUniform2f);
+        LOAD_PROC(PFNGLUNIFORM3FPROC, glUniform3f);
+        LOAD_PROC(PFNGLUNIFORM4FPROC, glUniform4f);
+        LOAD_PROC(PFNGLUNIFORM1IPROC, glUniform1i);
+        LOAD_PROC(PFNGLUNIFORMMATRIX4FVPROC, glUniformMatrix4fv);
+        LOAD_PROC(PFNGLACTIVETEXTUREPROC, glActiveTexture);
+        LOAD_PROC(PFNGLGENERATEMIPMAPPROC, glGenerateMipmap);
+        wglMakeCurrent(nullptr, nullptr);
+        wglDeleteContext(dummyRC);
+        ReleaseDC(dummyWnd, dummyDC);
+        DestroyWindow(dummyWnd);
+        g_loaded = (glCreateProgram != nullptr && wglCreateContextAttribsARB != nullptr);
+        return g_loaded;
     }
-    return true;
-}
-void unload() {
-    if (hGL) {
-        FreeLibrary(hGL);
-        hGL = nullptr;
+    void unload() {
+        if (hGL) {
+            FreeLibrary(hGL);
+            hGL = nullptr;
+        }
+        g_loaded = false;
     }
-    g_loaded = false;
-}
-bool available() {return hGL != nullptr;}
+    bool available() {
+        return g_loaded;
+    }
 }
 void navigateTo(const LumeString& url);
 void invalidateContent();
@@ -1222,41 +1344,6 @@ HWND g_tabNextBtn = nullptr;
 #define ID_TAB_PREV 4101
 #define ID_TAB_NEXT 4102
 extern HWND g_tabControl;
-void repositionNewTabBtn() {
-    if (!g_tabControl || !g_newTabBtn) return;
-    HWND hParent = GetParent(g_tabControl);
-    if (!hParent) return;
-    RECT cr;
-    GetClientRect(hParent, &cr);
-    int w = cr.right;
-    int btnW = 24, btnH = 22;
-    const int targetTabW = 140;
-    int updownW = GetSystemMetrics(SM_CXVSCROLL) * 2;
-    if (updownW < 34) updownW = 34;
-    int totalNeeded = g_tabCount * targetTabW;
-    int maxSpaceForTabs = w - btnW - 8;
-    int tabW = targetTabW;
-    int finalTabCtrlW = maxSpaceForTabs;
-    int xBtn = w - btnW - 2;
-    if (totalNeeded <= maxSpaceForTabs) {
-        tabW = targetTabW;
-        SendMessageW(g_tabControl, TCM_SETITEMSIZE, 0, MAKELPARAM(tabW, 25));
-        xBtn = (g_tabCount * tabW) + 4;
-        MoveWindow(g_tabControl, 0, 0, maxSpaceForTabs, 28, TRUE);
-    }
-    else {
-        int availForTabs = maxSpaceForTabs - updownW;
-        if (availForTabs < targetTabW) availForTabs = targetTabW;
-        int numVisible = availForTabs / targetTabW;
-        if (numVisible < 1) numVisible = 1;
-        tabW = availForTabs / numVisible;
-        SendMessageW(g_tabControl, TCM_SETITEMSIZE, 0, MAKELPARAM(tabW, 25));
-        finalTabCtrlW = (numVisible * tabW) + updownW;
-        MoveWindow(g_tabControl, 0, 0, finalTabCtrlW, 28, TRUE);
-        xBtn = finalTabCtrlW + 2;
-    }
-    SetWindowPos(g_newTabBtn, HWND_TOP, xBtn, 3, btnW, btnH, SWP_SHOWWINDOW);
-}
 void ensureBackbuffer(HDC hdc, int w, int h) {
     if (g_backDC && g_backW == w && g_backH == h) return;
     if (g_backDC) {
@@ -1529,6 +1616,23 @@ struct Props {
             if (fast_streq(pair.first.c_str(), k)) {
                 const char* s = pair.second.c_str();
                 return (s[0] == 't' || s[0] == '1');
+            }
+        }
+        return def;
+    }
+    int getDimension(const char* k, int parentSize, int def = 0) const {
+        for (const auto& pair : d) {
+            if (fast_streq(pair.first.c_str(), k)) {
+                const char* s = pair.second.c_str();
+                int val = 0;
+                while (*s >= '0' && *s <= '9') {
+                    val = val * 10 + (*s - '0');
+                    s++;
+                }
+                if (*s == '%') {
+                    return (parentSize * val) / 100;
+                }
+                return val;
             }
         }
         return def;
@@ -1806,6 +1910,218 @@ public:
         return doc;
     }
 };
+}
+#define IDM_THEME_START 5000
+
+struct LumeTheme {
+    LumeString name = "Modern Dark";
+    LumeString font_name = "Segoe UI";
+    int font_size = 13;
+    int tab_radius = 8;
+    int btn_radius = 6;
+    int tab_width = 150;
+
+    // Tabs
+    HTP::Color tab_bar_bg = { 9, 9, 11 };
+    HTP::Color tab_active_bg = { 24, 24, 27 };
+    HTP::Color tab_active_text = { 56, 189, 248 };
+    HTP::Color tab_active_border = { 56, 189, 248 }; // Неоновая рамка для активной!
+    HTP::Color tab_inactive_bg = { 15, 15, 20 };
+    HTP::Color tab_inactive_text = { 113, 113, 122 };
+    HTP::Color tab_hover_bg = { 39, 39, 42 };
+    HTP::Color tab_border = { 39, 39, 42 };
+    HTP::Color tab_bottom_line = { 24, 24, 27 };
+    HTP::Color tab_close_hover = { 255, 255, 255 };
+    HTP::Color tab_close_bg_hover = { 239, 68, 68 };
+
+    // Toolbar & buttons
+    HTP::Color toolbar_bg = { 18, 18, 24 };
+    HTP::Color btn_bg = { 31, 31, 46 };
+    HTP::Color btn_text = { 250, 250, 250 };
+    HTP::Color btn_border = { 45, 45, 60 };
+    HTP::Color btn_hover = { 59, 130, 246 };
+
+    // Address bar
+    HTP::Color address_bg = { 9, 9, 11 };
+    HTP::Color address_text = { 250, 250, 250 };
+    HTP::Color address_border = { 45, 45, 60 };
+
+    // Status bar
+    HTP::Color status_bg = { 9, 9, 11 };
+    HTP::Color status_text = { 161, 161, 170 };
+
+    HBRUSH hBrAddress = nullptr;
+    HBRUSH hBrStatus = nullptr;
+    HBRUSH hBrToolbar = nullptr;
+
+    void updateBrushes() {
+        if (hBrAddress) DeleteObject(hBrAddress);
+        if (hBrStatus)  DeleteObject(hBrStatus);
+        if (hBrToolbar) DeleteObject(hBrToolbar);
+        hBrAddress = CreateSolidBrush(address_bg.cr());
+        hBrStatus = CreateSolidBrush(status_bg.cr());
+        hBrToolbar = CreateSolidBrush(toolbar_bg.cr());
+    }
+};
+
+namespace Themes {
+    static LumeTheme g_theme;
+    static LumeVector<LumeString> g_themeFiles;
+    static LumeVector<LumeString> g_themeNames;
+    static int g_curThemeIdx = 0;
+    LumeString getThemesDir() {
+        char ep[MAX_PATH] = {};
+        GetModuleFileNameA(nullptr, ep, MAX_PATH);
+        LumeString dir = ep;
+        auto ls = dir.find_last_of("\\/");
+        dir = (ls != LumeString::npos) ? dir.substr(0, ls + 1) : ".\\";
+        LumeString td = dir + "themes\\";
+        CreateDirectoryA(td.c_str(), nullptr);
+        return td;
+    }
+    void createDefaultThemesIfEmpty() {
+        LumeString dir = getThemesDir();
+        LumeString darkPath = dir + "modern_dark.xtheme";
+        LumeString winPath = dir + "win95.xtheme";
+        if (GetFileAttributesA(darkPath.c_str()) == INVALID_FILE_ATTRIBUTES) {
+            const char* darkContent =
+                "[theme]\nname = \"Modern Dark\"\nfont_name = \"Segoe UI\"\nfont_size = 13\n"
+                "tab_radius = 8\nbtn_radius = 6\ntab_width = 160\n\n"
+                "[tabs]\nbar_bg = #09090b\nactive_bg = #18181b\nactive_text = #38bdf8\nactive_border = #00f0ff\n"
+                "inactive_bg = #0f0f14\ninactive_text = #71717a\nhover_bg = #27272a\nborder = #27272a\n"
+                "bottom_line = #18181b\nclose_hover = #ffffff\nclose_bg_hover = #ef4444\n\n"
+                "[toolbar]\nbg = #121218\nbtn_bg = #1f1f2e\nbtn_text = #fafafa\nbtn_border = #2d2d3c\nbtn_hover = #2f2f4a\n\n"
+                "[address]\nbg = #09090b\ntext = #fafafa\nborder = #2d2d3c\n\n"
+                "[status]\nbg = #09090b\ntext = #a1a1aa\n";
+            HANDLE h = CreateFileA(darkPath.c_str(), GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, 0, NULL);
+            if (h != INVALID_HANDLE_VALUE) { DWORD w; WriteFile(h, darkContent, lstrlenA(darkContent), &w, NULL); CloseHandle(h); }
+        }
+        if (GetFileAttributesA(winPath.c_str()) == INVALID_FILE_ATTRIBUTES) {
+            const char* winContent =
+                "[theme]\nname = \"Windows 95 Classic\"\nfont_name = \"MS Sans Serif\"\nfont_size = 11\n"
+                "tab_radius = 0\nbtn_radius = 0\ntab_width = 130\n\n"
+                "[tabs]\nbar_bg = #ffffff\nactive_bg = #c0c0c0\nactive_text = #000000\nactive_border = #808080\n"
+                "inactive_bg = #d4d0c8\ninactive_text = #404040\nhover_bg = #e0e0e0\nborder = #808080\n"
+                "bottom_line = #c0c0c0\nclose_hover = #ffffff\nclose_bg_hover = #800000\n\n"
+                "[toolbar]\nbg = #c0c0c0\nbtn_bg = #c0c0c0\nbtn_text = #000000\nbtn_border = #808080\nbtn_hover = #d4d0c8\n\n"
+                "[address]\nbg = #ffffff\ntext = #000000\nborder = #808080\n\n"
+                "[status]\nbg = #c0c0c0\ntext = #000000\n";
+            HANDLE h = CreateFileA(winPath.c_str(), GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, 0, NULL);
+            if (h != INVALID_HANDLE_VALUE) { DWORD w; WriteFile(h, winContent, lstrlenA(winContent), &w, NULL); CloseHandle(h); }
+        }
+    }
+    bool loadThemeFile(const LumeString& fullPath, LumeTheme& outTheme) {
+        LumeString src = fastReadFile(fullPath);
+        if (src.empty()) return false;
+        auto getVal = [](const LumeString& line) -> LumeString {
+            size_t eq = line.find('=');
+            if (eq == LumeString::npos) return "";
+            LumeString v = line.substr(eq + 1);
+            while (!v.empty() && (v.front() == ' ' || v.front() == '\t' || v.front() == '"')) v.erase(v.begin());
+            while (!v.empty() && (v.back() == ' ' || v.back() == '\t' || v.back() == '\r' || v.back() == '"')) v.pop_back();
+            return v;
+            };
+        auto getKey = [](const LumeString& line) -> LumeString {
+            size_t eq = line.find('=');
+            if (eq == LumeString::npos) return "";
+            LumeString k = line.substr(0, eq);
+            while (!k.empty() && (k.front() == ' ' || k.front() == '\t')) k.erase(k.begin());
+            while (!k.empty() && (k.back() == ' ' || k.back() == '\t')) k.pop_back();
+            return k;
+            };
+        size_t pos = 0;
+        LumeString sec = "";
+        while (pos < src.length()) {
+            size_t next = src.find('\n', pos);
+            LumeString line = (next == LumeString::npos) ? src.substr(pos) : src.substr(pos, next - pos);
+            pos = (next == LumeString::npos) ? src.length() : next + 1;
+            while (!line.empty() && (line.front() == ' ' || line.front() == '\t')) line.erase(line.begin());
+            while (!line.empty() && (line.back() == ' ' || line.back() == '\t' || line.back() == '\r')) line.pop_back();
+            if (line.empty() || line[0] == ';' || line.find("//") == 0) continue;
+            if (line.front() == '[' && line.back() == ']') {
+                sec = line.substr(1, line.length() - 2);
+                continue;
+            }
+            LumeString k = getKey(line);
+            LumeString v = getVal(line);
+            if (sec == "theme") {
+                if (k == "name") outTheme.name = v;
+                else if (k == "font_name") outTheme.font_name = v;
+                else if (k == "font_size") outTheme.font_size = StrToIntA(v.c_str());
+                else if (k == "tab_radius") outTheme.tab_radius = StrToIntA(v.c_str());
+                else if (k == "btn_radius") outTheme.btn_radius = StrToIntA(v.c_str());
+                else if (k == "tab_width") outTheme.tab_width = StrToIntA(v.c_str());
+            }
+            else if (sec == "tabs") {
+                if (k == "bar_bg") outTheme.tab_bar_bg = HTP::Color::fromHex(v.c_str());
+                else if (k == "active_bg") outTheme.tab_active_bg = HTP::Color::fromHex(v.c_str());
+                else if (k == "active_text") outTheme.tab_active_text = HTP::Color::fromHex(v.c_str());
+                else if (k == "active_border") outTheme.tab_active_border = HTP::Color::fromHex(v.c_str());
+                else if (k == "inactive_bg") outTheme.tab_inactive_bg = HTP::Color::fromHex(v.c_str());
+                else if (k == "inactive_text") outTheme.tab_inactive_text = HTP::Color::fromHex(v.c_str());
+                else if (k == "hover_bg") outTheme.tab_hover_bg = HTP::Color::fromHex(v.c_str());
+                else if (k == "border") outTheme.tab_border = HTP::Color::fromHex(v.c_str());
+                else if (k == "bottom_line") outTheme.tab_bottom_line = HTP::Color::fromHex(v.c_str());
+                else if (k == "close_hover") outTheme.tab_close_hover = HTP::Color::fromHex(v.c_str());
+                else if (k == "close_bg_hover") outTheme.tab_close_bg_hover = HTP::Color::fromHex(v.c_str());
+            }
+            else if (sec == "toolbar") {
+                if (k == "bg") outTheme.toolbar_bg = HTP::Color::fromHex(v.c_str());
+                else if (k == "btn_bg") outTheme.btn_bg = HTP::Color::fromHex(v.c_str());
+                else if (k == "btn_text") outTheme.btn_text = HTP::Color::fromHex(v.c_str());
+                else if (k == "btn_border") outTheme.btn_border = HTP::Color::fromHex(v.c_str());
+                else if (k == "btn_hover") outTheme.btn_hover = HTP::Color::fromHex(v.c_str());
+            }
+            else if (sec == "address") {
+                if (k == "bg") outTheme.address_bg = HTP::Color::fromHex(v.c_str());
+                else if (k == "text") outTheme.address_text = HTP::Color::fromHex(v.c_str());
+                else if (k == "border") outTheme.address_border = HTP::Color::fromHex(v.c_str());
+            }
+            else if (sec == "status") {
+                if (k == "bg") outTheme.status_bg = HTP::Color::fromHex(v.c_str());
+                else if (k == "text") outTheme.status_text = HTP::Color::fromHex(v.c_str());
+            }
+        }
+        outTheme.updateBrushes();
+        return true;
+    }
+    void scanThemes() {
+        createDefaultThemesIfEmpty();
+        g_themeFiles.clear();
+        g_themeNames.clear();
+        LumeString dir = getThemesDir();
+        WIN32_FIND_DATAA fd = {};
+        HANDLE h = FindFirstFileA((dir + "*.xtheme").c_str(), &fd);
+        if (h == INVALID_HANDLE_VALUE) return;
+        do {
+            if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
+                LumeString full = dir + fd.cFileName;
+                LumeTheme tmp;
+                tmp.name = fd.cFileName;
+                loadThemeFile(full, tmp);
+                g_themeFiles.push_back(full);
+                g_themeNames.push_back(tmp.name);
+            }
+        } while (FindNextFileA(h, &fd));
+        FindClose(h);
+    }
+    void applyTheme(int idx) {
+        if (idx < 0 || idx >= (int)g_themeFiles.size()) return;
+        g_curThemeIdx = idx;
+        loadThemeFile(g_themeFiles[idx], g_theme);
+        if (g_mainWnd) {
+            RECT cr; GetClientRect(g_mainWnd, &cr);
+            SendMessage(g_mainWnd, WM_SIZE, 0, MAKELPARAM(cr.right, cr.bottom));
+            RedrawWindow(g_mainWnd, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW);
+        }
+    }
+    void init() {
+        g_theme.updateBrushes();
+        scanThemes();
+        if (!g_themeFiles.empty()) {
+            applyTheme(0);
+        }
+    }
 }
 namespace Net {
     struct URL {
@@ -2903,7 +3219,7 @@ namespace GLCanvas {
         }
         case WM_MOUSEMOVE: {
             if (g_mouseCaptured && g_mainWnd) {
-                POINT pt = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
+                POINT pt = {GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
                 ClientToScreen(hwnd, &pt);
                 ScreenToClient(g_mainWnd, &pt);
                 SendMessage(g_mainWnd, WM_MOUSEMOVE, wp, MAKELPARAM(pt.x, pt.y));
@@ -2960,37 +3276,39 @@ namespace GLCanvas {
         v->id = id;
         v->w = w;
         v->h = h;
-        v->hwnd = CreateWindowExW(
-            0,
-            kClassName,
-            L"",
-            WS_CHILD | WS_CLIPSIBLINGS | WS_CLIPCHILDREN | WS_VISIBLE,
-            0, 0, w, h,
-            g_mainWnd,
-            nullptr,
-            g_hInst,
-            nullptr
-        );
+        v->hwnd = CreateWindowExW(0, kClassName, L"", WS_CHILD | WS_CLIPSIBLINGS | WS_CLIPCHILDREN | WS_VISIBLE, 0, TOOLBAR_H, w, h, g_mainWnd, nullptr, g_hInst, nullptr);
         if (!v->hwnd) return nullptr;
         v->hdc = GetDC(v->hwnd);
-        if (!v->hdc) {
+        if (!v->hdc || !setupPixelFormat(v->hdc)) {
+            if (v->hdc) ReleaseDC(v->hwnd, v->hdc);
             DestroyWindow(v->hwnd);
-            v->hwnd = nullptr;
             return nullptr;
         }
-        if (!setupPixelFormat(v->hdc)) {
-            ReleaseDC(v->hwnd, v->hdc);
-            DestroyWindow(v->hwnd);
-            v->hdc = nullptr;
-            v->hwnd = nullptr;
-            return nullptr;
+        HGLRC tempRC = wglCreateContext(v->hdc);
+        wglMakeCurrent(v->hdc, tempRC);
+        if (wglCreateContextAttribsARB) {
+            int attribs43[] = {
+                WGL_CONTEXT_MAJOR_VERSION_ARB, 4,
+                WGL_CONTEXT_MINOR_VERSION_ARB, 3,
+                WGL_CONTEXT_PROFILE_MASK_ARB, WGL_CONTEXT_CORE_PROFILE_BIT_ARB,
+                0
+            };
+            v->hglrc = wglCreateContextAttribsARB(v->hdc, nullptr, attribs43);
+            if (!v->hglrc) {
+                int attribs33[] = {
+                    WGL_CONTEXT_MAJOR_VERSION_ARB, 3,
+                    WGL_CONTEXT_MINOR_VERSION_ARB, 3,
+                    WGL_CONTEXT_PROFILE_MASK_ARB, WGL_CONTEXT_CORE_PROFILE_BIT_ARB,
+                    0
+                };
+                v->hglrc = wglCreateContextAttribsARB(v->hdc, nullptr, attribs33);
+            }
         }
-        v->hglrc = wglCreateContext(v->hdc);
+        wglMakeCurrent(nullptr, nullptr);
+        wglDeleteContext(tempRC);
         if (!v->hglrc) {
             ReleaseDC(v->hwnd, v->hdc);
             DestroyWindow(v->hwnd);
-            v->hdc = nullptr;
-            v->hwnd = nullptr;
             return nullptr;
         }
         v->valid = true;
@@ -3455,11 +3773,98 @@ extern HTP::Doc g_docs[];
 #ifndef g_doc
 #define g_doc g_docs[g_tabIdx]
 #endif
-namespace GLBuffers {
-    LumeMap<int, LumeVector<float>> buffers_arr[MAX_LUME_TABS];
-    #define buffers buffers_arr[g_tabIdx]
-    int nextId = 1;
-    void clear() { buffers.clear(); }
+struct Mat4 {
+    float m[16];
+
+    static Mat4 identity() {
+        Mat4 r = {};
+        r.m[0] = 1.0f; r.m[5] = 1.0f; r.m[10] = 1.0f; r.m[15] = 1.0f;
+        return r;
+    }
+    static Mat4 perspective(float fovDeg, float aspect, float zNear, float zFar) {
+        Mat4 r = {};
+        float rad = fovDeg * 3.1415926535f / 180.0f;
+        float tanHalfFov = tanf(rad * 0.5f);
+        r.m[0] = 1.0f / (aspect * tanHalfFov);
+        r.m[5] = 1.0f / (tanHalfFov);
+        r.m[10] = -(zFar + zNear) / (zFar - zNear);
+        r.m[11] = -1.0f;
+        r.m[14] = -(2.0f * zFar * zNear) / (zFar - zNear);
+        return r;
+    }
+    static Mat4 lookAt(float eyeX, float eyeY, float eyeZ, float targetX, float targetY, float targetZ, float upX, float upY, float upZ) {
+        float fx = targetX - eyeX, fy = targetY - eyeY, fz = targetZ - eyeZ;
+        float rlf = 1.0f / sqrtf(fx * fx + fy * fy + fz * fz);
+        fx *= rlf; fy *= rlf; fz *= rlf;
+        float rx = fy * upZ - fz * upY, ry = fz * upX - fx * upZ, rz = fx * upY - fy * upX;
+        float rlr = 1.0f / sqrtf(rx * rx + ry * ry + rz * rz);
+        rx *= rlr; ry *= rlr; rz *= rlr;
+        float ux = ry * fz - rz * fy, uy = rz * fx - rx * fz, uz = rx * fy - ry * fx;
+        Mat4 r = identity();
+        r.m[0] = rx;  r.m[4] = ry;  r.m[8] = rz;
+        r.m[1] = ux;  r.m[5] = uy;  r.m[9] = uz;
+        r.m[2] = -fx; r.m[6] = -fy; r.m[10] = -fz;
+        r.m[12] = -(rx * eyeX + ry * eyeY + rz * eyeZ);
+        r.m[13] = -(ux * eyeX + uy * eyeY + uz * eyeZ);
+        r.m[14] = (fx * eyeX + fy * eyeY + fz * eyeZ);
+        return r;
+    }
+    static Mat4 multiply(const Mat4& a, const Mat4& b) {
+        Mat4 r = {};
+        for (int c = 0; c < 4; c++) {
+            for (int row = 0; row < 4; row++) {
+                r.m[c * 4 + row] =
+                    a.m[0 * 4 + row] * b.m[c * 4 + 0] +
+                    a.m[1 * 4 + row] * b.m[c * 4 + 1] +
+                    a.m[2 * 4 + row] * b.m[c * 4 + 2] +
+                    a.m[3 * 4 + row] * b.m[c * 4 + 3];
+            }
+        }
+        return r;
+    }
+    static Mat4 rotateY(float deg) {
+        Mat4 r = identity();
+        float rad = deg * 3.1415926535f / 180.0f;
+        float c = cosf(rad), s = sinf(rad);
+        r.m[0] = c;  r.m[8] = s;
+        r.m[2] = -s; r.m[10] = c;
+        return r;
+    }
+    static Mat4 rotateX(float deg) {
+        Mat4 r = identity();
+        float rad = deg * 3.1415926535f / 180.0f;
+        float c = cosf(rad), s = sinf(rad);
+        r.m[5] = c;  r.m[9] = -s;
+        r.m[6] = s;  r.m[10] = c;
+        return r;
+    }
+};
+namespace ModernGL {
+    struct Mesh {
+        GLuint vao = 0;
+        GLuint vbo = 0;
+        GLuint ebo = 0;
+        int indexCount = 0;
+        int vertexCount = 0;
+    };
+    LumeMap<int, Mesh> g_meshes_arr[MAX_LUME_TABS];
+    LumeMap<int, GLuint> g_programs_arr[MAX_LUME_TABS];
+    #define g_meshes g_meshes_arr[g_tabIdx]
+    #define g_programs g_programs_arr[g_tabIdx]
+    static int g_nextMeshId = 1;
+    static int g_nextProgramId = 1;
+    void clear() {
+        for (auto& kv : g_meshes) {
+            if (kv.second.vao) glDeleteVertexArrays(1, &kv.second.vao);
+            if (kv.second.vbo) glDeleteBuffers(1, &kv.second.vbo);
+            if (kv.second.ebo) glDeleteBuffers(1, &kv.second.ebo);
+        }
+        g_meshes.clear();
+        for (auto& kv : g_programs) {
+            if (kv.second) glDeleteProgram(kv.second);
+        }
+        g_programs.clear();
+    }
 }
 namespace GLFont {
     struct Key {
@@ -3517,71 +3922,6 @@ namespace GLModelCache {
     void clear() {
         for (GLuint id : lists) glDeleteLists(id, 1);
         lists.clear();
-    }
-}
-namespace GLBatcher {
-    static LumeVector<float> vertices;
-    static LumeVector<float> colors;
-    static LumeVector<float> texCoords;
-    static LumeVector<float> normals;
-    static GLenum currentMode = 0;
-    static float curR = 1, curG = 1, curB = 1, curA = 1;
-    static float curU = 0, curV = 0;
-    static float curNx = 0, curNy = 0, curNz = 1;
-    static bool useColor = false;
-    static bool useTex = false;
-    static bool useNormal = false;
-    void begin(GLenum mode) {
-        currentMode = mode;
-        vertices.clear();
-        colors.clear();
-        texCoords.clear();
-        normals.clear();
-    }
-    void color(float r, float g, float b, float a) {
-        curR = r; curG = g; curB = b; curA = a;
-        useColor = true;
-        glColor4f(r, g, b, a);
-    }
-    void texCoord(float u, float v) {
-        curU = u; curV = v;
-        useTex = true;
-        glTexCoord2f(u, v);
-    }
-    void normal(float x, float y, float z) {
-        curNx = x; curNy = y; curNz = z;
-        useNormal = true;
-        glNormal3f(x, y, z);
-    }
-    void vertex(float x, float y, float z) {
-        vertices.push_back(x); vertices.push_back(y); vertices.push_back(z);
-        colors.push_back(curR); colors.push_back(curG); colors.push_back(curB); colors.push_back(curA);
-        texCoords.push_back(curU); texCoords.push_back(curV);
-        normals.push_back(curNx); normals.push_back(curNy); normals.push_back(curNz);
-    }
-    void end() {
-        if (vertices.empty()) return;
-        glEnableClientState(GL_VERTEX_ARRAY);
-        glVertexPointer(3, GL_FLOAT, 0, vertices.data());
-        if (useColor) {
-            glEnableClientState(GL_COLOR_ARRAY);
-            glColorPointer(4, GL_FLOAT, 0, colors.data());
-        }
-        if (useTex) {
-            glEnableClientState(GL_TEXTURE_COORD_ARRAY);
-            glTexCoordPointer(2, GL_FLOAT, 0, texCoords.data());
-        }
-        if (useNormal) {
-            glEnableClientState(GL_NORMAL_ARRAY);
-            glNormalPointer(GL_FLOAT, 0, normals.data());
-        }
-
-        glDrawArrays(currentMode, 0, (GLsizei)(vertices.size() / 3));
-
-        glDisableClientState(GL_VERTEX_ARRAY);
-        if (useColor) glDisableClientState(GL_COLOR_ARRAY);
-        if (useTex) glDisableClientState(GL_TEXTURE_COORD_ARRAY);
-        if (useNormal) glDisableClientState(GL_NORMAL_ARRAY);
     }
 }
 namespace Bindings {
@@ -3915,6 +4255,20 @@ namespace Bindings {
 }
 static int g_timerN = 10000;
 namespace Script {
+    bool safeCall(lua_State* L, int nargs, int nresults, const char* contextName = "Lua Error") {
+        if (!L) return false;
+        if (lua_pcall(L, nargs, nresults, 0) != 0) {
+            const char* err = lua_tostring(L, -1);
+            if (!err) err = "Unknown Lua runtime error";
+            MessageBoxU(g_mainWnd, err, contextName, MB_OK | MB_ICONERROR);
+            OutputDebugStringA(err);
+            OutputDebugStringA("\n");
+
+            lua_pop(L, 1);
+            return false;
+        }
+        return true;
+    }
     LumeMap<int, int> g_timerRefs_arr[MAX_LUME_TABS];
     LumeMap<LumeString, int> g_canvasClickRefs_arr[MAX_LUME_TABS];
     int g_keyDownRef_arr[MAX_LUME_TABS];
@@ -3971,11 +4325,8 @@ static int l_on_click(lua_State* L) {
     Bindings::on_click(id, LumeAction([sid, ref]() {
         if (!g_L) return;
         lua_rawgeti(g_L, LUA_REGISTRYINDEX, ref);
-        if (lua_pcall(g_L, 0, 0, 0) != 0) {
-            OutputDebugStringA(lua_tostring(g_L, -1));
-            lua_pop(g_L, 1);
-        }
-        }));
+        Script::safeCall(g_L, 0, 0, "Click Event Error");
+    }));
     return 0;
 }
 static int l_on_right_click(lua_State* L) {
@@ -4133,61 +4484,6 @@ static int l_gl_viewport(lua_State* L) {
     glViewport((int)luaL_checkinteger(L, 1), (int)luaL_checkinteger(L, 2), (int)luaL_checkinteger(L, 3), (int)luaL_checkinteger(L, 4));
     return 0;
 }
-static int l_gl_color(lua_State* L) {
-    GLBatcher::color((float)luaL_checknumber(L, 1), (float)luaL_checknumber(L, 2), (float)luaL_checknumber(L, 3), (float)luaL_optnumber(L, 4, 1.0f));
-    return 0;
-}
-static int l_gl_begin_prim(lua_State* L) {
-    GLBatcher::begin((GLenum)luaL_checkinteger(L, 1));
-    return 0;
-}
-static int l_gl_end_prim(lua_State* L) {
-    (void)L;
-    GLBatcher::end();
-    return 0;
-}
-static int l_gl_vertex2f(lua_State* L) {
-    GLBatcher::vertex((float)luaL_checknumber(L, 1), (float)luaL_checknumber(L, 2), 0.0f);
-    return 0;
-}
-static int l_gl_vertex3f(lua_State* L) {
-    GLBatcher::vertex((float)luaL_checknumber(L, 1), (float)luaL_checknumber(L, 2), (float)luaL_checknumber(L, 3));
-    return 0;
-}
-static int l_gl_ortho(lua_State* L) {
-    glOrtho(luaL_checknumber(L, 1), luaL_checknumber(L, 2), luaL_checknumber(L, 3), luaL_checknumber(L, 4), luaL_checknumber(L, 5), luaL_checknumber(L, 6));
-    return 0;
-}
-static int l_gl_frustum(lua_State* L) {
-    glFrustum(luaL_checknumber(L, 1), luaL_checknumber(L, 2), luaL_checknumber(L, 3), luaL_checknumber(L, 4), luaL_checknumber(L, 5), luaL_checknumber(L, 6));
-    return 0;
-}
-static int l_gl_load_identity(lua_State* L) {
-    (void)L; glLoadIdentity(); return 0; }
-static int l_gl_matrix_mode(lua_State* L) {
-    glMatrixMode((GLenum)luaL_checkinteger(L, 1));
-    return 0;
-}
-static int l_gl_push_matrix(lua_State* L) {
-    (void)L; glPushMatrix();
-    return 0;
-}
-static int l_gl_pop_matrix(lua_State* L) {
-    (void)L; glPopMatrix();
-    return 0;
-}
-static int l_gl_translatef(lua_State* L) {
-    glTranslatef((float)luaL_checknumber(L, 1), (float)luaL_checknumber(L, 2), (float)luaL_checknumber(L, 3));
-    return 0;
-}
-static int l_gl_rotatef(lua_State* L) {
-    glRotatef((float)luaL_checknumber(L, 1), (float)luaL_checknumber(L, 2), (float)luaL_checknumber(L, 3), (float)luaL_checknumber(L, 4));
-    return 0;
-}
-static int l_gl_scalef(lua_State* L) {
-    glScalef((float)luaL_checknumber(L, 1), (float)luaL_checknumber(L, 2), (float)luaL_checknumber(L, 3));
-    return 0;
-}
 static int l_gl_enable(lua_State* L) {
     glEnable((GLenum)luaL_checkinteger(L, 1));
     return 0;
@@ -4196,18 +4492,254 @@ static int l_gl_disable(lua_State* L) {
     glDisable((GLenum)luaL_checkinteger(L, 1));
     return 0;
 }
-static int l_gl_line_width(lua_State* L) {
-    glLineWidth((float)luaL_checknumber(L, 1));
+static int l_gl_create_program(lua_State* L) {
+    const char* vs_src = luaL_checkstring(L, 1);
+    const char* fs_src = luaL_checkstring(L, 2);
+    auto compile = [](GLenum type, const char* src) -> GLuint {
+        GLuint s = glCreateShader(type);
+        glShaderSource(s, 1, &src, nullptr);
+        glCompileShader(s);
+        GLint ok = 0;
+        glGetShaderiv(s, GL_COMPILE_STATUS, &ok);
+        if (!ok) {
+            char log[1024] = {};
+            glGetShaderInfoLog(s, 1024, nullptr, log);
+            MessageBoxA(g_mainWnd, log, type == GL_VERTEX_SHADER ? "Vertex Shader Error" : "Fragment Shader Error", MB_OK | MB_ICONERROR);
+            glDeleteShader(s);
+            return 0;
+        }
+        return s;
+    };
+    GLuint vs = compile(GL_VERTEX_SHADER, vs_src);
+    GLuint fs = compile(GL_FRAGMENT_SHADER, fs_src);
+    if (!vs || !fs) {
+        if (vs) glDeleteShader(vs);
+        if (fs) glDeleteShader(fs);
+        lua_pushnil(L);
+        return 1;
+    }
+    GLuint prog = glCreateProgram();
+    glAttachShader(prog, vs);
+    glAttachShader(prog, fs);
+    glLinkProgram(prog);
+    GLint linked = 0;
+    glGetProgramiv(prog, GL_LINK_STATUS, &linked);
+    if (!linked) {
+        char log[1024] = {};
+        glGetProgramInfoLog(prog, 1024, nullptr, log);
+        MessageBoxA(g_mainWnd, log, "Shader Link Error", MB_OK | MB_ICONERROR);
+        glDeleteProgram(prog);
+        lua_pushnil(L);
+        return 1;
+    }
+    glDeleteShader(vs);
+    glDeleteShader(fs);
+    int id = ModernGL::g_nextProgramId++;
+    ModernGL::g_programs[id] = prog;
+    lua_pushinteger(L, id);
+    return 1;
+}
+static int l_gl_use_program(lua_State* L) {
+    int id = (int)luaL_checkinteger(L, 1);
+    auto it = ModernGL::g_programs.find(id);
+    if (it != ModernGL::g_programs.end()) {
+        glUseProgram(it->second);
+    }
+    else {
+        glUseProgram(0);
+    }
     return 0;
 }
-static int l_gl_point_size(lua_State* L) {
-    glPointSize((float)luaL_checknumber(L, 1));
+static int l_gl_create_mesh(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    int vCount = (int)luaL_len(L, 1);
+    LumeVector<float> verts;
+    verts.reserve(vCount);
+    for (int i = 1; i <= vCount; i++) {
+        lua_rawgeti(L, 1, i);
+        verts.push_back((float)lua_tonumber(L, -1));
+        lua_pop(L, 1);
+    }
+    int stride = (int)luaL_optinteger(L, 3, 3);
+    ModernGL::Mesh mesh = {};
+    mesh.vertexCount = (int)(verts.size() / stride);
+    glGenVertexArrays(1, &mesh.vao);
+    glGenBuffers(1, &mesh.vbo);
+    glBindVertexArray(mesh.vao);
+    glBindBuffer(GL_ARRAY_BUFFER, mesh.vbo);
+    glBufferData(GL_ARRAY_BUFFER, verts.size() * sizeof(float), verts.data(), GL_STATIC_DRAW);
+    if (stride == 3) {
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
+    }
+    else if (stride == 5) {
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)0);
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)(3 * sizeof(float)));
+    }
+    else if (stride == 6) {
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)0);
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)(3 * sizeof(float)));
+    }
+    else if (stride == 8) {
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void*)0);
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void*)(3 * sizeof(float)));
+        glEnableVertexAttribArray(2);
+        glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void*)(5 * sizeof(float)));
+    }
+    glBindVertexArray(0);
+    int id = ModernGL::g_nextMeshId++;
+    ModernGL::g_meshes[id] = mesh;
+    lua_pushinteger(L, id);
+    return 1;
+}
+static int l_gl_draw_mesh(lua_State* L) {
+    int id = (int)luaL_checkinteger(L, 1);
+    GLenum mode = (GLenum)luaL_optinteger(L, 2, GL_TRIANGLES);
+    auto it = ModernGL::g_meshes.find(id);
+    if (it != ModernGL::g_meshes.end()) {
+        glBindVertexArray(it->second.vao);
+        glDrawArrays(mode, 0, it->second.vertexCount);
+        glBindVertexArray(0);
+    }
     return 0;
 }
+static int l_gl_uniform_mat4(lua_State* L) {
+    int progId = (int)luaL_checkinteger(L, 1);
+    const char* name = luaL_checkstring(L, 2);
+    luaL_checktype(L, 3, LUA_TTABLE);
 
-static int l_gl_normal3f(lua_State* L) {
-    GLBatcher::normal((float)luaL_checknumber(L, 1), (float)luaL_checknumber(L, 2), (float)luaL_checknumber(L, 3));
+    float m[16];
+    for (int i = 1; i <= 16; i++) {
+        lua_rawgeti(L, 3, i);
+        m[i - 1] = (float)lua_tonumber(L, -1);
+        lua_pop(L, 1);
+    }
+    auto it = ModernGL::g_programs.find(progId);
+    if (it != ModernGL::g_programs.end()) {
+        GLint loc = glGetUniformLocation(it->second, name);
+        if (loc != -1) glUniformMatrix4fv(loc, 1, GL_FALSE, m);
+    }
     return 0;
+}
+static int l_gl_uniform_4f(lua_State* L) {
+    int progId = (int)luaL_checkinteger(L, 1);
+    const char* name = luaL_checkstring(L, 2);
+    float r = (float)luaL_checknumber(L, 3);
+    float g = (float)luaL_checknumber(L, 4);
+    float b = (float)luaL_checknumber(L, 5);
+    float a = (float)luaL_optnumber(L, 6, 1.0f);
+
+    auto it = ModernGL::g_programs.find(progId);
+    if (it != ModernGL::g_programs.end()) {
+        GLint loc = glGetUniformLocation(it->second, name);
+        if (loc != -1) glUniform4f(loc, r, g, b, a);
+    }
+    return 0;
+}
+static int l_mat4_transform(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    float x = (float)luaL_optnumber(L, 2, 0.0f);
+    float y = (float)luaL_optnumber(L, 3, 0.0f);
+    float z = (float)luaL_optnumber(L, 4, 0.0f);
+    float sx = (float)luaL_optnumber(L, 5, 1.0f);
+    float sy = (float)luaL_optnumber(L, 6, 1.0f);
+    float sz = (float)luaL_optnumber(L, 7, 1.0f);
+    float ry = (float)luaL_optnumber(L, 8, 0.0f);
+    float rx = (float)luaL_optnumber(L, 9, 0.0f);
+    Mat4 vp;
+    for (int i = 0; i < 16; i++) {
+        lua_rawgeti(L, 1, i + 1);
+        vp.m[i] = (float)lua_tonumber(L, -1);
+        lua_pop(L, 1);
+    }
+    Mat4 m = Mat4::identity();
+    m.m[0] = sx; m.m[5] = sy; m.m[10] = sz;
+    if (rx != 0.0f) m = Mat4::multiply(m, Mat4::rotateX(rx));
+    if (ry != 0.0f) m = Mat4::multiply(m, Mat4::rotateY(ry));
+    m.m[12] = x; m.m[13] = y; m.m[14] = z;
+    Mat4 mvp = Mat4::multiply(vp, m);
+    lua_createtable(L, 16, 0);
+    for (int i = 0; i < 16; i++) {
+        lua_pushnumber(L, mvp.m[i]);
+        lua_rawseti(L, -2, i + 1);
+    }
+    return 1;
+}
+static int l_mat4_ortho(lua_State* L) {
+    float l = (float)luaL_checknumber(L, 1);
+    float r = (float)luaL_checknumber(L, 2);
+    float b = (float)luaL_checknumber(L, 3);
+    float t = (float)luaL_checknumber(L, 4);
+    Mat4 m = {};
+    m.m[0] = 2.0f / (r - l);
+    m.m[5] = 2.0f / (t - b);
+    m.m[10] = -1.0f;
+    m.m[12] = -(r + l) / (r - l);
+    m.m[13] = -(t + b) / (t - b);
+    m.m[15] = 1.0f;
+    lua_createtable(L, 16, 0);
+    for (int i = 0; i < 16; i++) {
+        lua_pushnumber(L, m.m[i]);
+        lua_rawseti(L, -2, i + 1);
+    }
+    return 1;
+}
+static int l_mat4_perspective(lua_State* L) {
+    float fov = (float)luaL_checknumber(L, 1);
+    float aspect = (float)luaL_checknumber(L, 2);
+    float znear = (float)luaL_checknumber(L, 3);
+    float zfar = (float)luaL_checknumber(L, 4);
+    Mat4 p = Mat4::perspective(fov, aspect, znear, zfar);
+    lua_createtable(L, 16, 0);
+    for (int i = 0; i < 16; i++) {
+        lua_pushnumber(L, p.m[i]);
+        lua_rawseti(L, -2, i + 1);
+    }
+    return 1;
+}
+static int l_mat4_lookat(lua_State* L) {
+    Mat4 v = Mat4::lookAt(
+        (float)luaL_checknumber(L, 1), (float)luaL_checknumber(L, 2), (float)luaL_checknumber(L, 3),
+        (float)luaL_checknumber(L, 4), (float)luaL_checknumber(L, 5), (float)luaL_checknumber(L, 6),
+        (float)luaL_optnumber(L, 7, 0.0f), (float)luaL_optnumber(L, 8, 1.0f), (float)luaL_optnumber(L, 9, 0.0f)
+    );
+    lua_createtable(L, 16, 0);
+    for (int i = 0; i < 16; i++) {
+        lua_pushnumber(L, v.m[i]);
+        lua_rawseti(L, -2, i + 1);
+    }
+    return 1;
+}
+static int l_mat4_mul(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    luaL_checktype(L, 2, LUA_TTABLE);
+    Mat4 a, b;
+    for (int i = 0; i < 16; i++) {
+        lua_rawgeti(L, 1, i + 1); a.m[i] = (float)lua_tonumber(L, -1); lua_pop(L, 1);
+        lua_rawgeti(L, 2, i + 1); b.m[i] = (float)lua_tonumber(L, -1); lua_pop(L, 1);
+    }
+    Mat4 res = Mat4::multiply(a, b);
+    lua_createtable(L, 16, 0);
+    for (int i = 0; i < 16; i++) {
+        lua_pushnumber(L, res.m[i]);
+        lua_rawseti(L, -2, i + 1);
+    }
+    return 1;
+}
+static int l_mat4_rotate_y(lua_State* L) {
+    Mat4 r = Mat4::rotateY((float)luaL_checknumber(L, 1));
+    lua_createtable(L, 16, 0);
+    for (int i = 0; i < 16; i++) {
+        lua_pushnumber(L, r.m[i]);
+        lua_rawseti(L, -2, i + 1);
+    }
+    return 1;
 }
 static int l_glu_perspective(lua_State* L) {
     gluPerspective_impl(luaL_checknumber(L, 1), luaL_checknumber(L, 2), luaL_checknumber(L, 3), luaL_checknumber(L, 4));
@@ -4219,26 +4751,6 @@ static int l_glu_look_at(lua_State* L) {
         luaL_checknumber(L, 4), luaL_checknumber(L, 5), luaL_checknumber(L, 6),
         luaL_checknumber(L, 7), luaL_checknumber(L, 8), luaL_checknumber(L, 9)
     );
-    return 0;
-}
-static int l_gl_gen_list(lua_State* L) {
-    lua_pushinteger(L, (int)glGenLists(1));
-    return 1;
-}
-static int l_gl_new_list(lua_State* L) {
-    glNewList((GLuint)luaL_checkinteger(L, 1), GL_COMPILE);
-    return 0;
-}
-static int l_gl_end_list(lua_State* L) {
-    (void)L; glEndList();
-    return 0;
-}
-static int l_gl_call_list(lua_State* L) {
-    glCallList((GLuint)luaL_checkinteger(L, 1));
-    return 0;
-}
-static int l_gl_delete_list(lua_State* L) {
-    glDeleteLists((GLuint)luaL_checkinteger(L, 1), 1);
     return 0;
 }
 static int l_set_timer(lua_State* L) {
@@ -4317,13 +4829,25 @@ static int l_glu_sphere(lua_State* L) {
     return 0;
 }
 static int l_gl_bind_texture(lua_State* L) {
-    GLenum target = (GLenum)luaL_checkinteger(L, 1);
-    GLuint texID = (GLuint)luaL_checkinteger(L, 2);
-    glBindTexture(target, texID);
+    GLuint texID = (GLuint)luaL_checkinteger(L, 1);
+    int unit = (int)luaL_optinteger(L, 2, 0);
+    if (glActiveTexture) glActiveTexture(0x84C0 + unit);
+    glBindTexture(GL_TEXTURE_2D, texID);
+    return 0;
+}
+static int l_gl_uniform_1i(lua_State* L) {
+    int progId = (int)luaL_checkinteger(L, 1);
+    const char* name = luaL_checkstring(L, 2);
+    int val = (int)luaL_checkinteger(L, 3);
+    auto it = ModernGL::g_programs.find(progId);
+    if (it != ModernGL::g_programs.end()) {
+        GLint loc = glGetUniformLocation(it->second, name);
+        if (loc != -1) glUniform1i(loc, val);
+    }
     return 0;
 }
 static int l_gl_text_coord2f(lua_State* L) {
-    GLBatcher::texCoord((float)luaL_checknumber(L, 1), (float)luaL_checknumber(L, 2));
+    (void)L;
     return 0;
 }
 static int l_gl_load_texture(lua_State* L) {
@@ -4926,31 +5450,10 @@ static int l_gl_materialfv(lua_State* L) {
     return 0;
 }
 static int l_gl_create_buffer(lua_State* L) {
-    luaL_checktype(L, 1, LUA_TTABLE);
-    int len = (int)luaL_len(L, 1);
-    LumeVector<float> buf;
-    buf.reserve(len);
-    for (int i = 1; i <= len; ++i) {
-        lua_rawgeti(L, 1, i);
-        buf.push_back((float)lua_tonumber(L, -1));
-        lua_pop(L, 1);
-    }
-    int id = GLBuffers::nextId++;
-    GLBuffers::buffers[id] = static_cast<LumeVector<float>&&>(buf);
-    lua_pushinteger(L, id);
-    return 1;
+    return l_gl_create_mesh(L);
 }
 static int l_gl_draw_buffer(lua_State* L) {
-    int id = (int)luaL_checkinteger(L, 1);
-    int mode = (int)luaL_checkinteger(L, 2);
-    auto it = GLBuffers::buffers.find(id);
-    if (it != GLBuffers::buffers.end() && !it->second.empty()) {
-        glEnableClientState(GL_VERTEX_ARRAY);
-        glVertexPointer(3, GL_FLOAT, 0, it->second.data());
-        glDrawArrays(mode, 0, (int)(it->second.size() / 3));
-        glDisableClientState(GL_VERTEX_ARRAY);
-    }
-    return 0;
+    return l_gl_draw_mesh(L);
 }
 static int l_gl_fogf(lua_State* L) {
     glFogf((GLenum)luaL_checkinteger(L, 1), (GLfloat)luaL_checknumber(L, 2));
@@ -5292,6 +5795,11 @@ void registerGLConstants(lua_State* L) {
 void init() {
     if (g_L) lua_close(g_L);
     g_L = luaL_newstate();
+    lua_atpanic(g_L, [](lua_State* L) -> int {
+        const char* msg = lua_tostring(L, -1);
+        MessageBoxA(g_mainWnd, msg ? msg : "Fatal Lua Panic", "Lua Panic Protected", MB_OK | MB_ICONERROR);
+        return 0;
+    });
     luaL_requiref(g_L, "_G", luaopen_base, 1); lua_pop(g_L, 1);
     luaL_requiref(g_L, "table", luaopen_table, 1); lua_pop(g_L, 1);
     luaL_requiref(g_L, "string", luaopen_string, 1); lua_pop(g_L, 1);
@@ -5356,35 +5864,26 @@ void init() {
     lua_register(g_L, "gl_refresh", l_gl_refresh);
     lua_register(g_L, "gl_clear", l_gl_clear);
     lua_register(g_L, "gl_viewport", l_gl_viewport);
-    lua_register(g_L, "gl_color", l_gl_color);
-    lua_register(g_L, "gl_begin", l_gl_begin_prim);
-    lua_register(g_L, "gl_end", l_gl_end_prim);
-    lua_register(g_L, "gl_vertex2f", l_gl_vertex2f);
-    lua_register(g_L, "gl_vertex3f", l_gl_vertex3f);
-    lua_register(g_L, "gl_ortho", l_gl_ortho);
-    lua_register(g_L, "gl_frustum", l_gl_frustum);
-    lua_register(g_L, "gl_load_identity", l_gl_load_identity);
-    lua_register(g_L, "gl_matrix_mode", l_gl_matrix_mode);
-    lua_register(g_L, "gl_push_matrix", l_gl_push_matrix);
-    lua_register(g_L, "gl_pop_matrix", l_gl_pop_matrix);
-    lua_register(g_L, "gl_translatef", l_gl_translatef);
-    lua_register(g_L, "gl_rotatef", l_gl_rotatef);
-    lua_register(g_L, "gl_scalef", l_gl_scalef);
     lua_register(g_L, "gl_enable", l_gl_enable);
     lua_register(g_L, "gl_disable", l_gl_disable);
-    lua_register(g_L, "gl_line_width", l_gl_line_width);
-    lua_register(g_L, "gl_point_size", l_gl_point_size);
-    lua_register(g_L, "gl_normal3f", l_gl_normal3f);
+    lua_register(g_L, "gl_create_program", l_gl_create_program);
+    lua_register(g_L, "gl_use_program", l_gl_use_program);
+    lua_register(g_L, "gl_create_mesh", l_gl_create_mesh);
+    lua_register(g_L, "gl_draw_mesh", l_gl_draw_mesh);
+    lua_register(g_L, "gl_uniform_mat4", l_gl_uniform_mat4);
+    lua_register(g_L, "gl_uniform_4f", l_gl_uniform_4f);
+    lua_register(g_L, "mat4_transform", l_mat4_transform);
+    lua_register(g_L, "mat4_ortho", l_mat4_ortho);
+    lua_register(g_L, "mat4_perspective", l_mat4_perspective);
+    lua_register(g_L, "mat4_lookat", l_mat4_lookat);
+    lua_register(g_L, "mat4_mul", l_mat4_mul);
+    lua_register(g_L, "mat4_rotate_y", l_mat4_rotate_y);
     lua_register(g_L, "glu_perspective", l_glu_perspective);
     lua_register(g_L, "glu_look_at", l_glu_look_at);
-    lua_register(g_L, "gl_gen_list", l_gl_gen_list);
-    lua_register(g_L, "gl_new_list", l_gl_new_list);
-    lua_register(g_L, "gl_end_list", l_gl_end_list);
-    lua_register(g_L, "gl_call_list", l_gl_call_list);
-    lua_register(g_L, "gl_delete_list", l_gl_delete_list);
     lua_register(g_L, "gl_blend_func", l_gl_blend_func);
     lua_register(g_L, "glu_sphere", l_glu_sphere);
     lua_register(g_L, "gl_bind_texture", l_gl_bind_texture);
+    lua_register(g_L, "gl_uniform_1i", l_gl_uniform_1i);
     lua_register(g_L, "gl_text_coord2f", l_gl_text_coord2f);
     lua_register(g_L, "gl_load_texture", l_gl_load_texture);
     lua_register(g_L, "gl_load_bbmodel", l_gl_load_bbmodel);
@@ -5443,7 +5942,7 @@ void reset() {
     GLCanvas::destroyAll();
     ImageCache::clear();
     WasmEngine::clear();
-    GLBuffers::clear();
+    ModernGL::clear();
     GLFont::clear();
     GLModelCache::clear();
     GradientText::cleanupBuffers();
@@ -5765,7 +6264,7 @@ namespace Render {
         }
         int estW(const LumeSharedPtr<HTP::Elem>& e, int mw) {
             if (!e) return mw;
-            int w = e->props.getInt("width", 0);
+            int w = e->props.getDimension("width", mw, 0);
             if (w > 0) return w;
             switch (e->type) {
             case HTP::EType::BUTTON:
@@ -6099,7 +6598,9 @@ namespace Render {
                 break;
             }
             case HTP::EType::BUTTON: {
-                int bw = e->props.getInt("width", 120), bh = e->props.getInt("height", 35), by = y;
+                int bw = e->props.getDimension("width", mw, 120);
+                int bh = e->props.getInt("height", 35);
+                int by = y;
                 const char* pId = getRefPtr(e->props, "id"), * pCt = getRefPtr(e->props, "content");
                 if (pCt[0] == '\0') pCt = "Button";
                 const char* pAct = getRefPtr(e->props, "action"), * pUrl = getRefPtr(e->props, "url");
@@ -6128,7 +6629,10 @@ namespace Render {
             }
             case HTP::EType::INPUT_FIELD: {
                 bool isMulti = e->props.getBool("multiline", false);
-                int ih = e->props.getInt("height", isMulti ? 80 : 28), iy = y, iw = e->props.getInt("width", 250), z = e->props.getInt("z-index", 0);
+                int ih = e->props.getInt("height", isMulti ? 80 : 28);
+                int iy = y;
+                int iw = e->props.getDimension("width", mw, 250);
+                int z = e->props.getInt("z-index", 0);
                 const char* pId = getRefPtr(e->props, "id"), * pPh = getRefPtr(e->props, "placeholder");
                 LumeString id = (pId[0] == '\0') ? ("inp_" + lume_to_string(y)) : pId;
                 auto& inp = Bindings::g_inputs[id];
@@ -6158,7 +6662,10 @@ namespace Render {
                 break;
             }
             case HTP::EType::CANVAS: {
-                int ch = e->props.getInt("height", 200), cy = y, cw = e->props.getInt("width", 400), z = e->props.getInt("z-index", 0);
+                int ch = e->props.getInt("height", 200);
+                int cy = y;
+                int cw = e->props.getDimension("width", mw, 400);
+                int z = e->props.getInt("z-index", 0);
                 const char* pId = getRefPtr(e->props, "id");
                 LumeString id = (pId[0] == '\0') ? ("cv_" + lume_to_string(y)) : pId;
                 auto bdr = e->props.getColor("border-color", {80, 80, 100});
@@ -6175,7 +6682,9 @@ namespace Render {
                 break;
             }
             case HTP::EType::GL_CANVAS: {
-                int ch = e->props.getInt("height", 200), cw = e->props.getInt("width", 400), cy = y, z = e->props.getInt("z-index", 0);
+                int ch = e->props.getInt("height", 200);
+                int cw = e->props.getDimension("width", mw, 400);
+                int cy = y, z = e->props.getInt("z-index", 0);
                 const char* pId = getRefPtr(e->props, "id");
                 LumeString id = (pId[0] == '\0') ? ("glcv_" + lume_to_string(y)) : pId;
                 auto bdr = e->props.getColor("border-color", {80, 80, 100});
@@ -6255,7 +6764,7 @@ namespace Render {
                 break;
             case HTP::EType::IMAGE: {
                 int ih = e->props.getInt("height", 100);
-                int iw = e->props.getInt("width", 100);
+                int iw = e->props.getDimension("width", mw, 100);
                 int z = e->props.getInt("z-index", 0);
                 int drawY = y;
                 const char* pSrc = getRefPtr(e->props, "src");
@@ -6820,11 +7329,11 @@ namespace Pages {
     }
     LumeString glDemo() {
         return R"htp(
-@page {title:"Lume - 3D Engine"; background:"#09090b";}
+@page {title:"Lume - Modern 3D Engine"; background:"#09090b";}
 @block {align:"center"; padding:30; background:"#09090b"; margin:0;
-  @text {content:"Hardware Acceleration"; size:36; color:"#fafafa"; bold:"true"; align:"center";}
+  @text {content:"Modern OpenGL (Core Profile)"; size:36; color:"#fafafa"; bold:"true"; align:"center";}
   @br {size:5;}
-  @text {content:"Click canvas to capture mouse | ESC to release | F11 for Fullscreen"; size:15; color:"#71717a"; align:"center";}
+  @text {content:"Powered by GLSL Shaders & Hardware Vertex Buffer Objects (VBO/VAO)"; size:15; color:"#10b981"; align:"center";}
 }
 @block {align:"center"; padding:0; margin:10; background:"#09090b";
   @column {align:"center"; background:"#18181b"; padding:25; border-radius:12; width:650;
@@ -6839,88 +7348,88 @@ namespace Pages {
   @button {content:"Back to Home"; width:180; height:40; background:"#27272a"; color:"#fafafa"; border-radius:6; url:"about:home"; size:15;}
 }
 @script {
-  local animating = true 
-  local tid = nil
-  local function rgl()
+  local vs_code = [[
+    #version 330 core
+    layout(location = 0) in vec3 aPos;
+    layout(location = 1) in vec3 aCol;
+    out vec3 vColor;
+    uniform mat4 uMVP;
+    void main() {
+        vColor = aCol;
+        gl_Position = uMVP * vec4(aPos, 1.0);
+    }
+  ]]
+  local fs_code = [[
+    #version 330 core
+    in vec3 vColor;
+    out vec4 FragColor;
+    void main() {
+        FragColor = vec4(vColor, 1.0);
+    }
+  ]]
+  local prog = nil
+  local mesh = nil
+  local animating = true
+  local rot = 0
+  local function init_gl()
     if not gl_available() then return end
     if not gl_begin_render('gl1', 600, 400) then return end
-    local time = get_time()
-    if not animating then time = 0 end
+    prog = gl_create_program(vs_code, fs_code)
+    local vertices = {
+       0, 1.2, 0,    1.0, 0.2, 0.5,
+      -1, 0,   1,    0.2, 0.8, 1.0,
+       1, 0,   1,    0.8, 0.1, 0.9,
+       0, 1.2, 0,    1.0, 0.2, 0.5,
+       1, 0,   1,    0.8, 0.1, 0.9,
+       1, 0,  -1,    0.1, 0.9, 0.5,
+       0, 1.2, 0,    1.0, 0.2, 0.5,
+       1, 0,  -1,    0.1, 0.9, 0.5,
+      -1, 0,  -1,    0.9, 0.8, 0.1,
+       0, 1.2, 0,    1.0, 0.2, 0.5,
+      -1, 0,  -1,    0.9, 0.8, 0.1,
+      -1, 0,   1,    0.2, 0.8, 1.0,
+       0,-1.2, 0,    0.1, 0.5, 0.9,
+       1, 0,   1,    0.8, 0.1, 0.9,
+      -1, 0,   1,    0.2, 0.8, 1.0,
+       0,-1.2, 0,    0.1, 0.5, 0.9,
+       1, 0,  -1,    0.1, 0.9, 0.5,
+       1, 0,   1,    0.8, 0.1, 0.9,
+       0,-1.2, 0,    0.1, 0.5, 0.9,
+      -1, 0,  -1,    0.9, 0.8, 0.1,
+       1, 0,  -1,    0.1, 0.9, 0.5,
+       0,-1.2, 0,    0.1, 0.5, 0.9,
+      -1, 0,   1,    0.2, 0.8, 1.0,
+      -1, 0,  -1,    0.9, 0.8, 0.1
+    }
+    mesh = gl_create_mesh(vertices, nil, 6)
+    gl_end_render('gl1')
+  end
+  local function render()
+    if not gl_available() or not prog or not mesh then return end
+    if not gl_begin_render('gl1', 600, 400) then return end
     local curW, curH = 600, 400
-    if is_fullscreen() then
-        curW, curH = get_window_size()
-    end
+    if is_fullscreen() then curW, curH = get_window_size() end
     if curH == 0 then curH = 1 end
     gl_viewport(0, 0, curW, curH)
-    gl_matrix_mode(GL_PROJECTION)
-    gl_load_identity()
-    glu_perspective(50, curW / curH, 0.1, 100)
-    gl_matrix_mode(GL_MODELVIEW)
-    gl_load_identity()
-    glu_look_at(0, 2.5, 7, 0, 0, 0, 0, 1, 0)
     gl_clear(0.04, 0.04, 0.06, 1)
     gl_enable(GL_DEPTH_TEST)
-    gl_enable(GL_BLEND)
-    gl_blend_func(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
-    gl_push_matrix()
-    local grid_offset = (time * 3.0) % 1.0
-    gl_translatef(0, -1.5, grid_offset)
-    gl_line_width(2.0)
-    gl_begin(GL_LINES)
-    for i = -15, 15 do
-        gl_color(0.9, 0.2, 0.6, 0.4)
-        gl_vertex3f(i, 0, -15)
-        gl_vertex3f(i, 0, 15)
-        local alpha = 1.0 - (math.abs(i) / 15.0)
-        if alpha < 0 then alpha = 0 end
-        gl_color(0.1, 0.8, 0.9, alpha * 0.6)
-        gl_vertex3f(-15, 0, i)
-        gl_vertex3f(15, 0, i)
-    end
-    gl_end()
-    gl_pop_matrix()
-    gl_push_matrix()
-    local float_y = math.sin(time * 2.5) * 0.4
-    gl_translatef(0, float_y + 0.5, 0)
-    gl_rotatef(time * 40, 0, 1, 0)
-    gl_rotatef(time * 15, 1, 0, 0)
-    gl_begin(GL_TRIANGLES)
-    gl_color(0.9, 0.2, 0.6, 0.6) gl_vertex3f(0,1.5,0) gl_vertex3f(-1,0,1) gl_vertex3f(1,0,1)
-    gl_color(0.7, 0.1, 0.8, 0.6) gl_vertex3f(0,1.5,0) gl_vertex3f(1,0,1) gl_vertex3f(1,0,-1)
-    gl_color(0.5, 0.0, 0.9, 0.6) gl_vertex3f(0,1.5,0) gl_vertex3f(1,0,-1) gl_vertex3f(-1,0,-1)
-    gl_color(0.8, 0.0, 0.5, 0.6) gl_vertex3f(0,1.5,0) gl_vertex3f(-1,0,-1) gl_vertex3f(-1,0,1)
-    gl_color(0.1, 0.8, 0.9, 0.6) gl_vertex3f(0,-1.5,0) gl_vertex3f(1,0,1) gl_vertex3f(-1,0,1)
-    gl_color(0.1, 0.6, 0.9, 0.6) gl_vertex3f(0,-1.5,0) gl_vertex3f(1,0,-1) gl_vertex3f(1,0,1)
-    gl_color(0.1, 0.4, 0.9, 0.6) gl_vertex3f(0,-1.5,0) gl_vertex3f(-1,0,-1) gl_vertex3f(1,0,-1)
-    gl_color(0.1, 0.5, 0.7, 0.6) gl_vertex3f(0,-1.5,0) gl_vertex3f(-1,0,1) gl_vertex3f(-1,0,-1)
-    gl_end()
-    gl_disable(GL_DEPTH_TEST)
-    gl_line_width(2.0)
-    gl_color(1, 1, 1, 0.9)
-    gl_begin(GL_LINES)
-    local pts = {{0,1.5,0}, {0,-1.5,0}, {1,0,1}, {-1,0,1}, {1,0,-1}, {-1,0,-1}}
-    local edges = {{1,3},{1,4},{1,5},{1,6}, {2,3},{2,4},{2,5},{2,6}, {3,4},{4,6},{6,5},{5,3}}
-    for i=1, #edges do
-        gl_vertex3f(pts[edges[i][1]][1], pts[edges[i][1]][2], pts[edges[i][1]][3])
-        gl_vertex3f(pts[edges[i][2]][1], pts[edges[i][2]][2], pts[edges[i][2]][3])
-    end
-    gl_end()
-    gl_pop_matrix()
-    gl_end_render('gl1') 
+    if animating then rot = rot + 1.5 end
+    local proj = mat4_perspective(45, curW / curH, 0.1, 100)
+    local view = mat4_lookat(0, 2, 5, 0, 0, 0, 0, 1, 0)
+    local model = mat4_rotate_y(rot)
+    local vp = mat4_mul(proj, view)
+    local mvp = mat4_mul(vp, model)
+    gl_use_program(prog)
+    gl_uniform_mat4(prog, "uMVP", mvp)
+    gl_draw_mesh(mesh)
+    gl_end_render('gl1')
     gl_refresh('gl1')
   end
-  rgl()
-  tid = set_timer(16, rgl)
+  init_gl()
+  local tid = set_timer(16, render)
   on_click('btn_spin', function()
     animating = not animating
-    if animating then 
-      set_text('gl_status', 'Status: Animated')
-      if not tid then tid = set_timer(16, rgl) end
-    else 
-      set_text('gl_status', 'Status: Paused') 
-      if tid then kill_timer(tid) tid = nil end 
-      rgl() 
-    end
+    set_text('gl_status', animating and "Status: Animated" or "Status: Paused")
   end)
   on_key_down(function(vk)
     if vk == VK_F11 then
@@ -6943,7 +7452,7 @@ namespace Pages {
     @column {background:"#18181b"; padding:25; border-radius:12; width:320;
       @text {content:"1. Cloud Plugin Loader"; size:20; color:"#3b82f6"; bold:"true";}
       @divider {color:"#27272a"; thickness:1; margin:15;}
-      @text {content:"Click below to download and inject the official 'SystemMon' plugin directly into RAM without restarting the engine."; size:14; color:"#a1a1aa";}
+      @text {content:"Click below to download and inject the official 'SystemMon' plugin directly into RAM."; size:14; color:"#a1a1aa";}
       @br {size:20;}
       @button {id:"btn_load_plg"; content:"Inject SystemMon"; width:220; height:35; background:"#2563eb"; color:"#ffffff"; border-radius:6;}
       @br {size:10;}
@@ -6964,7 +7473,6 @@ namespace Pages {
       @br {size:15;}
       @glcanvas {id:"gl_graph"; width:270; height:80; border-color:"#27272a";}
     }
-
   }
   @br {size:30;}
   @button {content:"Back to Home"; width:180; height:40; background:"#27272a"; color:"#fafafa"; border-radius:6; url:"about:home"; size:15;}
@@ -6972,28 +7480,46 @@ namespace Pages {
 @script {
   local history = {}
   for i=1, 50 do history[i] = 0 end
+  local prog = nil
+  local mesh = nil
+  local curOrtho = nil
+  local function init_gl()
+    local vs = [[
+        #version 330 core
+        layout(location = 0) in vec3 aPos;
+        uniform mat4 uMVP;
+        void main() { gl_Position = uMVP * vec4(aPos, 1.0); }
+    ]]
+    local fs = [[
+        #version 330 core
+        uniform vec4 uColor;
+        out vec4 FragColor;
+        void main() { FragColor = uColor; }
+    ]]
+    prog = gl_create_program(vs, fs)
+  end
   local function draw_graph()
     if not gl_available() then return end
     if not gl_begin_render('gl_graph', 270, 80) then return end
+    if not prog then init_gl() end
     gl_viewport(0, 0, 270, 80)
-    gl_matrix_mode(GL_PROJECTION)
-    gl_load_identity()
-    gl_ortho(0, 50, 0, 100, -1, 1)
     gl_clear(0.06, 0.06, 0.08, 1)
-    gl_color(0.2, 0.2, 0.25, 1)
-    gl_begin(GL_LINES)
-    for i=0, 100, 25 do
-       gl_vertex2f(0, i) gl_vertex2f(50, i)
-    end
-    gl_end()
-    gl_color(0.1, 0.8, 0.5, 1)
-    gl_line_width(2.0)
-    gl_begin(GL_LINE_STRIP)
+    curOrtho = mat4_ortho(0, 50, 0, 100, -1, 1)
+    gl_use_program(prog)
+    local verts = {}
     for i=1, 50 do
-       gl_vertex2f(i, history[i])
+        table.insert(verts, i)
+        table.insert(verts, history[i])
+        table.insert(verts, 0)
     end
-    gl_end()
+    mesh = gl_create_mesh(verts, nil, 3)
+    local mvp = mat4_transform(curOrtho, 0, 0, 0, 1, 1, 1, 0, 0)
+    gl_uniform_mat4(prog, "uMVP", mvp)
+    gl_uniform_4f(prog, "uColor", 0.1, 0.8, 0.5, 1.0)
+    gl_draw_mesh(mesh, GL_LINE_STRIP)
+
     gl_end_render('gl_graph') 
+    gl_refresh('gl_graph')
   end
   local timer_id = nil
   on_click('btn_load_plg', function()
@@ -7013,9 +7539,6 @@ namespace Pages {
                  draw_graph()
              end)
          end
-      else
-         set_text('plg_status', 'Status: Plugin loaded, but API missing.')
-         set_prop('plg_status', 'color', '#ef4444')
       end
     else
       set_text('plg_status', 'Status: Injection Failed')
@@ -7619,38 +8142,29 @@ void goFwd() { if (g_histPos < (int)g_hist.size() - 1) { g_histPos++; histNav(g_
 HWND g_tabControl = nullptr;
 WNDPROC g_origTabProc = nullptr;
 void updateTabTitle(int idx) {
-    if (idx < 0 || idx >= g_tabCount || !g_tabControl) return;
+    if (idx < 0 || idx >= g_tabCount) return;
     if (idx == g_tabIdx && g_mainWnd) {
-        LumeString title = g_docs[idx].title;
-        if (title.empty()) title = g_curUrl_arr[idx];
+        LumeString title = g_docs[idx].title.empty() ? g_curUrl_arr[idx] : g_docs[idx].title;
         if (title.empty()) title = "New Tab";
         SetWindowTextU(g_mainWnd, (title + " - Lume").c_str());
     }
-    InvalidateRect(g_tabControl, NULL, FALSE);
-    repositionNewTabBtn();
+    if (g_mainWnd) InvalidateRect(g_mainWnd, nullptr, FALSE);
 }
 void switchTab(int index) {
     if (index < 0 || index >= g_tabCount) return;
     GLCanvas::hideAll();
     g_tabIdx = index;
     GLCanvas::showAll();
-    TabCtrl_SetCurSel(g_tabControl, index);
-    SendMessageW(g_tabControl, TCM_SETCURFOCUS, index, 0);
     if (g_mainWnd) {
         SetWindowTextU(g_addressBar, g_curUrl.c_str());
         invalidateDOM();
+        InvalidateRect(g_mainWnd, nullptr, FALSE);
     }
-    repositionNewTabBtn();
 }
 void createNewTab() {
     if (g_tabCount >= MAX_LUME_TABS) return;
     int newIdx = g_tabCount++;
-    TCITEMW tie = { 0 };
-    tie.mask = TCIF_TEXT;
-    tie.pszText = (LPWSTR)L"";
-    SendMessageW(g_tabControl, TCM_INSERTITEMW, newIdx, (LPARAM)&tie);
     switchTab(newIdx);
-    repositionNewTabBtn();
     navigateTo("about:home");
 }
 void closeTab(int idx) {
@@ -7684,112 +8198,24 @@ void closeTab(int idx) {
         Script::g_canvasClickRefs_arr[i] = static_cast<LumeMap<LumeString, int>&&>(Script::g_canvasClickRefs_arr[i + 1]);
         Script::g_L_arr[i] = Script::g_L_arr[i + 1];
         WasmEngine::instances_arr[i] = static_cast<LumeMap<int, WasmEngine::Instance>&&>(WasmEngine::instances_arr[i + 1]);
-        GLBuffers::buffers_arr[i] = static_cast<LumeMap<int, LumeVector<float>>&&>(GLBuffers::buffers_arr[i + 1]);
+        ModernGL::g_meshes_arr[i] = static_cast<LumeMap<int, ModernGL::Mesh>&&>(ModernGL::g_meshes_arr[i + 1]);
+        ModernGL::g_programs_arr[i] = static_cast<LumeMap<int, GLuint>&&>(ModernGL::g_programs_arr[i + 1]);
         HTP::g_domIdMap_arr[i] = static_cast<LumeMap<LumeString, LumeSharedPtr<HTP::Elem>>&&>(HTP::g_domIdMap_arr[i + 1]);
-        Bindings::g_rightClicks_arr[i] = static_cast<LumeMap<LumeString, LumeAction>&&>(Bindings::g_rightClicks_arr[i + 1]);
-        Bindings::g_offsets_y_arr[i] = static_cast<LumeMap<LumeString, int>&&>(Bindings::g_offsets_y_arr[i + 1]);
-        Bindings::g_shimmer_offsets_arr[i] = static_cast<LumeMap<LumeString, float>&&>(Bindings::g_shimmer_offsets_arr[i + 1]);
-        memcpy(Bindings::g_keyPressed_arr[i], Bindings::g_keyPressed_arr[i + 1], sizeof(Bindings::g_keyPressed_arr[0]));
-        memcpy(Bindings::g_keyReleased_arr[i], Bindings::g_keyReleased_arr[i + 1], sizeof(Bindings::g_keyReleased_arr[0]));
-        Script::g_keyDownRef_arr[i] = Script::g_keyDownRef_arr[i + 1];
     }
-    Script::g_L_arr[g_tabCount - 1] = nullptr;
-    Plugins::g_activeProtocol_arr[g_tabCount - 1] = nullptr;
-    Plugins::g_activeCustomEngine_arr[g_tabCount - 1] = nullptr;
-    Plugins::g_activeCustomPageContext_arr[g_tabCount - 1] = nullptr;
-    HTP::g_domIdMap_arr[g_tabCount - 1].clear();
+    int lastSlot = g_tabCount - 1;
+    Script::g_L_arr[lastSlot] = nullptr;
+    Script::g_timerRefs_arr[lastSlot].clear();
+    Script::g_canvasClickRefs_arr[lastSlot].clear();
+    ModernGL::g_meshes_arr[lastSlot].clear();
+    ModernGL::g_programs_arr[lastSlot].clear();
+    Canvas::g_bufs_arr[lastSlot].clear();
+    g_docs[lastSlot] = HTP::Doc();
+    g_curUrl_arr[lastSlot] = "";
+    g_hists[lastSlot].clear();
+    g_histPoss[lastSlot] = -1;
     g_tabCount--;
-    SendMessageW(g_tabControl, TCM_DELETEITEM, idx, 0);
     if (g_tabIdx >= g_tabCount) g_tabIdx = g_tabCount - 1;
     switchTab(g_tabIdx);
-    repositionNewTabBtn();
-}
-LRESULT CALLBACK TabProc(HWND h, UINT m, WPARAM w, LPARAM l) {
-    static int g_hoverTabIdx = -1;
-    static bool g_hoverCross = false;
-    if (m == WM_MBUTTONUP) {
-        TCHITTESTINFO hti;
-        hti.pt.x = GET_X_LPARAM(l);
-        hti.pt.y = GET_Y_LPARAM(l);
-        int idx = (int)SendMessageW(h, TCM_HITTEST, 0, (LPARAM)&hti);
-        if (idx != -1) PostMessageW(GetParent(h), WM_APP + 100, idx, 0);
-        return 0;
-    }
-    if (m == WM_MOUSEMOVE) {
-        TRACKMOUSEEVENT tme = {sizeof(tme), TME_LEAVE, h, 0};
-        TrackMouseEvent(&tme);
-        POINT pt = {GET_X_LPARAM(l), GET_Y_LPARAM(l)};
-        TCHITTESTINFO hti = { pt };
-        int idx = (int)SendMessageW(h, TCM_HITTEST, 0, (LPARAM)&hti);
-        int newHoverIdx = -1;
-        bool newHoverCross = false;
-        if (idx != -1) {
-            RECT rc;
-            TabCtrl_GetItemRect(h, idx, &rc);
-            if (pt.x >= rc.right - 22 && pt.x <= rc.right - 4) {
-                newHoverIdx = idx;
-                newHoverCross = true;
-            }
-        }
-        if (newHoverIdx != g_hoverTabIdx || newHoverCross != g_hoverCross) {
-            g_hoverTabIdx = newHoverIdx;
-            g_hoverCross = newHoverCross;
-            InvalidateRect(h, NULL, FALSE);
-        }
-    }
-    if (m == WM_MOUSELEAVE) {
-        if (g_hoverCross) {
-            g_hoverTabIdx = -1;
-            g_hoverCross = false;
-            InvalidateRect(h, NULL, FALSE);
-        }
-    }
-    if (m == WM_LBUTTONDOWN) {
-        TCHITTESTINFO hti;
-        hti.pt.x = GET_X_LPARAM(l);
-        hti.pt.y = GET_Y_LPARAM(l);
-        int idx = (int)SendMessageW(h, TCM_HITTEST, 0, (LPARAM)&hti);
-        if (idx != -1) {
-            RECT rc;
-            TabCtrl_GetItemRect(h, idx, &rc);
-            if (hti.pt.x >= rc.right - 22 && hti.pt.x <= rc.right - 2) {
-                PostMessageW(GetParent(h), WM_APP + 100, idx, 0);
-                return 0;
-            }
-        }
-    }
-    if (m == WM_PAINT) {
-        LRESULT res = CallWindowProcW(g_origTabProc, h, m, w, l);
-        HDC hdc = GetDC(h);
-        HFONT hFont = (HFONT)SendMessageW(h, WM_GETFONT, 0, 0);
-        HFONT hOldFont = (HFONT)SelectObject(hdc, hFont);
-        SetBkMode(hdc, TRANSPARENT);
-        int curSel = TabCtrl_GetCurSel(h);
-        for (int i = 0; i < g_tabCount; i++) {
-            RECT rc;
-            if (!TabCtrl_GetItemRect(h, i, &rc)) continue;
-            RECT rcText = {rc.left + 8, rc.top + 1, rc.right - 24, rc.bottom};
-            LumeString title = g_docs[i].title;
-            if (title.empty()) title = g_curUrl_arr[i];
-            if (title.empty()) title = "New Tab";
-            LumeWString wtitle = utf8_to_wstring(title);
-            SetTextColor(hdc, (i == curSel) ? RGB(0, 102, 204) : RGB(50, 50, 50));
-            DrawTextW(hdc, wtitle.c_str(), -1, &rcText, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-            RECT rcClose = {rc.right - 20, rc.top + 1, rc.right - 4, rc.bottom};
-            bool isCrossHovered = (g_hoverCross && g_hoverTabIdx == i);
-            SetTextColor(hdc, isCrossHovered ? RGB(230, 40, 40) : RGB(140, 140, 140));
-            DrawTextW(hdc, L"\x00D7", 1, &rcClose, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-        }
-        SelectObject(hdc, hOldFont);
-        ReleaseDC(h, hdc);
-        return res;
-    }
-    if (m == WM_HSCROLL) {
-        LRESULT res = CallWindowProcW(g_origTabProc, h, m, w, l);
-        InvalidateRect(h, NULL, TRUE);
-        return res;
-    }
-    return CallWindowProcW(g_origTabProc, h, m, w, l);
 }
 WNDPROC g_origAddr = 0;
 LRESULT CALLBACK AddrProc(HWND h, UINT m, WPARAM w, LPARAM l) {
@@ -7804,24 +8230,16 @@ LRESULT CALLBACK AddrProc(HWND h, UINT m, WPARAM w, LPARAM l) {
 }
 LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
     static bool g_draggingInput = false;
+    static HWND s_lastHoveredBtn = nullptr;
     switch (msg) {
     case WM_CREATE: {
-        g_tabControl = CreateWindowW(WC_TABCONTROLW, L"", WS_CHILD | WS_CLIPSIBLINGS | WS_CLIPCHILDREN | WS_VISIBLE | TCS_FOCUSNEVER | TCS_FIXEDWIDTH, 0, 0, 100, 28, hw, (HMENU)(INT_PTR)ID_TAB_BASE, 0, 0);
-        g_origTabProc = (WNDPROC)SetWindowLongPtrW(g_tabControl, GWLP_WNDPROC, (LONG_PTR)TabProc);
         HFONT uf = CreateFontW(-14, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, L"Segoe UI");
-        SendMessage(g_tabControl, WM_SETFONT, (WPARAM)uf, 1);
-        g_newTabBtn = CreateWindowW(L"BUTTON", L"+", WS_CHILD | WS_CLIPSIBLINGS | WS_VISIBLE, 0, 0, 25, 25, hw, (HMENU)(INT_PTR)ID_NEW_TAB, 0, 0);
-        SendMessage(g_newTabBtn, WM_SETFONT, (WPARAM)uf, 1);
-        TCITEMW tie = {0};
-        tie.mask = TCIF_TEXT;
-        tie.pszText = (LPWSTR)L"";
-        SendMessageW(g_tabControl, TCM_INSERTITEMW, 0, (LPARAM)&tie);
-        CreateWindowW(L"BUTTON", L"<", WS_CHILD | WS_VISIBLE, 4, 31, 30, 28, hw, (HMENU)ID_BACK, 0, 0);
-        CreateWindowW(L"BUTTON", L">", WS_CHILD | WS_VISIBLE, 38, 31, 30, 28, hw, (HMENU)ID_FWD, 0, 0);
-        CreateWindowW(L"BUTTON", L"R", WS_CHILD | WS_VISIBLE, 72, 31, 30, 28, hw, (HMENU)ID_REF, 0, 0);
-        g_addressBar = CreateWindowW(L"EDIT", L"about:home", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL, 108, 33, 500, 24, hw, (HMENU)ID_ADDR, 0, 0);
-        CreateWindowW(L"BUTTON", L"Go", WS_CHILD | WS_VISIBLE, 0, 0, 40, 28, hw, (HMENU)ID_GO, 0, 0);
-        g_menuBtn = CreateWindowW(L"BUTTON", L"\x2630", WS_CHILD | WS_VISIBLE, 0, 0, 30, 28, hw, (HMENU)ID_MENU_BTN, 0, 0);
+        CreateWindowW(L"BUTTON", L"<", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW, 4, 34, 30, 24, hw, (HMENU)ID_BACK, 0, 0);
+        CreateWindowW(L"BUTTON", L">", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW, 38, 34, 30, 24, hw, (HMENU)ID_FWD, 0, 0);
+        CreateWindowW(L"BUTTON", L"R", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW, 72, 34, 30, 24, hw, (HMENU)ID_REF, 0, 0);
+        g_addressBar = CreateWindowW(L"EDIT", L"about:home", WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL, 108, 34, 500, 24, hw, (HMENU)ID_ADDR, 0, 0);
+        CreateWindowW(L"BUTTON", L"Go", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW, 0, 0, 40, 24, hw, (HMENU)ID_GO, 0, 0);
+        g_menuBtn = CreateWindowW(L"BUTTON", L"\x2630", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW, 0, 0, 30, 24, hw, (HMENU)ID_MENU_BTN, 0, 0);
         g_statusBar = CreateWindowW(L"STATIC", L"Ready", WS_CHILD | WS_VISIBLE | SS_LEFT, 0, 0, 800, STATUS_H, hw, 0, 0, 0);
         SendMessage(g_addressBar, WM_SETFONT, (WPARAM)uf, 1);
         SendMessage(g_statusBar, WM_SETFONT, (WPARAM)uf, 1);
@@ -7841,17 +8259,22 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
         int w = LOWORD(lp), h = HIWORD(lp);
         int btnW = 24;
         int tabW = w - btnW - 4;
-        MoveWindow(g_tabControl, 0, 0, tabW > 0 ? tabW : 0, 28, TRUE);
-        repositionNewTabBtn();
         int menuW = 30, goW = 40, pad = 4;
         int menuX = w - pad - menuW;
         int goX = menuX - pad - goW;
         int addrW = goX - pad - 108;
         if (addrW < 100) addrW = 100;
-        MoveWindow(g_addressBar, 108, 33, addrW, 24, TRUE);
+        MoveWindow(g_addressBar, 108, 34, addrW, 24, TRUE);
+        if (Themes::g_theme.btn_radius > 0) {
+            HRGN rgn = CreateRoundRectRgn(0, 0, addrW, 24, Themes::g_theme.btn_radius, Themes::g_theme.btn_radius);
+            SetWindowRgn(g_addressBar, rgn, TRUE);
+        }
+        else {
+            SetWindowRgn(g_addressBar, NULL, TRUE);
+        }
         HWND gb = GetDlgItem(hw, ID_GO);
-        if (gb) MoveWindow(gb, goX, 31, goW, 28, TRUE);
-        MoveWindow(g_menuBtn, menuX, 31, menuW, 28, TRUE);
+        if (gb) MoveWindow(gb, goX, 34, goW, 24, TRUE);
+        MoveWindow(g_menuBtn, menuX, 34, menuW, 24, TRUE);
         MoveWindow(g_statusBar, 0, h - STATUS_H, w, STATUS_H, TRUE);
         g_contentDirty = true;
         InvalidateRect(hw, nullptr, FALSE);
@@ -7873,10 +8296,116 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
             int h = cr.bottom - TOOLBAR_H - STATUS_H;
             if (h < 1) h = 1;
             if (ps.rcPaint.top < TOOLBAR_H) {
-                HBRUSH tb = CreateSolidBrush(RGB(30, 30, 50));
-                RECT tr = { ps.rcPaint.left, 0, ps.rcPaint.right, TOOLBAR_H };
-                FillRect(hdc, &tr, tb);
-                DeleteObject(tb);
+                HDC memDC = CreateCompatibleDC(hdc);
+                HBITMAP memBmp = CreateCompatibleBitmap(hdc, w, TOOLBAR_H);
+                HBITMAP oldMemBmp = (HBITMAP)SelectObject(memDC, memBmp);
+                RECT rcTabBar = {0, 0, w, 28};
+                HBRUSH brTabBar = CreateSolidBrush(Themes::g_theme.tab_bar_bg.cr());
+                FillRect(memDC, &rcTabBar, brTabBar);
+                DeleteObject(brTabBar);
+                RECT rcToolbar = {0, 28, w, TOOLBAR_H};
+                FillRect(memDC, &rcToolbar, Themes::g_theme.hBrToolbar);
+                HPEN pLine = CreatePen(PS_SOLID, 1, Themes::g_theme.tab_bottom_line.cr());
+                HPEN opLine = (HPEN)SelectObject(memDC, pLine);
+                MoveToEx(memDC, 0, 29, NULL);
+                LineTo(memDC, w, 29);
+                SelectObject(memDC, opLine);
+                DeleteObject(pLine);
+                bool isWin95 = (Themes::g_theme.tab_radius == 0);
+                RECT rcAddr;
+                GetWindowRect(g_addressBar, &rcAddr);
+                MapWindowPoints(HWND_DESKTOP, hw, (LPPOINT)&rcAddr, 2);
+                InflateRect(&rcAddr, 2, 2);
+                if (isWin95) {
+                    DrawEdge(memDC, &rcAddr, EDGE_SUNKEN, BF_RECT);
+                }
+                else {
+                    HBRUSH brAddrBox = CreateSolidBrush(Themes::g_theme.address_bg.cr());
+                    HPEN pnAddrBox = CreatePen(PS_SOLID, 1, Themes::g_theme.address_border.cr());
+                    auto ob = SelectObject(memDC, brAddrBox); auto op = SelectObject(memDC, pnAddrBox);
+                    RoundRect(memDC, rcAddr.left, rcAddr.top, rcAddr.right, rcAddr.bottom, Themes::g_theme.btn_radius, Themes::g_theme.btn_radius);
+                    SelectObject(memDC, ob); SelectObject(memDC, op);
+                    DeleteObject(brAddrBox); DeleteObject(pnAddrBox);
+                }
+                int tabW = Themes::g_theme.tab_width;
+                if (tabW < 60) tabW = 60;
+                if (tabW > 250) tabW = 250;
+                int curX = 4;
+                POINT ptCursor;
+                GetCursorPos(&ptCursor);
+                ScreenToClient(hw, &ptCursor);
+                HFONT hFont = FontCache::get(Themes::g_theme.font_size, isWin95, false, Themes::g_theme.font_name.c_str());
+                HFONT oldFont = (HFONT)SelectObject(memDC, hFont);
+                SetBkMode(memDC, TRANSPARENT);
+                for (int i = 0; i < g_tabCount; i++) {
+                    RECT rcTab = {curX, 3, curX + tabW, 29};
+                    bool isActive = (i == g_tabIdx);
+                    bool isHover = (PtInRect(&rcTab, ptCursor) && !isActive);
+                    HTP::Color bgCol = isActive ? Themes::g_theme.tab_active_bg : (isHover ? Themes::g_theme.tab_hover_bg : Themes::g_theme.tab_inactive_bg);
+                    HBRUSH bTab = CreateSolidBrush(bgCol.cr());
+                    if (isWin95) {
+                        FillRect(memDC, &rcTab, bTab);
+                        DrawEdge(memDC, &rcTab, isActive ? EDGE_RAISED : BDR_RAISEDINNER, BF_TOP | BF_LEFT | BF_RIGHT);
+                    }
+                    else {
+                        HTP::Color borderCol = isActive ? Themes::g_theme.tab_active_border : Themes::g_theme.tab_border;
+                        HPEN pTab = CreatePen(PS_SOLID, 1, borderCol.cr());
+                        auto ob = SelectObject(memDC, bTab);
+                        auto op = SelectObject(memDC, pTab);
+                        RoundRect(memDC, rcTab.left, rcTab.top, rcTab.right, rcTab.bottom + 4, Themes::g_theme.tab_radius, Themes::g_theme.tab_radius);
+                        SelectObject(memDC, ob);
+                        SelectObject(memDC, op);
+                        DeleteObject(pTab);
+                    }
+                    DeleteObject(bTab);
+                    RECT rcText = { rcTab.left + 8, rcTab.top, rcTab.right - 24, rcTab.bottom };
+                    LumeString title = g_docs[i].title.empty() ? g_curUrl_arr[i] : g_docs[i].title;
+                    if (title.empty()) title = "New Tab";
+                    LumeWString wtitle = utf8_to_wstring(title);
+                    SetTextColor(memDC, isActive ? Themes::g_theme.tab_active_text.cr() : Themes::g_theme.tab_inactive_text.cr());
+                    DrawTextW(memDC, wtitle.c_str(), -1, &rcText, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+                    RECT rcClose = {rcTab.right - 20, rcTab.top + 4, rcTab.right - 6, rcTab.bottom - 4};
+                    bool isCloseHover = PtInRect(&rcClose, ptCursor);
+                    if (isCloseHover) {
+                        HBRUSH hBrCircle = CreateSolidBrush(Themes::g_theme.tab_close_bg_hover.cr());
+                        HPEN hPnCircle = CreatePen(PS_SOLID, 1, Themes::g_theme.tab_close_bg_hover.cr());
+                        auto ob = SelectObject(memDC, hBrCircle);
+                        auto op = SelectObject(memDC, hPnCircle);
+                        RoundRect(memDC, rcClose.left, rcClose.top, rcClose.right, rcClose.bottom, 4, 4);
+                        SelectObject(memDC, ob);
+                        SelectObject(memDC, op);
+                        DeleteObject(hBrCircle);
+                        DeleteObject(hPnCircle);
+                        SetTextColor(memDC, Themes::g_theme.tab_close_hover.cr());
+                    }
+                    else {
+                        SetTextColor(memDC, Themes::g_theme.tab_inactive_text.cr());
+                    }
+                    DrawTextW(memDC, L"\x00D7", 1, &rcClose, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                    curX += tabW + 2;
+                }
+                RECT rcNewBtn = { curX + 2, 4, curX + 26, 26 };
+                bool isNewHover = PtInRect(&rcNewBtn, ptCursor);
+                HBRUSH brNew = CreateSolidBrush(isNewHover ? Themes::g_theme.tab_hover_bg.cr() : Themes::g_theme.tab_bar_bg.cr());
+                if (isWin95) {
+                    FillRect(memDC, &rcNewBtn, brNew);
+                    DrawEdge(memDC, &rcNewBtn, isNewHover ? EDGE_SUNKEN : EDGE_RAISED, BF_RECT);
+                }
+                else {
+                    HPEN pnNew = CreatePen(PS_SOLID, 1, Themes::g_theme.tab_border.cr());
+                    auto ob = SelectObject(memDC, brNew); auto op = SelectObject(memDC, pnNew);
+                    RoundRect(memDC, rcNewBtn.left, rcNewBtn.top, rcNewBtn.right, rcNewBtn.bottom, Themes::g_theme.tab_radius, Themes::g_theme.tab_radius);
+                    SelectObject(memDC, ob); SelectObject(memDC, op);
+                    DeleteObject(pnNew);
+                }
+                DeleteObject(brNew);
+                SetTextColor(memDC, Themes::g_theme.tab_inactive_text.cr());
+                DrawTextW(memDC, L"+", 1, &rcNewBtn, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                SelectObject(memDC, oldFont);
+                BitBlt(hdc, 0, 0, w, TOOLBAR_H, memDC, 0, 0, SRCCOPY);
+                SelectObject(memDC, oldMemBmp);
+                DeleteObject(memBmp);
+                DeleteDC(memDC);
             }
             if (ps.rcPaint.bottom > TOOLBAR_H) {
                 ensureBackbuffer(hdc, w, h);
@@ -7928,6 +8457,38 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_ERASEBKGND:
         return 1;
     case WM_MOUSEMOVE: {
+        TRACKMOUSEEVENT tme = {sizeof(tme), TME_LEAVE, hw, 0};
+        TrackMouseEvent(&tme);
+        static int s_lastHoverTab = -1;
+        static bool s_lastHoverClose = false;
+        static bool s_lastHoverNew = false;
+        int curHoverTab = -1;
+        bool curHoverClose = false;
+        bool curHoverNew = false;
+        POINT pt = {GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
+        if (pt.y >= 0 && pt.y < 28) {
+            const int tabW = 140;
+            int curX = 4;
+            for (int i = 0; i < g_tabCount; i++) {
+                RECT rcTab = {curX, 3, curX + tabW, 28};
+                if (pt.x >= rcTab.left && pt.x <= rcTab.right) {
+                    curHoverTab = i;
+                    RECT rcClose = {rcTab.right - 20, rcTab.top + 4, rcTab.right - 6, rcTab.bottom - 4};
+                    curHoverClose = PtInRect(&rcClose, pt);
+                    break;
+                }
+                curX += tabW + 2;
+            }
+            RECT rcNewBtn = {curX + 2, 4, curX + 26, 26};
+            curHoverNew = PtInRect(&rcNewBtn, pt);
+        }
+        if (curHoverTab != s_lastHoverTab || curHoverClose != s_lastHoverClose || curHoverNew != s_lastHoverNew) {
+            s_lastHoverTab = curHoverTab;
+            s_lastHoverClose = curHoverClose;
+            s_lastHoverNew = curHoverNew;
+            RECT rcTabBar = {0, 0, 4000, 28};
+            InvalidateRect(hw, &rcTabBar, FALSE);
+        }
         if (g_mouseCaptured) {
             if (g_captureMode == 0) {
                 if (g_ignoreWarpMouse) {
@@ -7992,8 +8553,38 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
             ReleaseCapture();
         }
         return 0;
+    case WM_MBUTTONUP: {
+        int rawX = GET_X_LPARAM(lp);
+        int rawY = GET_Y_LPARAM(lp);
+        if (rawY >= 0 && rawY < 28) {
+            const int tabW = 140;
+            int curX = 4;
+            for (int i = 0; i < g_tabCount; i++) {
+                if (rawX >= curX && rawX <= curX + tabW) {
+                    closeTab(i);
+                    InvalidateRect(hw, nullptr, FALSE);
+                    return 0;
+                }
+                curX += tabW + 2;
+            }
+        }
+        return 0;
+    }
     case WM_MOUSEWHEEL: {
         int d = GET_WHEEL_DELTA_WPARAM(wp);
+        POINT ptCursor;
+        GetCursorPos(&ptCursor);
+        ScreenToClient(hw, &ptCursor);
+        if (ptCursor.y >= 0 && ptCursor.y < 28) {
+            if (d > 0 && g_tabIdx > 0) {
+                switchTab(g_tabIdx - 1);
+            }
+            else if (d < 0 && g_tabIdx < g_tabCount - 1) {
+                switchTab(g_tabIdx + 1);
+            }
+            InvalidateRect(hw, nullptr, FALSE);
+            return 0;
+        }
         g_mouseWheelDelta += d;
         if (g_opt_plugins && Plugins::g_activeCustomEngine && Plugins::g_activeCustomPageContext && Plugins::g_activeCustomEngine->on_mouse_wheel) {
             Plugins::g_activeCustomEngine->on_mouse_wheel(Plugins::g_activeCustomPageContext, d);
@@ -8027,8 +8618,38 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
             SetFocus(hw);
             return 0;
         }
-        int mx = GET_X_LPARAM(lp);
-        int my = GET_Y_LPARAM(lp) - TOOLBAR_H;
+        int rawX = GET_X_LPARAM(lp);
+        int rawY = GET_Y_LPARAM(lp);
+        if (rawY >= 0 && rawY < 28) {
+            int tabW = Themes::g_theme.tab_width;
+            if (tabW < 60) tabW = 60;
+            if (tabW > 250) tabW = 250;
+            int curX = 4;
+            for (int i = 0; i < g_tabCount; i++) {
+                RECT rcTab = { curX, 3, curX + tabW, 28 };
+                if (rawX >= rcTab.left && rawX <= rcTab.right) {
+                    RECT rcClose = {rcTab.right - 20, rcTab.top, rcTab.right - 4, rcTab.bottom};
+                    if (rawX >= rcClose.left && rawX <= rcClose.right) {
+                        closeTab(i);
+                    }
+                    else {
+                        switchTab(i);
+                    }
+                    InvalidateRect(hw, nullptr, FALSE);
+                    return 0;
+                }
+                curX += tabW + 2;
+            }
+            RECT rcNewBtn = {curX + 2, 4, curX + 26, 26};
+            if (rawX >= rcNewBtn.left && rawX <= rcNewBtn.right) {
+                createNewTab();
+                InvalidateRect(hw, nullptr, FALSE);
+                return 0;
+            }
+            return 0;
+        }
+        int mx = rawX;
+        int my = rawY - TOOLBAR_H;
         if (g_opt_plugins && Plugins::g_activeCustomEngine && Plugins::g_activeCustomPageContext) {
             if (Plugins::g_activeCustomEngine->on_mouse_down) {
                 Plugins::g_activeCustomEngine->on_mouse_down(Plugins::g_activeCustomPageContext, mx, my, 1);
@@ -8325,10 +8946,7 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
         if (Script::g_keyDownRef != LUA_NOREF && Script::g_L && GetFocus() == hw && Bindings::g_focusId.empty()) {
             lua_rawgeti(Script::g_L, LUA_REGISTRYINDEX, Script::g_keyDownRef);
             lua_pushinteger(Script::g_L, (int)wp);
-            if (lua_pcall(Script::g_L, 1, 0, 0) != 0) {
-                OutputDebugStringA(lua_tostring(Script::g_L, -1));
-                lua_pop(Script::g_L, 1);
-            }
+            Script::safeCall(Script::g_L, 1, 0, "Key Down Event Error");
         }
         if (wp == VK_F5) navigateTo(g_curUrl);
         else if (wp == VK_BACK && Bindings::g_focusId.empty() && GetFocus() != g_addressBar) goBack();
@@ -8338,7 +8956,15 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
         if (wp < 256) Bindings::g_keyReleased[wp] = true;
         return 0;
     }
-    case WM_SETCURSOR:
+    case WM_SETCURSOR: {
+        HWND hCur = (HWND)wp;
+        bool isToolbarBtn = (hCur == GetDlgItem(hw, ID_BACK) || hCur == GetDlgItem(hw, ID_FWD) || hCur == GetDlgItem(hw, ID_REF) || hCur == GetDlgItem(hw, ID_GO) || hCur == g_menuBtn);
+        HWND newHover = isToolbarBtn ? hCur : nullptr;
+        if (newHover != s_lastHoveredBtn) {
+            if (s_lastHoveredBtn) InvalidateRect(s_lastHoveredBtn, nullptr, FALSE);
+            s_lastHoveredBtn = newHover;
+            if (s_lastHoveredBtn) InvalidateRect(s_lastHoveredBtn, nullptr, FALSE);
+        }
         if (g_mouseCaptured) {
             SetCursor(nullptr);
             return TRUE;
@@ -8369,6 +8995,7 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
             return TRUE;
         }
         break;
+    }
     case WM_COMMAND: {
         int id = LOWORD(wp);
         if (id == ID_NEW_TAB) {
@@ -8398,15 +9025,17 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
                 AppendMenuW(hPlugMenu, flags, IDM_PLUGIN_START + pIdx, utf8_to_wstring(p.name).c_str());
                 pIdx++;
             }
-            if (!Plugins::g_dynPlugins.empty() && pIdx > 0) AppendMenuW(hPlugMenu, MF_SEPARATOR, 0, NULL);
-            for (auto& dp : Plugins::g_dynPlugins) {
-                UINT flags = MF_STRING | (dp.enabled ? MF_CHECKED : MF_UNCHECKED);
-                LumeString shortName = dp.url.substr(dp.url.find_last_of('/') + 1);
-                AppendMenuW(hPlugMenu, flags, IDM_PLUGIN_START + pIdx, utf8_to_wstring("[Net] " + shortName).c_str());
-                pIdx++;
-            }
             if (pIdx == 0) AppendMenuW(hPlugMenu, MF_STRING | MF_DISABLED, 0, L"No plugins loaded");
             AppendMenuW(hMenu, MF_POPUP, (UINT_PTR)hPlugMenu, L"Plugins");
+            HMENU hThemeMenu = CreatePopupMenu();
+            Themes::scanThemes();
+            for (int i = 0; i < (int)Themes::g_themeFiles.size(); ++i) {
+                LumeWString wname = utf8_to_wstring(Themes::g_themeNames[i]);
+                UINT flags = MF_STRING | (i == Themes::g_curThemeIdx ? MF_CHECKED : MF_UNCHECKED);
+                AppendMenuW(hThemeMenu, flags, IDM_THEME_START + i, wname.c_str());
+            }
+            if (Themes::g_themeFiles.empty()) AppendMenuW(hThemeMenu, MF_STRING | MF_DISABLED, 0, L"No .xtheme found");
+            AppendMenuW(hMenu, MF_POPUP, (UINT_PTR)hThemeMenu, L"Themes");
             AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
             AppendMenuW(hMenu, MF_STRING | (g_opt_gpu ? MF_CHECKED : MF_UNCHECKED), IDM_GPU_TOGGLE, L"Enable GPU (OpenGL)");
             RECT r; GetWindowRect(g_menuBtn, &r);
@@ -8414,15 +9043,17 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
             DestroyMenu(hMenu);
             if (cmd >= IDM_HIST_START && cmd < IDM_HIST_START + 1000) {
                 int idx = cmd - IDM_HIST_START;
-                if (idx >= 0 && idx < g_hist.size()) {
+                if (idx >= 0 && idx < (int)g_hist.size()) {
                     g_histPos = idx;
                     histNav(g_hist[idx]);
                 }
             }
+            else if (cmd >= IDM_THEME_START && cmd < IDM_THEME_START + 100) {
+                Themes::applyTheme(cmd - IDM_THEME_START);
+            }
             else if (cmd >= IDM_PLUGIN_START && cmd < IDM_PLUGIN_START + 1000) {
                 int pId = cmd - IDM_PLUGIN_START;
                 if (pId < Plugins::g_plugins.size()) Plugins::g_plugins[pId].enabled = !Plugins::g_plugins[pId].enabled;
-                else Plugins::g_dynPlugins[pId - Plugins::g_plugins.size()].enabled = !Plugins::g_dynPlugins[pId - Plugins::g_plugins.size()].enabled;
                 Script::reset();
                 Plugins::reboot();
                 navigateTo(g_curUrl);
@@ -8496,9 +9127,14 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
             if (it != Script::g_timerRefs_arr[t].end() && Script::g_L_arr[t]) {
                 TabScope scope(t);
                 lua_rawgeti(Script::g_L, LUA_REGISTRYINDEX, it->second);
-                if (lua_pcall(Script::g_L, 0, 0, 0) != 0) {
-                    KillTimer(hw, id);
+                if (!lua_isfunction(Script::g_L, -1)) {
                     lua_pop(Script::g_L, 1);
+                    KillTimer(hw, id);
+                    Script::g_timerRefs.erase(it);
+                    break;
+                }
+                if (!Script::safeCall(Script::g_L, 0, 0, "Lua Timer")) {
+                    KillTimer(hw, id);
                     luaL_unref(Script::g_L, LUA_REGISTRYINDEX, it->second);
                     Script::g_timerRefs.erase(it);
                 }
@@ -8576,6 +9212,68 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
         }
         return 0;
     }
+    case WM_DRAWITEM: {
+        LPDRAWITEMSTRUCT dis = (LPDRAWITEMSTRUCT)lp;
+        if (dis->CtlType == ODT_BUTTON) {
+            HDC dc = dis->hDC;
+            RECT r = dis->rcItem;
+            bool pressed = (dis->itemState & ODS_SELECTED);
+            FillRect(dc, &r, Themes::g_theme.hBrToolbar);
+            POINT pt; GetCursorPos(&pt); ScreenToClient(dis->hwndItem, &pt);
+            bool isHover = PtInRect(&r, pt);
+            bool isWin95 = (Themes::g_theme.btn_radius == 0);
+            if (isWin95) {
+                HBRUSH br = CreateSolidBrush(Themes::g_theme.btn_bg.cr());
+                FillRect(dc, &r, br);
+                DeleteObject(br);
+                DrawEdge(dc, &r, pressed ? EDGE_SUNKEN : EDGE_RAISED, BF_RECT);
+            }
+            else {
+                HTP::Color bg = pressed ? Themes::g_theme.btn_hover : (isHover ? Themes::g_theme.btn_hover : Themes::g_theme.btn_bg);
+                HBRUSH br = CreateSolidBrush(bg.cr());
+                HPEN pn = CreatePen(PS_SOLID, 1, Themes::g_theme.btn_border.cr());
+                auto ob = SelectObject(dc, br);
+                auto op = SelectObject(dc, pn);
+                RoundRect(dc, r.left, r.top, r.right, r.bottom, Themes::g_theme.btn_radius, Themes::g_theme.btn_radius);
+                SelectObject(dc, ob); SelectObject(dc, op);
+                DeleteObject(br); DeleteObject(pn);
+            }
+            wchar_t text[16] = {};
+            GetWindowTextW(dis->hwndItem, text, 16);
+            SetBkMode(dc, TRANSPARENT);
+            SetTextColor(dc, Themes::g_theme.btn_text.cr());
+            SelectObject(dc, FontCache::get(isWin95 ? 12 : 14, isWin95));
+            DrawTextW(dc, text, -1, &r, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+            return TRUE;
+        }
+        break;
+    }
+    case WM_CTLCOLOREDIT: {
+        HDC dc = (HDC)wp;
+        SetTextColor(dc, Themes::g_theme.address_text.cr());
+        SetBkColor(dc, Themes::g_theme.address_bg.cr());
+        return (LRESULT)Themes::g_theme.hBrAddress;
+    }
+    case WM_CTLCOLORSTATIC: {
+        HDC dc = (HDC)wp;
+        if ((HWND)lp == g_addressBar) {
+            SetTextColor(dc, Themes::g_theme.address_text.cr());
+            SetBkColor(dc, Themes::g_theme.address_bg.cr());
+            return (LRESULT)Themes::g_theme.hBrAddress;
+        }
+        SetTextColor(dc, Themes::g_theme.status_text.cr());
+        SetBkColor(dc, Themes::g_theme.status_bg.cr());
+        return (LRESULT)Themes::g_theme.hBrStatus;
+    }
+    case WM_MOUSELEAVE: {
+        if (s_lastHoveredBtn) {
+            InvalidateRect(s_lastHoveredBtn, nullptr, FALSE);
+            s_lastHoveredBtn = nullptr;
+        }
+        RECT rcTabBar = { 0, 0, 4000, 28 };
+        InvalidateRect(hw, &rcTabBar, FALSE);
+        return 0;
+    }
     }
     return DefWindowProcW(hw, msg, wp, lp);
 }
@@ -8600,6 +9298,7 @@ int WINAPI WinMain(HINSTANCE hI, HINSTANCE, LPSTR cmd, int show) {
     wc.hIcon = LoadIcon(0, IDI_APPLICATION);
     RegisterClassExW(&wc);
     GLCanvas::registerClass(hI);
+    Themes::init();
     g_mainWnd = CreateWindowExW(
         WS_EX_ACCEPTFILES,
         L"LumeClass",
