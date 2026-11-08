@@ -1,4 +1,4 @@
-// cl /EHsc /std:c++17 /O2 /utf-8 /I. main.cpp lib/*.c lib/wasm3/*.c /link gdi32.lib user32.lib comctl32.lib shell32.lib winhttp.lib ole32.lib
+// cl /std:c++17 /O2 /GR- /EHs-c- /GS- /Gs1048576 /Zc:threadSafeInit- /utf-8 /I. main4.cpp tinycrt.c lib/*.c lib/wasm3/*.c /link /NODEFAULTLIB /IGNORE:4210 /OPT:REF /OPT:ICF kernel32.lib user32.lib gdi32.lib comctl32.lib shell32.lib winhttp.lib ole32.lib opengl32.lib gdiplus.lib advapi32.lib shlwapi.lib
 /*
  * Copyright (C) 2026 mcreatorLoginDanila also known as NotAndrey
  *
@@ -19,6 +19,24 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
+void* operator new(size_t size) {
+    return HeapAlloc(GetProcessHeap(), 0, size ? size : 1);
+}
+void operator delete(void* p) noexcept {
+    if (p) HeapFree(GetProcessHeap(), 0, p);
+}
+void* operator new[](size_t size) {
+    return HeapAlloc(GetProcessHeap(), 0, size ? size : 1);
+}
+void operator delete[](void* p) noexcept {
+    if (p) HeapFree(GetProcessHeap(), 0, p);
+}
+void operator delete(void* p, size_t) noexcept {
+    if (p) HeapFree(GetProcessHeap(), 0, p);
+}
+void operator delete[](void* p, size_t) noexcept {
+    if (p) HeapFree(GetProcessHeap(), 0, p);
+}
 #include <windowsx.h>
 #include <commctrl.h>
 #include <winhttp.h>
@@ -37,27 +55,14 @@ extern "C" {
 #include "lume_plugin.h"
 #include <objidl.h>
 #include <wincrypt.h>
-#include <algorithm>
 namespace Gdiplus {
-    using std::min;
-    using std::max;
+    template<typename T> inline T min(T a, T b) {return a < b ? a : b;}
+    template<typename T> inline T max(T a, T b) {return a > b ? a : b;}
 }
-#include <cstdio>
 #include <gdiplus.h>
-#pragma comment(lib, "gdiplus.lib")
-#pragma comment(lib, "winhttp.lib")
-#pragma comment(lib, "gdi32.lib")
-#pragma comment(lib, "user32.lib")
-#pragma comment(lib, "comctl32.lib")
-#pragma comment(lib, "shell32.lib")
-#pragma comment(lib, "opengl32.lib")
-#pragma comment(lib, "glu32.lib")
-#pragma comment(lib, "ole32.lib")
-#pragma comment(lib, "advapi32.lib")
-#pragma comment(lib, "shlwapi.lib")
 #include <shlwapi.h>
 #include <GL/gl.h>
-#include <GL/glu.h>
+template<typename T> inline T lume_abs(T v) {return v < 0 ? -v : v;}
 template<typename T>
 class LumeVector {
 private:
@@ -1143,7 +1148,8 @@ double getHighResTime() {
 #define WGL_CONTEXT_MAJOR_VERSION_ARB 0x2091
 #define WGL_CONTEXT_MINOR_VERSION_ARB 0x2092
 #define WGL_CONTEXT_PROFILE_MASK_ARB 0x9126
-#define WGL_CONTEXT_CORE_PROFILE_BIT_ARB  0x00000001
+#define WGL_CONTEXT_CORE_PROFILE_BIT_ARB 0x00000001
+#define WGL_CONTEXT_COMPATIBILITY_PROFILE_BIT_ARB 0x00000002
 typedef char GLchar;
 typedef ptrdiff_t GLsizeiptr;
 typedef ptrdiff_t GLintptr;
@@ -1920,40 +1926,30 @@ struct LumeTheme {
     int tab_radius = 8;
     int btn_radius = 6;
     int tab_width = 150;
-
-    // Tabs
-    HTP::Color tab_bar_bg = { 9, 9, 11 };
-    HTP::Color tab_active_bg = { 24, 24, 27 };
-    HTP::Color tab_active_text = { 56, 189, 248 };
-    HTP::Color tab_active_border = { 56, 189, 248 }; // Неоновая рамка для активной!
-    HTP::Color tab_inactive_bg = { 15, 15, 20 };
-    HTP::Color tab_inactive_text = { 113, 113, 122 };
-    HTP::Color tab_hover_bg = { 39, 39, 42 };
-    HTP::Color tab_border = { 39, 39, 42 };
-    HTP::Color tab_bottom_line = { 24, 24, 27 };
-    HTP::Color tab_close_hover = { 255, 255, 255 };
-    HTP::Color tab_close_bg_hover = { 239, 68, 68 };
-
-    // Toolbar & buttons
-    HTP::Color toolbar_bg = { 18, 18, 24 };
-    HTP::Color btn_bg = { 31, 31, 46 };
-    HTP::Color btn_text = { 250, 250, 250 };
-    HTP::Color btn_border = { 45, 45, 60 };
-    HTP::Color btn_hover = { 59, 130, 246 };
-
-    // Address bar
-    HTP::Color address_bg = { 9, 9, 11 };
-    HTP::Color address_text = { 250, 250, 250 };
-    HTP::Color address_border = { 45, 45, 60 };
-
-    // Status bar
-    HTP::Color status_bg = { 9, 9, 11 };
-    HTP::Color status_text = { 161, 161, 170 };
-
+    HTP::Color tab_bar_bg = {9, 9, 11};
+    HTP::Color tab_active_bg = {24, 24, 27};
+    HTP::Color tab_active_text = {56, 189, 248};
+    HTP::Color tab_active_border = {56, 189, 248};
+    HTP::Color tab_inactive_bg = {15, 15, 20};
+    HTP::Color tab_inactive_text = {113, 113, 122};
+    HTP::Color tab_hover_bg = {39, 39, 42};
+    HTP::Color tab_border = {39, 39, 42};
+    HTP::Color tab_bottom_line = {24, 24, 27};
+    HTP::Color tab_close_hover = {255, 255, 255};
+    HTP::Color tab_close_bg_hover = {239, 68, 68};
+    HTP::Color toolbar_bg = {18, 18, 24};
+    HTP::Color btn_bg = {31, 31, 46};
+    HTP::Color btn_text = {250, 250, 250};
+    HTP::Color btn_border = {45, 45, 60};
+    HTP::Color btn_hover = {59, 130, 246};
+    HTP::Color address_bg = {9, 9, 11};
+    HTP::Color address_text = {250, 250, 250};
+    HTP::Color address_border = {45, 45, 60};
+    HTP::Color status_bg = {9, 9, 11};
+    HTP::Color status_text = {161, 161, 170};
     HBRUSH hBrAddress = nullptr;
     HBRUSH hBrStatus = nullptr;
     HBRUSH hBrToolbar = nullptr;
-
     void updateBrushes() {
         if (hBrAddress) DeleteObject(hBrAddress);
         if (hBrStatus)  DeleteObject(hBrStatus);
@@ -3612,7 +3608,7 @@ namespace GradientText {
             float c = v * s;
             float h_prime = h_val * 0.016666667f;
             int hp = (int)h_prime;
-            float x_val = c * (1.0f - std::abs(h_prime - (hp & ~1) - 1.0f));
+            float x_val = c * (1.0f - lume_abs(h_prime - (hp & ~1) - 1.0f));
             float m = v - c;
             float r = 0, g = 0, b = 0;
             switch (hp) {
@@ -3866,63 +3862,266 @@ namespace ModernGL {
         g_programs.clear();
     }
 }
-namespace GLFont {
-    struct Key {
-        HGLRC ctx; uint64_t hash;
-        bool operator==(const Key& o) const {return ctx == o.ctx && hash == o.hash;}
+namespace GLModelCache {
+    inline void add(GLuint) {}
+    inline void clear() {}
+}
+namespace CoreText {
+    struct Glyph {
+        float x0, y0, x1, y1;
+        int w, h;
+        int advance;
     };
-    struct Entry {Key k; GLuint v; bool occ;};
-    static Entry* g_tab = nullptr;
-    static size_t g_cap = 0, g_sz = 0;
-    GLuint get(HDC hdc, HGLRC ctx, HFONT font, uint64_t hash) {
-        Key k{ctx, hash};
-        uint64_t kh = hash ^ (uint64_t)ctx;
-        if (g_sz >= g_cap / 2) {
-            size_t oCap = g_cap; Entry* oTab = g_tab;
-            g_cap = oCap == 0 ? 16 : oCap * 2;
-            g_tab = (Entry*)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, g_cap * sizeof(Entry));
-            g_sz = 0;
-            if (oTab) {
-                for (size_t j = 0; j < oCap; ++j) {
-                    if (oTab[j].occ) {
-                        uint64_t h = oTab[j].k.hash ^ (uint64_t)oTab[j].k.ctx;
-                        size_t idx = h & (g_cap - 1);
-                        while (g_tab[idx].occ) idx = (idx + 1) & (g_cap - 1);
-                        g_tab[idx] = oTab[j];
-                        g_sz++;
-                    }
-                }
-                HeapFree(GetProcessHeap(), 0, oTab);
+    struct FontAtlas {
+        GLuint texID = 0;
+        int size = 16;
+        LumeString name;
+        LumeMap<uint32_t, Glyph> glyphs;
+    };
+    static LumeVector<FontAtlas> g_atlases;
+    static GLuint g_textProg = 0;
+    static GLuint g_textVAO = 0;
+    static GLuint g_textVBO = 0;
+    static size_t g_textVboCapacity = 0;
+    static GLint  g_uTextColorLoc = -1;
+    static GLint  g_uFontTexLoc = -1;
+    FontAtlas* getOrCreateAtlas(const char* fontName, int size) {
+        for (auto& a : g_atlases) {
+            if (a.size == size && a.name == fontName) return &a;
+        }
+        FontAtlas a;
+        a.size = size;
+        a.name = fontName;
+        const int TEX_W = 1024, TEX_H = 1024;
+        HDC hdc = CreateCompatibleDC(nullptr);
+        BITMAPINFO bmi = {};
+        bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+        bmi.bmiHeader.biWidth = TEX_W;
+        bmi.bmiHeader.biHeight = -TEX_H;
+        bmi.bmiHeader.biPlanes = 1;
+        bmi.bmiHeader.biBitCount = 32;
+        bmi.bmiHeader.biCompression = BI_RGB;
+        BYTE* bits = nullptr;
+        HBITMAP hbmp = CreateDIBSection(hdc, &bmi, DIB_RGB_COLORS, (void**)&bits, nullptr, 0);
+        HBITMAP oldBmp = (HBITMAP)SelectObject(hdc, hbmp);
+        HFONT hFont = CreateFontA(
+            -size, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+            CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, fontName
+        );
+        HFONT oldFont = (HFONT)SelectObject(hdc, hFont);
+        SetBkColor(hdc, RGB(0, 0, 0));
+        SetTextColor(hdc, RGB(255, 255, 255));
+        SetBkMode(hdc, OPAQUE);
+        RECT rcAll = {0, 0, TEX_W, TEX_H};
+        HBRUSH blackBr = CreateSolidBrush(RGB(0, 0, 0));
+        FillRect(hdc, &rcAll, blackBr);
+        DeleteObject(blackBr);
+        int curX = 2, curY = 2;
+        int maxHeight = size + 8;
+        auto bakeChar = [&](wchar_t wc) {
+            SIZE sz;
+            GetTextExtentPoint32W(hdc, &wc, 1, &sz);
+            if (curX + sz.cx + 2 >= TEX_W) {
+                curX = 2;
+                curY += maxHeight;
             }
+            if (curY + sz.cy >= TEX_H) return;
+            TextOutW(hdc, curX, curY, &wc, 1);
+            Glyph g;
+            g.w = sz.cx;
+            g.h = sz.cy;
+            g.advance = sz.cx;
+            g.x0 = (float)curX / (float)TEX_W;
+            g.y0 = (float)curY / (float)TEX_H;
+            g.x1 = (float)(curX + sz.cx) / (float)TEX_W;
+            g.y1 = (float)(curY + sz.cy) / (float)TEX_H;
+            a.glyphs[(uint32_t)wc] = g;
+            curX += sz.cx + 2;
+        };
+        for (wchar_t c = 32; c < 127; c++) bakeChar(c);
+        for (wchar_t c = 0x0400; c <= 0x045F; c++) bakeChar(c);
+        bakeChar(0x0401);
+        bakeChar(0x0451);
+        LumeVector<unsigned char> texData(TEX_W * TEX_H * 4);
+        for (int i = 0; i < TEX_W * TEX_H; i++) {
+            unsigned char alpha = bits[i * 4];
+            texData[i * 4 + 0] = 255;
+            texData[i * 4 + 1] = 255;
+            texData[i * 4 + 2] = 255;
+            texData[i * 4 + 3] = alpha;
         }
-        size_t idx = kh & (g_cap - 1);
-        while (g_tab[idx].occ) {
-            if (g_tab[idx].k == k) return g_tab[idx].v;
-            idx = (idx + 1) & (g_cap - 1);
-        }
-        GLuint base = glGenLists(2048);
-        HFONT oldFont = (HFONT)SelectObject(hdc, font);
-        wglUseFontBitmapsW(hdc, 0, 2048, base);
+        glGenTextures(1, &a.texID);
+        glBindTexture(GL_TEXTURE_2D, a.texID);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, TEX_W, TEX_H, 0, GL_RGBA, GL_UNSIGNED_BYTE, texData.data());
         SelectObject(hdc, oldFont);
-        g_tab[idx] = {k, base, true};
-        g_sz++;
-        return base;
+        SelectObject(hdc, oldBmp);
+        DeleteObject(hFont);
+        DeleteObject(hbmp);
+        DeleteDC(hdc);
+        g_atlases.push_back(a);
+        return &g_atlases.back();
+    }
+    void initPipeline() {
+        if (g_textProg) return;
+        const char* vs =
+            "#version 330 core\n"
+            "layout (location = 0) in vec4 vertex;\n"
+            "out vec2 TexCoords;\n"
+            "void main() {\n"
+            "    gl_Position = vec4(vertex.xy, 0.0, 1.0);\n"
+            "    TexCoords = vertex.zw;\n"
+            "}\n";
+        const char* fs =
+            "#version 330 core\n"
+            "in vec2 TexCoords;\n"
+            "out vec4 color;\n"
+            "uniform sampler2D uFontTex;\n"
+            "uniform vec4 uTextColor;\n"
+            "void main() {\n"
+            "    vec4 sampled = texture(uFontTex, TexCoords);\n"
+            "    if (sampled.a < 0.02) discard;\n"
+            "    color = vec4(uTextColor.rgb, uTextColor.a * sampled.a);\n"
+            "}\n";
+        auto compile = [](GLenum type, const char* src) -> GLuint {
+            GLuint s = glCreateShader(type);
+            glShaderSource(s, 1, &src, nullptr);
+            glCompileShader(s);
+            return s;
+        };
+        GLuint sVS = compile(GL_VERTEX_SHADER, vs);
+        GLuint sFS = compile(GL_FRAGMENT_SHADER, fs);
+        g_textProg = glCreateProgram();
+        glAttachShader(g_textProg, sVS);
+        glAttachShader(g_textProg, sFS);
+        glLinkProgram(g_textProg);
+        glDeleteShader(sVS);
+        glDeleteShader(sFS);
+        g_uTextColorLoc = glGetUniformLocation(g_textProg, "uTextColor");
+        g_uFontTexLoc = glGetUniformLocation(g_textProg, "uFontTex");
+        glGenVertexArrays(1, &g_textVAO);
+        glGenBuffers(1, &g_textVBO);
+        glBindVertexArray(g_textVAO);
+        glBindBuffer(GL_ARRAY_BUFFER, g_textVBO);
+        g_textVboCapacity = sizeof(float) * 24 * 1024;
+        glBufferData(GL_ARRAY_BUFFER, g_textVboCapacity, nullptr, GL_DYNAMIC_DRAW);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, 4 * sizeof(float), 0);
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
+        glBindVertexArray(0);
+    }
+    void render(const char* utf8_text, float startX, float startY, int size, const char* fontName, float r, float g, float b, float a) {
+        if (!utf8_text || !*utf8_text) return;
+        initPipeline();
+        FontAtlas* atlas = getOrCreateAtlas(fontName, size);
+        if (!atlas) return;
+        int wlen = MultiByteToWideChar(CP_UTF8, 0, utf8_text, -1, nullptr, 0);
+        if (wlen <= 1) return;
+        LumeVector<wchar_t> wstr(wlen);
+        MultiByteToWideChar(CP_UTF8, 0, utf8_text, -1, wstr.data(), wlen);
+        GLint vp[4];
+        glGetIntegerv(GL_VIEWPORT, vp);
+        float vw = (vp[2] > 0) ? (float)vp[2] : 960.0f;
+        float vh = (vp[3] > 0) ? (float)vp[3] : 540.0f;
+        float pxW = 2.0f / vw;
+        float pxH = 2.0f / vh;
+        LumeVector<float> verts;
+        verts.reserve(wlen * 24);
+        float curX = startX;
+        float curY = startY;
+        for (int i = 0; i < wlen - 1; i++) {
+            uint32_t code = (uint32_t)wstr[i];
+            if (code == '\n') {
+                curY -= (float)size * 1.25f * pxH;
+                curX = startX;
+                continue;
+            }
+            auto it = atlas->glyphs.find(code);
+            if (it == atlas->glyphs.end()) {
+                it = atlas->glyphs.find((uint32_t)'?');
+                if (it == atlas->glyphs.end()) {
+                    curX += (float)size * 0.5f * pxW;
+                    continue;
+                }
+            }
+            Glyph& gl = it->second;
+            float w = (float)gl.w * pxW;
+            float h = (float)gl.h * pxH;
+            float x0 = curX;
+            float x1 = curX + w;
+            float yTop = curY;
+            float yBot = curY - h;
+            float u0 = gl.x0;
+            float v0 = gl.y0;
+            float u1 = gl.x1;
+            float v1 = gl.y1;
+            float quad[24] = {
+                x0, yTop, u0, v0,
+                x0, yBot, u0, v1,
+                x1, yBot, u1, v1,
+                x0, yTop, u0, v0,
+                x1, yBot, u1, v1,
+                x1, yTop, u1, v0
+            };
+            for (int k = 0; k < 24; k++) verts.push_back(quad[k]);
+            curX += (float)gl.advance * pxW;
+        }
+        if (verts.empty()) return;
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glDisable(GL_DEPTH_TEST);
+        glUseProgram(g_textProg);
+        glUniform4f(g_uTextColorLoc, r, g, b, a);
+        glUniform1i(g_uFontTexLoc, 0);
+        if (glActiveTexture) glActiveTexture(0x84C0);
+        glBindTexture(GL_TEXTURE_2D, atlas->texID);
+        glBindVertexArray(g_textVAO);
+        glBindBuffer(GL_ARRAY_BUFFER, g_textVBO);
+        size_t neededBytes = verts.size() * sizeof(float);
+        if (neededBytes > g_textVboCapacity) {
+            g_textVboCapacity = neededBytes * 2;
+            glBufferData(GL_ARRAY_BUFFER, g_textVboCapacity, nullptr, GL_DYNAMIC_DRAW);
+        }
+        glBufferSubData(GL_ARRAY_BUFFER, 0, neededBytes, verts.data());
+        glDrawArrays(GL_TRIANGLES, 0, (GLsizei)(verts.size() / 4));
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
+        glBindVertexArray(0);
+        glUseProgram(0);
     }
     void clear() {
-        if (g_tab) {
-            for (size_t j = 0; j < g_cap; ++j) if (g_tab[j].occ) glDeleteLists(g_tab[j].v, 2048);
-            HeapFree(GetProcessHeap(), 0, g_tab);
-            g_tab = nullptr; g_cap = g_sz = 0;
+        for (auto& a : g_atlases) {
+            if (a.texID) glDeleteTextures(1, &a.texID);
         }
+        g_atlases.clear();
+        if (g_textVAO) {
+            glDeleteVertexArrays(1, &g_textVAO);
+            g_textVAO = 0;
+        }
+        if (g_textVBO) {
+            glDeleteBuffers(1, &g_textVBO);
+            g_textVBO = 0;
+        }
+        if (g_textProg) {
+            glDeleteProgram(g_textProg);
+            g_textProg = 0;
+        }
+        g_textVboCapacity = 0;
     }
 }
-namespace GLModelCache {
-    LumeVector<GLuint> lists;
-    void add(GLuint id) { lists.push_back(id); }
-    void clear() {
-        for (GLuint id : lists) glDeleteLists(id, 1);
-        lists.clear();
-    }
+static int l_gl_print(lua_State* L) {
+    const char* text = luaL_checkstring(L, 1);
+    float x = (float)luaL_checknumber(L, 2);
+    float y = (float)luaL_checknumber(L, 3);
+    int sz = (int)luaL_optinteger(L, 5, 16);
+    const char* fontName = luaL_optstring(L, 6, "Segoe UI");
+    float r = (float)luaL_optnumber(L, 7, 1.0f);
+    float g = (float)luaL_optnumber(L, 8, 1.0f);
+    float b = (float)luaL_optnumber(L, 9, 1.0f);
+    float a = (float)luaL_optnumber(L, 10, 1.0f);
+    CoreText::render(text, x, y, sz, fontName, r, g, b, a);
+    return 0;
 }
 namespace Bindings {
     struct InputState {
@@ -3955,7 +4154,7 @@ namespace Bindings {
                     int minDist = 999999;
                     for (int j = lineStart; j <= i; j++) {
                         SIZE sz; GetTextExtentPoint32U(dc, text.c_str() + lineStart, j - lineStart, &sz);
-                        int d = std::abs((int)sz.cx - lx);
+                        int d = lume_abs((int)sz.cx - lx);
                         if (d < minDist) {
                             minDist = d;
                             bestI = j;
@@ -4277,13 +4476,6 @@ namespace Script {
     #define g_canvasClickRefs g_canvasClickRefs_arr[g_tabIdx]
     #define g_keyDownRef g_keyDownRef_arr[g_tabIdx]
     #define g_L g_L_arr[g_tabIdx]
-    struct __InitLua {
-        __InitLua() {
-            for (int i = 0; i < MAX_LUME_TABS; i++) {
-                g_keyDownRef_arr[i] = -2;
-            }
-        }
-    } __initLua;
 static int l_set_prop(lua_State* L) {
     Bindings::set_prop(luaL_checkstring(L, 1), luaL_checkstring(L, 2), luaL_checkstring(L, 3));
     return 0;
@@ -4658,11 +4850,22 @@ static int l_mat4_transform(lua_State* L) {
         vp.m[i] = (float)lua_tonumber(L, -1);
         lua_pop(L, 1);
     }
+
     Mat4 m = Mat4::identity();
-    m.m[0] = sx; m.m[5] = sy; m.m[10] = sz;
-    if (rx != 0.0f) m = Mat4::multiply(m, Mat4::rotateX(rx));
     if (ry != 0.0f) m = Mat4::multiply(m, Mat4::rotateY(ry));
-    m.m[12] = x; m.m[13] = y; m.m[14] = z;
+    if (rx != 0.0f) m = Mat4::multiply(m, Mat4::rotateX(rx));
+    m.m[0] *= sx;
+    m.m[1] *= sx;
+    m.m[2] *= sx;
+    m.m[4] *= sy;
+    m.m[5] *= sy;
+    m.m[6] *= sy;
+    m.m[8] *= sz;
+    m.m[9] *= sz;
+    m.m[10] *= sz;
+    m.m[12] = x;
+    m.m[13] = y;
+    m.m[14] = z;
     Mat4 mvp = Mat4::multiply(vp, m);
     lua_createtable(L, 16, 0);
     for (int i = 0; i < 16; i++) {
@@ -4741,18 +4944,6 @@ static int l_mat4_rotate_y(lua_State* L) {
     }
     return 1;
 }
-static int l_glu_perspective(lua_State* L) {
-    gluPerspective_impl(luaL_checknumber(L, 1), luaL_checknumber(L, 2), luaL_checknumber(L, 3), luaL_checknumber(L, 4));
-    return 0;
-}
-static int l_glu_look_at(lua_State* L) {
-    gluLookAt_impl(
-        luaL_checknumber(L, 1), luaL_checknumber(L, 2), luaL_checknumber(L, 3),
-        luaL_checknumber(L, 4), luaL_checknumber(L, 5), luaL_checknumber(L, 6),
-        luaL_checknumber(L, 7), luaL_checknumber(L, 8), luaL_checknumber(L, 9)
-    );
-    return 0;
-}
 static int l_set_timer(lua_State* L) {
     int ms = (int)luaL_checkinteger(L, 1);
     if (ms < 15) ms = 15;
@@ -4817,15 +5008,6 @@ static int l_on_canvas_click(lua_State* L) {
 }
 static int l_gl_blend_func(lua_State* L) {
     glBlendFunc((GLenum)luaL_checkinteger(L, 1), (GLenum)luaL_checkinteger(L, 2));
-    return 0;
-}
-static int l_glu_sphere(lua_State* L) {
-    double radius = luaL_checknumber(L, 1);
-    int slices = (int)luaL_checkinteger(L, 2);
-    int stacks = (int)luaL_checkinteger(L, 3);
-    GLUquadric* q = gluNewQuadric();
-    gluSphere(q, radius, slices, stacks);
-    gluDeleteQuadric(q);
     return 0;
 }
 static int l_gl_bind_texture(lua_State* L) {
@@ -5207,9 +5389,6 @@ static int l_gl_load_bbmodel(lua_State* L) {
         lua_pushnil(L);
         return 1;
     }
-    GLuint listId = glGenLists(1);
-    GLModelCache::add(listId);
-    glNewList(listId, GL_COMPILE);
     FastJson::Node* resNode = FastJson::GetObj(doc.root, "resolution");
     float resW = 16.0f, resH = 16.0f;
     if (resNode) {
@@ -5223,7 +5402,11 @@ static int l_gl_load_bbmodel(lua_State* L) {
         FastJson::Node* arr = FastJson::GetObj(obj, name);
         if (arr && arr->type == FastJson::TYPE_ARRAY && arr->child) {
             FastJson::Node* c = arr->child; out[0] = (float)c->num_val; c = c->next;
-            if (c) { out[1] = (float)c->num_val; c = c->next; if (c) out[2] = (float)c->num_val; }
+            if (c) {
+                out[1] = (float)c->num_val;
+                c = c->next;
+                if (c) out[2] = (float)c->num_val;
+            }
         }
     };
     auto get_uv = [](FastJson::Node* obj, const char* dir, float* uv, float rw, float rh) {
@@ -5241,89 +5424,74 @@ static int l_gl_load_bbmodel(lua_State* L) {
                 uv[1] = (float)c->num_val / rh;
                 c = c->next;
                 if (c) {
-                    uv[2] = (float)c->num_val / rw;
-                    c = c->next;
+                    uv[2] = (float)c->num_val / rw; c = c->next;
                     if (c) uv[3] = (float)c->num_val / rh;
                 }
             }
         }
     };
+    LumeVector<float> meshVerts;
     FastJson::Node* elements = FastJson::GetObj(doc.root, "elements");
     if (elements && elements->type == FastJson::TYPE_ARRAY) {
-        for (FastJson::Node* el = elements->child;
-            el;
-            el = el->next) {
+        for (FastJson::Node* el = elements->child; el; el = el->next) {
             if (el->type != FastJson::TYPE_OBJECT) continue;
-            float from[3], to[3], origin[3];
+            float from[3], to[3];
             get_vec3(el, "from", from, 0.0f);
             get_vec3(el, "to", to, 0.0f);
-            get_vec3(el, "origin", origin, 0.0f);
             for (int j = 0; j < 3; j++) {
                 from[j] /= 16.0f;
                 to[j] /= 16.0f;
-                origin[j] /= 16.0f;
             }
-            float rotAngle = 0.0f;
-            const char* rotAxis = "x";
-            FastJson::Node* rot = FastJson::GetObj(el, "rotation");
-            if (rot) {
-                FastJson::Node* ra = FastJson::GetObj(rot, "angle");
-                if (ra) rotAngle = (float)ra->num_val;
-                FastJson::Node* rx = FastJson::GetObj(rot, "axis"); 
-                if (rx && rx->str_val) rotAxis = rx->str_val;
-            }
-            glPushMatrix();
-            glTranslatef(origin[0], origin[1], origin[2]);
-            if (rotAngle != 0.0f) {
-                if (rotAxis[0] == 'x') glRotatef(rotAngle, 1, 0, 0);
-                else if (rotAxis[0] == 'y') glRotatef(rotAngle, 0, 1, 0);
-                else if (rotAxis[0] == 'z') glRotatef(rotAngle, 0, 0, 1);
-            }
-            glTranslatef(-origin[0], -origin[1], -origin[2]);
-            glBegin(GL_QUADS);
+            auto addQuad = [&](float* p1, float* p2, float* p3, float* p4, float* uv) {
+                float v[30] = {
+                    p1[0], p1[1], p1[2], uv[0], uv[3],
+                    p2[0], p2[1], p2[2], uv[2], uv[3],
+                    p3[0], p3[1], p3[2], uv[2], uv[1],
+                    p1[0], p1[1], p1[2], uv[0], uv[3],
+                    p3[0], p3[1], p3[2], uv[2], uv[1],
+                    p4[0], p4[1], p4[2], uv[0], uv[1]
+                };
+                for (int i = 0; i < 30; i++) meshVerts.push_back(v[i]);
+            };
             float uv[4];
-            glNormal3f(0.0f, 0.0f, -1.0f); get_uv(el, "north", uv, resW, resH);
-            glTexCoord2f(uv[2], uv[3]); glVertex3f(from[0], from[1], from[2]);
-            glTexCoord2f(uv[0], uv[3]); glVertex3f(to[0], from[1], from[2]);
-            glTexCoord2f(uv[0], uv[1]); glVertex3f(to[0], to[1], from[2]);
-            glTexCoord2f(uv[2], uv[1]); glVertex3f(from[0], to[1], from[2]);
-
-            glNormal3f(0.0f, 0.0f, 1.0f); get_uv(el, "south", uv, resW, resH);
-            glTexCoord2f(uv[0], uv[3]); glVertex3f(from[0], from[1], to[2]);
-            glTexCoord2f(uv[2], uv[3]); glVertex3f(to[0], from[1], to[2]);
-            glTexCoord2f(uv[2], uv[1]); glVertex3f(to[0], to[1], to[2]);
-            glTexCoord2f(uv[0], uv[1]); glVertex3f(from[0], to[1], to[2]);
-
-            glNormal3f(0.0f, 1.0f, 0.0f); get_uv(el, "up", uv, resW, resH);
-            glTexCoord2f(uv[0], uv[3]); glVertex3f(from[0], to[1], from[2]);
-            glTexCoord2f(uv[2], uv[3]); glVertex3f(to[0], to[1], from[2]);
-            glTexCoord2f(uv[2], uv[1]); glVertex3f(to[0], to[1], to[2]);
-            glTexCoord2f(uv[0], uv[1]); glVertex3f(from[0], to[1], to[2]);
-
-            glNormal3f(0.0f, -1.0f, 0.0f); get_uv(el, "down", uv, resW, resH);
-            glTexCoord2f(uv[0], uv[1]); glVertex3f(from[0], from[1], from[2]);
-            glTexCoord2f(uv[2], uv[1]); glVertex3f(to[0], from[1], from[2]);
-            glTexCoord2f(uv[2], uv[3]); glVertex3f(to[0], from[1], to[2]);
-            glTexCoord2f(uv[0], uv[3]); glVertex3f(from[0], from[1], to[2]);
-
-            glNormal3f(1.0f, 0.0f, 0.0f); get_uv(el, "east", uv, resW, resH);
-            glTexCoord2f(uv[2], uv[3]); glVertex3f(to[0], from[1], from[2]);
-            glTexCoord2f(uv[0], uv[3]); glVertex3f(to[0], from[1], to[2]);
-            glTexCoord2f(uv[0], uv[1]); glVertex3f(to[0], to[1], to[2]);
-            glTexCoord2f(uv[2], uv[1]); glVertex3f(to[0], to[1], from[2]);
-
-            glNormal3f(-1.0f, 0.0f, 0.0f); get_uv(el, "west", uv, resW, resH);
-            glTexCoord2f(uv[0], uv[3]); glVertex3f(from[0], from[1], from[2]);
-            glTexCoord2f(uv[2], uv[3]); glVertex3f(from[0], from[1], to[2]);
-            glTexCoord2f(uv[2], uv[1]); glVertex3f(from[0], to[1], to[2]);
-            glTexCoord2f(uv[0], uv[1]); glVertex3f(from[0], to[1], from[2]);
-            glEnd();
-            glPopMatrix();
+            get_uv(el, "north", uv, resW, resH);
+            float n1[3] = {to[0], from[1], from[2]}, n2[3] = {from[0], from[1], from[2]}, n3[3] = {from[0], to[1], from[2]}, n4[3] = {to[0], to[1], from[2]};
+            addQuad(n1, n2, n3, n4, uv);
+            get_uv(el, "south", uv, resW, resH);
+            float s1[3] = {from[0], from[1], to[2]}, s2[3] = {to[0], from[1], to[2]}, s3[3] = {to[0], to[1], to[2]}, s4[3] = {from[0], to[1], to[2]};
+            addQuad(s1, s2, s3, s4, uv);
+            get_uv(el, "up", uv, resW, resH);
+            float u1[3] = {from[0], to[1], to[2]}, u2[3] = {to[0], to[1], to[2]}, u3[3] = {to[0], to[1], from[2]}, u4[3] = {from[0], to[1], from[2]};
+            addQuad(u1, u2, u3, u4, uv);
+            get_uv(el, "down", uv, resW, resH);
+            float d1[3] = {from[0], from[1], from[2]}, d2[3] = {to[0], from[1], from[2]}, d3[3] = {to[0], from[1], to[2]}, d4[3] = {from[0], from[1], to[2]};
+            addQuad(d1, d2, d3, d4, uv);
+            get_uv(el, "east", uv, resW, resH);
+            float e1[3] = {to[0], from[1], to[2]}, e2[3] = {to[0], from[1], from[2]}, e3[3] = {to[0], to[1], from[2]}, e4[3] = {to[0], to[1], to[2]};
+            addQuad(e1, e2, e3, e4, uv);
+            get_uv(el, "west", uv, resW, resH);
+            float w1[3] = {
+                from[0], from[1], from[2]
+            }, w2[3] = {from[0], from[1], to[2]}, w3[3] = {from[0], to[1], to[2]}, w4[3] = {from[0], to[1], from[2]};
+            addQuad(w1, w2, w3, w4, uv);
         }
     }
     FastJson::Free(&doc);
-    glEndList();
-    lua_pushinteger(L, listId);
+    ModernGL::Mesh mesh = {};
+    mesh.vertexCount = (int)(meshVerts.size() / 5);
+    glGenVertexArrays(1, &mesh.vao);
+    glGenBuffers(1, &mesh.vbo);
+    glBindVertexArray(mesh.vao);
+    glBindBuffer(GL_ARRAY_BUFFER, mesh.vbo);
+    glBufferData(GL_ARRAY_BUFFER, meshVerts.size() * sizeof(float), meshVerts.data(), GL_STATIC_DRAW);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)0);
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)(3 * sizeof(float)));
+    glBindVertexArray(0);
+    int id = ModernGL::g_nextMeshId++;
+    ModernGL::g_meshes[id] = mesh;
+    lua_pushinteger(L, id);
     return 1;
 }
 static int l_gl_load_obj(lua_State* L) {
@@ -5333,26 +5501,30 @@ static int l_gl_load_obj(lua_State* L) {
         lua_pushnil(L);
         return 1;
     }
-    LumeVector<float> verts;
-    GLuint listId = glGenLists(1);
-    GLModelCache::add(listId);
-    glNewList(listId, GL_COMPILE);
-    glBegin(GL_TRIANGLES);
+    LumeVector<float> raw_verts;
+    LumeVector<float> final_triangles;
     auto fast_atof = [](const char** ptr) -> float {
         const char* p = *ptr;
         while (*p == ' ') p++;
         bool neg = (*p == '-');
         if (neg || *p == '+') p++;
         float res = 0.0f;
-        while (*p >= '0' && *p <= '9') { res = res * 10.0f + (*p - '0'); p++; }
+        while (*p >= '0' && *p <= '9') {
+            res = res * 10.0f + (*p - '0');
+            p++;
+        }
         if (*p == '.') {
             p++;
             float frac = 1.0f;
-            while (*p >= '0' && *p <= '9') { frac *= 0.1f; res += (*p - '0') * frac; p++; }
+            while (*p >= '0' && *p <= '9') {
+                frac *= 0.1f;
+                res += (*p - '0') * frac;
+                p++;
+            }
         }
         *ptr = p;
         return neg ? -res : res;
-        };
+    };
     size_t pos = 0;
     while (pos < fileData.length()) {
         size_t next = fileData.find('\n', pos);
@@ -5364,39 +5536,55 @@ static int l_gl_load_obj(lua_State* L) {
             float x = fast_atof(&p);
             float y = fast_atof(&p);
             float z = fast_atof(&p);
-            verts.push_back(x); verts.push_back(y); verts.push_back(z);
+            raw_verts.push_back(x);
+            raw_verts.push_back(y);
+            raw_verts.push_back(z);
         }
         else if (line.length() >= 2 && line[0] == 'f' && line[1] == ' ') {
             LumeVector<int> face_verts;
             const char* p = line.c_str() + 2;
-            int total_verts = (int)(verts.size() / 3);
+            int total_verts = (int)(raw_verts.size() / 3);
             while (*p) {
                 while (*p == ' ') p++;
                 if (!*p) break;
                 int v = StrToIntA(p);
                 if (v != 0) {
                     int idx = (v > 0) ? (v - 1) : (total_verts + v);
-                    if (idx >= 0 && idx < total_verts) {
-                        face_verts.push_back(idx);
-                    }
+                    if (idx >= 0 && idx < total_verts) face_verts.push_back(idx);
                 }
+                while (*p && *p != ' ' && *p != '/') p++;
                 while (*p && *p != ' ') p++;
             }
             if (face_verts.size() >= 3) {
-                glVertex3f(verts[face_verts[0] * 3], verts[face_verts[0] * 3 + 1], verts[face_verts[0] * 3 + 2]);
-                glVertex3f(verts[face_verts[1] * 3], verts[face_verts[1] * 3 + 1], verts[face_verts[1] * 3 + 2]);
-                glVertex3f(verts[face_verts[2] * 3], verts[face_verts[2] * 3 + 1], verts[face_verts[2] * 3 + 2]);
+                auto pushV = [&](int idx) {
+                    final_triangles.push_back(raw_verts[idx * 3 + 0]);
+                    final_triangles.push_back(raw_verts[idx * 3 + 1]);
+                    final_triangles.push_back(raw_verts[idx * 3 + 2]);
+                };
+                pushV(face_verts[0]);
+                pushV(face_verts[1]);
+                pushV(face_verts[2]);
                 if (face_verts.size() >= 4) {
-                    glVertex3f(verts[face_verts[0] * 3], verts[face_verts[0] * 3 + 1], verts[face_verts[0] * 3 + 2]);
-                    glVertex3f(verts[face_verts[2] * 3], verts[face_verts[2] * 3 + 1], verts[face_verts[2] * 3 + 2]);
-                    glVertex3f(verts[face_verts[3] * 3], verts[face_verts[3] * 3 + 1], verts[face_verts[3] * 3 + 2]);
+                    pushV(face_verts[0]);
+                    pushV(face_verts[2]);
+                    pushV(face_verts[3]);
                 }
             }
         }
     }
-    glEnd();
-    glEndList();
-    lua_pushinteger(L, listId);
+    ModernGL::Mesh mesh = {};
+    mesh.vertexCount = (int)(final_triangles.size() / 3);
+    glGenVertexArrays(1, &mesh.vao);
+    glGenBuffers(1, &mesh.vbo);
+    glBindVertexArray(mesh.vao);
+    glBindBuffer(GL_ARRAY_BUFFER, mesh.vbo);
+    glBufferData(GL_ARRAY_BUFFER, final_triangles.size() * sizeof(float), final_triangles.data(), GL_STATIC_DRAW);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
+    glBindVertexArray(0);
+    int id = ModernGL::g_nextMeshId++;
+    ModernGL::g_meshes[id] = mesh;
+    lua_pushinteger(L, id);
     return 1;
 }
 static int l_load_ttf(lua_State* L) {
@@ -5425,91 +5613,11 @@ static int l_gl_tex_parameteri(lua_State* L) {
     glTexParameteri((GLenum)luaL_checkinteger(L, 1), (GLenum)luaL_checkinteger(L, 2), (GLint)luaL_checkinteger(L, 3));
     return 0;
 }
-static int l_gl_lightfv(lua_State* L) {
-    GLenum light = (GLenum)luaL_checkinteger(L, 1);
-    GLenum pname = (GLenum)luaL_checkinteger(L, 2);
-    GLfloat params[4] = {
-        (GLfloat)luaL_checknumber(L, 3),
-        (GLfloat)luaL_checknumber(L, 4),
-        (GLfloat)luaL_checknumber(L, 5),
-        (GLfloat)luaL_optnumber(L, 6, 1.0)
-    };
-    glLightfv(light, pname, params);
-    return 0;
-}
-static int l_gl_materialfv(lua_State* L) {
-    GLenum face = (GLenum)luaL_checkinteger(L, 1);
-    GLenum pname = (GLenum)luaL_checkinteger(L, 2);
-    GLfloat params[4] = {
-        (GLfloat)luaL_checknumber(L, 3),
-        (GLfloat)luaL_optnumber(L, 4, 0.0),
-        (GLfloat)luaL_optnumber(L, 5, 0.0),
-        (GLfloat)luaL_optnumber(L, 6, 1.0)
-    };
-    glMaterialfv(face, pname, params);
-    return 0;
-}
 static int l_gl_create_buffer(lua_State* L) {
     return l_gl_create_mesh(L);
 }
 static int l_gl_draw_buffer(lua_State* L) {
     return l_gl_draw_mesh(L);
-}
-static int l_gl_fogf(lua_State* L) {
-    glFogf((GLenum)luaL_checkinteger(L, 1), (GLfloat)luaL_checknumber(L, 2));
-    return 0;
-}
-static int l_gl_fogi(lua_State* L) {
-    glFogi((GLenum)luaL_checkinteger(L, 1), (GLint)luaL_checkinteger(L, 2));
-    return 0;
-}
-static int l_gl_fogfv(lua_State* L) {
-    GLenum pname = (GLenum)luaL_checkinteger(L, 1);
-    GLfloat params[4] = {
-        (GLfloat)luaL_checknumber(L, 2),
-        (GLfloat)luaL_checknumber(L, 3),
-        (GLfloat)luaL_checknumber(L, 4),
-        (GLfloat)luaL_optnumber(L, 5, 1.0f)
-    };
-    glFogfv(pname, params);
-    return 0;
-}
-static int l_gl_render_mode(lua_State* L) {
-    lua_pushinteger(L, glRenderMode((GLenum)luaL_checkinteger(L, 1)));
-    return 1;
-}
-static int l_gl_tex_genf(lua_State* L) {
-    glTexGenf((GLenum)luaL_checkinteger(L, 1), (GLenum)luaL_checkinteger(L, 2), (GLfloat)luaL_checknumber(L, 3));
-    return 0;
-}
-static int l_gl_tex_geni(lua_State* L) {
-    glTexGeni((GLenum)luaL_checkinteger(L, 1), (GLenum)luaL_checkinteger(L, 2), (GLint)luaL_checkinteger(L, 3));
-    return 0;
-}
-static int l_gl_tex_genfv(lua_State* L) {
-    GLenum coord = (GLenum)luaL_checkinteger(L, 1);
-    GLenum pname = (GLenum)luaL_checkinteger(L, 2);
-    GLfloat params[4] = {
-        (GLfloat)luaL_checknumber(L, 3),
-        (GLfloat)luaL_checknumber(L, 4),
-        (GLfloat)luaL_checknumber(L, 5),
-        (GLfloat)luaL_checknumber(L, 6)
-    };
-    glTexGenfv(coord, pname, params);
-    return 0;
-}
-static int l_glu_build2d_mipmaps(lua_State* L) {
-    GLenum target = (GLenum)luaL_checkinteger(L, 1);
-    GLint components = (GLint)luaL_checkinteger(L, 2);
-    GLsizei width = (GLsizei)luaL_checkinteger(L, 3);
-    GLsizei height = (GLsizei)luaL_checkinteger(L, 4);
-    GLenum format = (GLenum)luaL_checkinteger(L, 5);
-    GLenum type = (GLenum)luaL_checkinteger(L, 6);
-    size_t len;
-    const char* data = luaL_checklstring(L, 7, &len);
-    int res = gluBuild2DMipmaps(target, components, width, height, format, type, data);
-    lua_pushinteger(L, res);
-    return 1;
 }
 static int l_gl_load_texture_mipmapped(lua_State* L) {
     const char* path = luaL_checkstring(L, 1);
@@ -5539,12 +5647,15 @@ static int l_gl_load_texture_mipmapped(lua_State* L) {
         }
     }
     bmp.UnlockBits(&bmpData);
-    GLuint texID;
+    GLuint texID = 0;
     glGenTextures(1, &texID);
     glBindTexture(GL_TEXTURE_2D, texID);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    gluBuild2DMipmaps(GL_TEXTURE_2D, 4, w, h, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+    if (glGenerateMipmap) {
+        glGenerateMipmap(GL_TEXTURE_2D);
+    }
     lua_pushinteger(L, texID);
     return 1;
 }
@@ -5552,28 +5663,13 @@ static int l_gl_print(lua_State* L) {
     const char* text = luaL_checkstring(L, 1);
     float x = (float)luaL_checknumber(L, 2);
     float y = (float)luaL_checknumber(L, 3);
-    float z = (float)luaL_optnumber(L, 4, 0.0f);
     int sz = (int)luaL_optinteger(L, 5, 16);
     const char* fontName = luaL_optstring(L, 6, "Segoe UI");
-    HDC hdc = wglGetCurrentDC();
-    HGLRC ctx = wglGetCurrentContext();
-    if (!hdc || !ctx) return 0;
-    uint64_t hash = 2166136261u;
-    for (const char* p = fontName; *p; ++p) {
-        hash ^= (uint8_t)*p;
-        hash *= 16777619u;
-    }
-    hash ^= (uint64_t)sz;
-    HFONT font = FontCache::get(sz, false, false, fontName);
-    GLuint base = GLFont::get(hdc, ctx, font, hash);
-    thread_local wchar_t wbuf[4096];
-    int wlen = MultiByteToWideChar(CP_UTF8, 0, text, -1, wbuf, 4096);
-    if (wlen > 0) wlen--;
-    glRasterPos3f(x, y, z);
-    glPushAttrib(GL_LIST_BIT);
-    glListBase(base);
-    glCallLists(wlen, GL_UNSIGNED_SHORT, wbuf);
-    glPopAttrib();
+    float r = (float)luaL_optnumber(L, 7, 1.0f);
+    float g = (float)luaL_optnumber(L, 8, 1.0f);
+    float b = (float)luaL_optnumber(L, 9, 1.0f);
+    float a = (float)luaL_optnumber(L, 10, 1.0f);
+    CoreText::render(text, x, y, sz, fontName, r, g, b, a);
     return 0;
 }
 static int l_download_async(lua_State* L) {
@@ -5878,10 +5974,7 @@ void init() {
     lua_register(g_L, "mat4_lookat", l_mat4_lookat);
     lua_register(g_L, "mat4_mul", l_mat4_mul);
     lua_register(g_L, "mat4_rotate_y", l_mat4_rotate_y);
-    lua_register(g_L, "glu_perspective", l_glu_perspective);
-    lua_register(g_L, "glu_look_at", l_glu_look_at);
     lua_register(g_L, "gl_blend_func", l_gl_blend_func);
-    lua_register(g_L, "glu_sphere", l_glu_sphere);
     lua_register(g_L, "gl_bind_texture", l_gl_bind_texture);
     lua_register(g_L, "gl_uniform_1i", l_gl_uniform_1i);
     lua_register(g_L, "gl_text_coord2f", l_gl_text_coord2f);
@@ -5891,18 +5984,8 @@ void init() {
     lua_register(g_L, "load_ttf", l_load_ttf);
     lua_register(g_L, "gl_delete_texture", l_gl_delete_texture);
     lua_register(g_L, "gl_tex_parameteri", l_gl_tex_parameteri);
-    lua_register(g_L, "gl_lightfv", l_gl_lightfv);
-    lua_register(g_L, "gl_materialfv", l_gl_materialfv);
     lua_register(g_L, "gl_create_buffer", l_gl_create_buffer);
     lua_register(g_L, "gl_draw_buffer", l_gl_draw_buffer);
-    lua_register(g_L, "gl_fogf", l_gl_fogf);
-    lua_register(g_L, "gl_fogi", l_gl_fogi);
-    lua_register(g_L, "gl_fogfv", l_gl_fogfv);
-    lua_register(g_L, "gl_render_mode", l_gl_render_mode);
-    lua_register(g_L, "gl_tex_genf", l_gl_tex_genf);
-    lua_register(g_L, "gl_tex_geni", l_gl_tex_geni);
-    lua_register(g_L, "gl_tex_genfv", l_gl_tex_genfv);
-    lua_register(g_L, "glu_build2d_mipmaps", l_glu_build2d_mipmaps);
     lua_register(g_L, "gl_load_texture_mipmapped", l_gl_load_texture_mipmapped);
     lua_register(g_L, "gl_print", l_gl_print);
     registerGLConstants(g_L);
@@ -5922,6 +6005,7 @@ void reset() {
         cb();
     }
     Plugins::g_onResetCallbacks.clear();
+    Plugins::g_frameCallbacks.clear();
     releaseMouse();
     if (g_fullscreenCanvas) exitFullscreenCanvas();
     for (auto& kv : g_timerRefs) {
@@ -5943,7 +6027,7 @@ void reset() {
     ImageCache::clear();
     WasmEngine::clear();
     ModernGL::clear();
-    GLFont::clear();
+    CoreText::clear();
     GLModelCache::clear();
     GradientText::cleanupBuffers();
     if (g_L) {
@@ -6138,7 +6222,8 @@ namespace Render {
                 }
                 idx = (idx + 1) & (ts_cap - 1);
             }
-            ts_tab[idx] = {k, v, true}; ts_sz++;
+            ts_tab[idx] = {k, v, true};
+            ts_sz++;
         }
         int* get_est(const HTP::Elem* k) {
             if (!est_cap) return nullptr;
@@ -7604,11 +7689,6 @@ HTP::Doc g_docs[MAX_LUME_TABS];
 Render::Engine g_rens[MAX_LUME_TABS];
 LumeVector<LumeString> g_hists[MAX_LUME_TABS];
 int g_histPoss[MAX_LUME_TABS];
-struct __InitHist {
-    __InitHist() {
-        for (int i = 0; i < MAX_LUME_TABS; i++) g_histPoss[i] = -1;
-    }
-} __initHist;
 #define g_doc g_docs[g_tabIdx]
 #define g_ren g_rens[g_tabIdx]
 #define g_hist g_hists[g_tabIdx]
@@ -7767,7 +7847,6 @@ void loadContent(const LumeString& content, const LumeString& url, bool isIntern
     Plugins::g_activeCustomPageContext = nullptr;
     Script::reset();
     Script::init();
-    Plugins::initAllPlugins(Script::g_L);
     LumeString scheme = displayUrl.substr(0, displayUrl.find("://"));
     if (Plugins::g_protocols.find(scheme) != Plugins::g_protocols.end() && !content.empty() && content[0] >= '0' && content[0] <= '9') {
         unsigned long long ptrVal = 0;
@@ -8034,7 +8113,7 @@ void navigateTo(const LumeString& url) {
             pp.navId = myNavId;
             if (ctx) {
                 char ptrStr[64];
-                sprintf_s(ptrStr, sizeof(ptrStr), "%llu", (unsigned long long)ctx);
+                wsprintfA(ptrStr, "%I64u", (unsigned __int64)ctx);
                 pp.body = ptrStr;
             }
             else {
@@ -9103,13 +9182,15 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_TIMER: {
         int id = (int)wp;
         if (id == IDT_FRAME_PACING) {
-            double now = getHighResTime();
-            static double lastFrameTime = now;
-            double dt = now - lastFrameTime;
-            lastFrameTime = now;
-            if (dt > 0.1) dt = 0.1;
-            for (auto cb : Plugins::g_frameCallbacks) {
-                cb(dt);
+            if (Plugins::g_activeCustomEngine || Plugins::g_activeProtocol) {
+                double now = getHighResTime();
+                static double lastFrameTime = now;
+                double dt = now - lastFrameTime;
+                lastFrameTime = now;
+                if (dt > 0.1) dt = 0.1;
+                for (auto cb : Plugins::g_frameCallbacks) {
+                    cb(dt);
+                }
             }
             if (g_renderPending && g_mainWnd) {
                 g_renderPending = false;
@@ -9278,6 +9359,11 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
     return DefWindowProcW(hw, msg, wp, lp);
 }
 int WINAPI WinMain(HINSTANCE hI, HINSTANCE, LPSTR cmd, int show) {
+    for (int i = 0; i < MAX_LUME_TABS; i++) {
+        g_histPoss[i] = -1;
+        Script::g_keyDownRef_arr[i] = -2;
+    }
+    Themes::g_theme = LumeTheme();
     SetPriorityClass(GetCurrentProcess(), ABOVE_NORMAL_PRIORITY_CLASS);
     INITCOMMONCONTROLSEX ic = {sizeof(ic), ICC_STANDARD_CLASSES};
     InitCommonControlsEx(&ic);
