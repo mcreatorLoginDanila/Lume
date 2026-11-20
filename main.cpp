@@ -150,18 +150,20 @@ public:
     }
     iterator erase(iterator it) {
         if (it >= begin() && it < end()) {
-            it->~T();
             size_t idx = it - begin();
             for (size_t i = idx; i < m_size - 1; ++i) {
-                new (&m_data[i]) T(static_cast<T&&>(m_data[i + 1]));
-                m_data[i + 1].~T();
+                m_data[i] = static_cast<T&&>(m_data[i + 1]);
             }
+            m_data[m_size - 1].~T();
             m_size--;
             return begin() + idx;
         }
         return end();
     }
-    void clear() {for (size_t i = 0; i < m_size; ++i) m_data[i].~T(); m_size = 0;}
+    void clear() {
+        for (size_t i = 0; i < m_size; ++i) m_data[i].~T();
+        m_size = 0;
+    }
     size_t size() const {return m_size;}
     bool empty() const {return m_size == 0;}
     size_t capacity() const {return m_capacity;}
@@ -415,7 +417,7 @@ public:
         size_t mask = m_capacity - 1;
         uint64_t h = LumeHasher<K>{}(key);
         size_t idx = h & mask;
-        while (true) {
+        for (size_t probe = 0; probe < m_capacity; ++probe) {
             Node& n = m_nodes[idx];
             if (n.state == 0) return end();
             if (n.state == 1 && n.kv.first == key) {
@@ -423,6 +425,7 @@ public:
             }
             idx = (idx + 1) & mask;
         }
+        return end();
     }
     void erase(iterator it) {
         if (it != end() && it.m_ptr && it.m_ptr->state == 1) {
@@ -1016,29 +1019,55 @@ private:
     struct Model : Concept {
         F func;
         Model(F f) : func(static_cast<F&&>(f)) {}
-        void invoke() override { func(); }
-        Concept* clone() const override { return new Model<F>(func); }
+        void invoke() override {
+            func();
+        }
+        Concept* clone() const override {
+            return new Model<F>(func);
+        }
     };
     Concept* ptr = nullptr;
 public:
     LumeAction() = default;
     template<typename F>
-    LumeAction(F f) { ptr = new Model<F>(static_cast<F&&>(f)); }
-    LumeAction(const LumeAction& o) { if (o.ptr) ptr = o.ptr->clone(); }
-    LumeAction(LumeAction&& o) noexcept : ptr(o.ptr) { o.ptr = nullptr; }
+    LumeAction(F f) {
+        ptr = new Model<F>(static_cast<F&&>(f));
+    }
+    LumeAction(const LumeAction& o) {
+        if (o.ptr) ptr = o.ptr->clone();
+    }
+    LumeAction(LumeAction&& o) noexcept : ptr(o.ptr) {
+        o.ptr = nullptr;
+    }
     LumeAction& operator=(const LumeAction& o) {
-        if (this != &o) { if (ptr) delete ptr; ptr = o.ptr ? o.ptr->clone() : nullptr; }
+        if (this != &o) {
+            if (ptr) delete ptr;
+            ptr = o.ptr ? o.ptr->clone() : nullptr;
+        }
         return *this;
     }
     LumeAction& operator=(LumeAction&& o) noexcept {
-        if (this != &o) { if (ptr) delete ptr; ptr = o.ptr; o.ptr = nullptr; }
+        if (this != &o) {
+            if (ptr) delete ptr;
+            ptr = o.ptr;
+            o.ptr = nullptr;
+        }
         return *this;
     }
-    ~LumeAction() { if (ptr) delete ptr; }
-    void operator()() const { if (ptr) ptr->invoke(); }
-    explicit operator bool() const { return ptr != nullptr; }
+    ~LumeAction() {
+        if (ptr) delete ptr;
+    }
+    void operator()() const {
+        if (ptr) ptr->invoke();
+    }
+    explicit operator bool() const {
+        return ptr != nullptr;
+    }
 };
 using LumeString = LumeBasicString<char>;
+void consoleLog(const char* text);
+void consoleLog(const LumeString& text);
+void openConsoleWindow();
 using LumeWString = LumeBasicString<wchar_t>;
 inline LumeString lume_to_string(int val) {
     char buf[32];
@@ -1222,6 +1251,67 @@ DEF_GL_FUNC(PFNGLUNIFORMMATRIX4FVPROC, glUniformMatrix4fv);
 DEF_GL_FUNC(PFNGLACTIVETEXTUREPROC, glActiveTexture);
 DEF_GL_FUNC(PFNGLGENERATEMIPMAPPROC, glGenerateMipmap);
 DEF_GL_FUNC(PFNWGLCREATECONTEXTATTRIBSARBPROC, wglCreateContextAttribsARB);
+#define GL_FRAMEBUFFER 0x8D40
+#define GL_RENDERBUFFER 0x8D41
+#define GL_COLOR_ATTACHMENT0 0x8CE0
+#define GL_DEPTH_ATTACHMENT 0x8D00
+#define GL_DEPTH_COMPONENT24 0x81A6
+#define GL_FRAMEBUFFER_COMPLETE 0x8CD5
+#define GL_BACK 0x0405
+#define GL_FRONT 0x0404
+#define GL_FRONT_AND_BACK 0x0408
+#define GL_CCW 0x0901
+#define GL_CW 0x0900
+#define GL_LESS 0x0201
+#define GL_LEQUAL 0x0203
+#define GL_ALWAYS 0x0207
+#define GL_LINE 0x1B01
+#define GL_FILL 0x1B02
+#define GL_SCISSOR_TEST 0x0C11
+typedef void (APIENTRY* PFNGLGENFRAMEBUFFERSPROC)(GLsizei n, GLuint* framebuffers);
+typedef void (APIENTRY* PFNGLBINDFRAMEBUFFERPROC)(GLenum target, GLuint framebuffer);
+typedef void (APIENTRY* PFNGLDELETEFRAMEBUFFERSPROC)(GLsizei n, const GLuint* framebuffers);
+typedef void (APIENTRY* PFNGLFRAMEBUFFERTEXTURE2DPROC)(GLenum target, GLenum attachment, GLenum textarget, GLuint texture, GLint level);
+typedef GLenum(APIENTRY* PFNGLCHECKFRAMEBUFFERSTATUSPROC)(GLenum target);
+typedef void (APIENTRY* PFNGLGENRENDERBUFFERSPROC)(GLsizei n, GLuint* renderbuffers);
+typedef void (APIENTRY* PFNGLBINDRENDERBUFFERPROC)(GLenum target, GLuint renderbuffer);
+typedef void (APIENTRY* PFNGLRENDERBUFFERSTORAGEPROC)(GLenum target, GLenum internalformat, GLsizei width, GLsizei height);
+typedef void (APIENTRY* PFNGLFRAMEBUFFERRENDERBUFFERPROC)(GLenum target, GLenum attachment, GLenum renderbuffertarget, GLuint renderbuffer);
+typedef void (APIENTRY* PFNGLDELETERENDERBUFFERSPROC)(GLsizei n, const GLuint* renderbuffers);
+typedef void (APIENTRY* PFNGLDRAWARRAYSINSTANCEDPROC)(GLenum mode, GLint first, GLsizei count, GLsizei instancecount);
+typedef void (APIENTRY* PFNGLDRAWELEMENTSINSTANCEDPROC)(GLenum mode, GLsizei count, GLenum type, const void* indices, GLsizei instancecount);
+typedef void (APIENTRY* PFNGLVERTEXATTRIBDIVISORPROC)(GLuint index, GLuint divisor);
+DEF_GL_FUNC(PFNGLGENFRAMEBUFFERSPROC, glGenFramebuffers);
+DEF_GL_FUNC(PFNGLBINDFRAMEBUFFERPROC, glBindFramebuffer);
+DEF_GL_FUNC(PFNGLDELETEFRAMEBUFFERSPROC, glDeleteFramebuffers);
+DEF_GL_FUNC(PFNGLFRAMEBUFFERTEXTURE2DPROC, glFramebufferTexture2D);
+DEF_GL_FUNC(PFNGLCHECKFRAMEBUFFERSTATUSPROC, glCheckFramebufferStatus);
+DEF_GL_FUNC(PFNGLGENRENDERBUFFERSPROC, glGenRenderbuffers);
+DEF_GL_FUNC(PFNGLBINDRENDERBUFFERPROC, glBindRenderbuffer);
+DEF_GL_FUNC(PFNGLRENDERBUFFERSTORAGEPROC, glRenderbufferStorage);
+DEF_GL_FUNC(PFNGLFRAMEBUFFERRENDERBUFFERPROC, glFramebufferRenderbuffer);
+DEF_GL_FUNC(PFNGLDELETERENDERBUFFERSPROC, glDeleteRenderbuffers);
+DEF_GL_FUNC(PFNGLDRAWARRAYSINSTANCEDPROC, glDrawArraysInstanced);
+DEF_GL_FUNC(PFNGLDRAWELEMENTSINSTANCEDPROC, glDrawElementsInstanced);
+DEF_GL_FUNC(PFNGLVERTEXATTRIBDIVISORPROC, glVertexAttribDivisor);
+#define GL_TEXTURE_3D 0x806F
+#define GL_TEXTURE_WRAP_R 0x8072
+#define GL_TEXTURE_CUBE_MAP 0x8513
+#define GL_TEXTURE_CUBE_MAP_POSITIVE_X 0x8515
+#define GL_COMPUTE_SHADER 0x91B9
+#define GL_SHADER_STORAGE_BUFFER 0x90D2
+#define GL_SHADER_STORAGE_BARRIER_BIT 0x2000
+#define GL_ALL_BARRIER_BITS 0xFFFFFFFF
+typedef void (APIENTRY* PFNGLTEXIMAGE3DPROC)(GLenum target, GLint level, GLint internalformat, GLsizei width, GLsizei height, GLsizei depth, GLint border, GLenum format, GLenum type, const void* pixels);
+typedef void (APIENTRY* PFNGLDISPATCHCOMPUTEPROC)(GLuint num_groups_x, GLuint num_groups_y, GLuint num_groups_z);
+typedef void (APIENTRY* PFNGLMEMORYBARRIERPROC)(GLbitfield barriers);
+typedef void (APIENTRY* PFNGLBINDBUFFERBASEPROC)(GLenum target, GLuint index, GLuint buffer);
+typedef void (APIENTRY* PFNGLGETBUFFERSUBDATAPROC)(GLenum target, GLintptr offset, GLsizeiptr size, void* data);
+DEF_GL_FUNC(PFNGLTEXIMAGE3DPROC, glTexImage3D);
+DEF_GL_FUNC(PFNGLDISPATCHCOMPUTEPROC, glDispatchCompute);
+DEF_GL_FUNC(PFNGLMEMORYBARRIERPROC, glMemoryBarrier);
+DEF_GL_FUNC(PFNGLBINDBUFFERBASEPROC, glBindBufferBase);
+DEF_GL_FUNC(PFNGLGETBUFFERSUBDATAPROC, glGetBufferSubData);
 namespace GLLoader {
     static HMODULE hGL = nullptr;
     static bool g_loaded = false;
@@ -1274,6 +1364,24 @@ namespace GLLoader {
         LOAD_PROC(PFNGLUNIFORMMATRIX4FVPROC, glUniformMatrix4fv);
         LOAD_PROC(PFNGLACTIVETEXTUREPROC, glActiveTexture);
         LOAD_PROC(PFNGLGENERATEMIPMAPPROC, glGenerateMipmap);
+        LOAD_PROC(PFNGLGENFRAMEBUFFERSPROC, glGenFramebuffers);
+        LOAD_PROC(PFNGLBINDFRAMEBUFFERPROC, glBindFramebuffer);
+        LOAD_PROC(PFNGLDELETEFRAMEBUFFERSPROC, glDeleteFramebuffers);
+        LOAD_PROC(PFNGLFRAMEBUFFERTEXTURE2DPROC, glFramebufferTexture2D);
+        LOAD_PROC(PFNGLCHECKFRAMEBUFFERSTATUSPROC, glCheckFramebufferStatus);
+        LOAD_PROC(PFNGLGENRENDERBUFFERSPROC, glGenRenderbuffers);
+        LOAD_PROC(PFNGLBINDRENDERBUFFERPROC, glBindRenderbuffer);
+        LOAD_PROC(PFNGLRENDERBUFFERSTORAGEPROC, glRenderbufferStorage);
+        LOAD_PROC(PFNGLFRAMEBUFFERRENDERBUFFERPROC, glFramebufferRenderbuffer);
+        LOAD_PROC(PFNGLDELETERENDERBUFFERSPROC, glDeleteRenderbuffers);
+        LOAD_PROC(PFNGLDRAWARRAYSINSTANCEDPROC, glDrawArraysInstanced);
+        LOAD_PROC(PFNGLDRAWELEMENTSINSTANCEDPROC, glDrawElementsInstanced);
+        LOAD_PROC(PFNGLVERTEXATTRIBDIVISORPROC, glVertexAttribDivisor);
+        LOAD_PROC(PFNGLTEXIMAGE3DPROC, glTexImage3D);
+        LOAD_PROC(PFNGLDISPATCHCOMPUTEPROC, glDispatchCompute);
+        LOAD_PROC(PFNGLMEMORYBARRIERPROC, glMemoryBarrier);
+        LOAD_PROC(PFNGLBINDBUFFERBASEPROC, glBindBufferBase);
+        LOAD_PROC(PFNGLGETBUFFERSUBDATAPROC, glGetBufferSubData);
         wglMakeCurrent(nullptr, nullptr);
         wglDeleteContext(dummyRC);
         ReleaseDC(dummyWnd, dummyDC);
@@ -2160,17 +2268,28 @@ struct Resp {
 };
 Resp fetch(const URL& url, bool verifyCert = false) {
     Resp resp;
-    wchar_t whost[1024]; MultiByteToWideChar(CP_UTF8, 0, url.host.c_str(), -1, whost, 1024);
-    wchar_t wpath[2048]; MultiByteToWideChar(CP_UTF8, 0, url.path.c_str(), -1, wpath, 2048);
+    wchar_t whost[1024];
+    MultiByteToWideChar(CP_UTF8, 0, url.host.c_str(), -1, whost, 1024);
+    wchar_t wpath[2048];
+    MultiByteToWideChar(CP_UTF8, 0, url.path.c_str(), -1, wpath, 2048);
     HINTERNET hSession = WinHttpOpen(L"Lume Browser Engine", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
-    if (!hSession) { resp.error = "WinHttpOpen failed"; return resp; }
+    if (!hSession) {
+        resp.error = "WinHttpOpen failed";
+        return resp;
+    }
     HINTERNET hConnect = WinHttpConnect(hSession, whost, url.port, 0);
-    if (!hConnect) { WinHttpCloseHandle(hSession); resp.error = "WinHttpConnect failed"; return resp; }
+    if (!hConnect) {
+        WinHttpCloseHandle(hSession);
+        resp.error = "WinHttpConnect failed";
+        return resp;
+    }
     DWORD flags = (url.proto == "https") ? WINHTTP_FLAG_SECURE : 0;
     HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"GET", wpath, NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, flags);
     if (!hRequest) {
-        WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession);
-        resp.error = "WinHttpOpenRequest failed"; return resp;
+        WinHttpCloseHandle(hConnect);
+        WinHttpCloseHandle(hSession);
+        resp.error = "WinHttpOpenRequest failed";
+        return resp;
     }
     if (flags & WINHTTP_FLAG_SECURE) {
         if (!verifyCert) {
@@ -4366,7 +4485,7 @@ namespace Bindings {
         PostMessage(g_mainWnd, WM_NAVIGATE_DEFERRED, (WPARAM)u, 0);
     }
     void alert(const char* msg) {
-        MessageBoxU(g_mainWnd, msg, "Lume", MB_OK);
+        consoleLog(LumeString("[Alert] ") + (msg ? msg : ""));
     }
     void refresh() {invalidateContent();}
     const char* get_input(const char* id) {
@@ -4454,15 +4573,11 @@ namespace Bindings {
 }
 static int g_timerN = 10000;
 namespace Script {
-    bool safeCall(lua_State* L, int nargs, int nresults, const char* contextName = "Lua Error") {
+    static bool safeCall(lua_State* L, int nargs, int nresults, const char* contextName = "Lua Error") {
         if (!L) return false;
         if (lua_pcall(L, nargs, nresults, 0) != 0) {
             const char* err = lua_tostring(L, -1);
-            if (!err) err = "Unknown Lua runtime error";
-            MessageBoxU(g_mainWnd, err, contextName, MB_OK | MB_ICONERROR);
-            OutputDebugStringA(err);
-            OutputDebugStringA("\n");
-
+            consoleLog(LumeString("[") + contextName + "] " + (err ? err : "Unknown error"));
             lua_pop(L, 1);
             return false;
         }
@@ -4696,7 +4811,7 @@ static int l_gl_create_program(lua_State* L) {
         if (!ok) {
             char log[1024] = {};
             glGetShaderInfoLog(s, 1024, nullptr, log);
-            MessageBoxA(g_mainWnd, log, type == GL_VERTEX_SHADER ? "Vertex Shader Error" : "Fragment Shader Error", MB_OK | MB_ICONERROR);
+            consoleLog(LumeString("[Shader Error] ") + log);
             glDeleteShader(s);
             return 0;
         }
@@ -4719,7 +4834,7 @@ static int l_gl_create_program(lua_State* L) {
     if (!linked) {
         char log[1024] = {};
         glGetProgramInfoLog(prog, 1024, nullptr, log);
-        MessageBoxA(g_mainWnd, log, "Shader Link Error", MB_OK | MB_ICONERROR);
+        consoleLog(LumeString("[Shader Error] ") + log);
         glDeleteProgram(prog);
         lua_pushnil(L);
         return 1;
@@ -4752,14 +4867,30 @@ static int l_gl_create_mesh(lua_State* L) {
         verts.push_back((float)lua_tonumber(L, -1));
         lua_pop(L, 1);
     }
+    LumeVector<unsigned int> indices;
+    if (lua_istable(L, 2)) {
+        int iCount = (int)luaL_len(L, 2);
+        indices.reserve(iCount);
+        for (int i = 1; i <= iCount; i++) {
+            lua_rawgeti(L, 2, i);
+            indices.push_back((unsigned int)lua_tointeger(L, -1));
+            lua_pop(L, 1);
+        }
+    }
     int stride = (int)luaL_optinteger(L, 3, 3);
     ModernGL::Mesh mesh = {};
     mesh.vertexCount = (int)(verts.size() / stride);
+    mesh.indexCount = (int)indices.size();
     glGenVertexArrays(1, &mesh.vao);
     glGenBuffers(1, &mesh.vbo);
     glBindVertexArray(mesh.vao);
     glBindBuffer(GL_ARRAY_BUFFER, mesh.vbo);
     glBufferData(GL_ARRAY_BUFFER, verts.size() * sizeof(float), verts.data(), GL_STATIC_DRAW);
+    if (mesh.indexCount > 0) {
+        glGenBuffers(1, &mesh.ebo);
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, mesh.ebo);
+        glBufferData(GL_ELEMENT_ARRAY_BUFFER, indices.size() * sizeof(unsigned int), indices.data(), GL_STATIC_DRAW);
+    }
     if (stride == 3) {
         glEnableVertexAttribArray(0);
         glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
@@ -4790,13 +4921,30 @@ static int l_gl_create_mesh(lua_State* L) {
     lua_pushinteger(L, id);
     return 1;
 }
-static int l_gl_draw_mesh(lua_State* L) {
+static int l_gl_delete_mesh(lua_State* L) {
     int id = (int)luaL_checkinteger(L, 1);
+    auto it = ModernGL::g_meshes.find(id);
+    if (it != ModernGL::g_meshes.end()) {
+        if (it->second.vao) glDeleteVertexArrays(1, &it->second.vao);
+        if (it->second.vbo) glDeleteBuffers(1, &it->second.vbo);
+        ModernGL::g_meshes.erase(it);
+    }
+    return 0;
+}
+static int l_gl_draw_mesh(lua_State* L) {
+    if (!lua_isnumber(L, 1)) return 0;
+    int id = (int)lua_tointeger(L, 1);
+    if (id <= 0) return 0;
     GLenum mode = (GLenum)luaL_optinteger(L, 2, GL_TRIANGLES);
     auto it = ModernGL::g_meshes.find(id);
     if (it != ModernGL::g_meshes.end()) {
         glBindVertexArray(it->second.vao);
-        glDrawArrays(mode, 0, it->second.vertexCount);
+        if (it->second.indexCount > 0) {
+            glDrawElements(mode, it->second.indexCount, GL_UNSIGNED_INT, 0);
+        }
+        else {
+            glDrawArrays(mode, 0, it->second.vertexCount);
+        }
         glBindVertexArray(0);
     }
     return 0;
@@ -4805,7 +4953,6 @@ static int l_gl_uniform_mat4(lua_State* L) {
     int progId = (int)luaL_checkinteger(L, 1);
     const char* name = luaL_checkstring(L, 2);
     luaL_checktype(L, 3, LUA_TTABLE);
-
     float m[16];
     for (int i = 1; i <= 16; i++) {
         lua_rawgeti(L, 3, i);
@@ -4826,13 +4973,377 @@ static int l_gl_uniform_4f(lua_State* L) {
     float g = (float)luaL_checknumber(L, 4);
     float b = (float)luaL_checknumber(L, 5);
     float a = (float)luaL_optnumber(L, 6, 1.0f);
-
     auto it = ModernGL::g_programs.find(progId);
     if (it != ModernGL::g_programs.end()) {
         GLint loc = glGetUniformLocation(it->second, name);
         if (loc != -1) glUniform4f(loc, r, g, b, a);
     }
     return 0;
+}
+struct LumeFBO {
+    GLuint fbo = 0;
+    GLuint colorTex = 0;
+    GLuint depthRbo = 0;
+    int w = 0, h = 0;
+};
+static LumeMap<int, LumeFBO> g_fbos;
+static int g_nextFboId = 1;
+static int l_gl_create_fbo(lua_State* L) {
+    int w = (int)luaL_checkinteger(L, 1);
+    int h = (int)luaL_checkinteger(L, 2);
+    LumeFBO fb;
+    fb.w = w;
+    fb.h = h;
+    glGenFramebuffers(1, &fb.fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, fb.fbo);
+    glGenTextures(1, &fb.colorTex);
+    glBindTexture(GL_TEXTURE_2D, fb.colorTex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, fb.colorTex, 0);
+    glGenRenderbuffers(1, &fb.depthRbo);
+    glBindRenderbuffer(GL_RENDERBUFFER, fb.depthRbo);
+    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, w, h);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, fb.depthRbo);
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        lua_pushnil(L);
+        return 1;
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    int id = g_nextFboId++;
+    g_fbos[id] = fb;
+    lua_pushinteger(L, id);
+    lua_pushinteger(L, fb.colorTex);
+    return 2;
+}
+static int l_gl_bind_fbo(lua_State* L) {
+    int id = (int)luaL_optinteger(L, 1, 0);
+    if (id == 0) {
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    }
+    else {
+        auto it = g_fbos.find(id);
+        if (it != g_fbos.end()) glBindFramebuffer(GL_FRAMEBUFFER, it->second.fbo);
+    }
+    return 0;
+}
+static int l_gl_delete_fbo(lua_State* L) {
+    int id = (int)luaL_checkinteger(L, 1);
+    auto it = g_fbos.find(id);
+    if (it != g_fbos.end()) {
+        if (it->second.colorTex) glDeleteTextures(1, &it->second.colorTex);
+        if (it->second.depthRbo) glDeleteRenderbuffers(1, &it->second.depthRbo);
+        if (it->second.fbo) glDeleteFramebuffers(1, &it->second.fbo);
+        g_fbos.erase(it);
+    }
+    return 0;
+}
+static int l_gl_draw_mesh_instanced(lua_State* L) {
+    int id = (int)luaL_checkinteger(L, 1);
+    int count = (int)luaL_checkinteger(L, 2);
+    GLenum mode = (GLenum)luaL_optinteger(L, 3, GL_TRIANGLES);
+    auto it = ModernGL::g_meshes.find(id);
+    if (it != ModernGL::g_meshes.end() && count > 0) {
+        glBindVertexArray(it->second.vao);
+        if (it->second.indexCount > 0) {
+            glDrawElementsInstanced(mode, it->second.indexCount, GL_UNSIGNED_INT, 0, count);
+        }
+        else {
+            glDrawArraysInstanced(mode, 0, it->second.vertexCount, count);
+        }
+        glBindVertexArray(0);
+    }
+    return 0;
+}
+static int l_gl_cull_face(lua_State* L) {
+    glCullFace((GLenum)luaL_optinteger(L, 1, GL_BACK));
+    return 0;
+}
+static int l_gl_front_face(lua_State* L) {
+    glFrontFace((GLenum)luaL_optinteger(L, 1, GL_CCW));
+    return 0;
+}
+static int l_gl_depth_mask(lua_State* L) {
+    glDepthMask(lua_toboolean(L, 1) ? GL_TRUE : GL_FALSE);
+    return 0;
+}
+static int l_gl_depth_func(lua_State* L) {
+    glDepthFunc((GLenum)luaL_optinteger(L, 1, GL_LESS));
+    return 0;
+}
+static int l_gl_polygon_mode(lua_State* L) {
+    glPolygonMode(GL_FRONT_AND_BACK, (GLenum)luaL_optinteger(L, 1, GL_FILL));
+    return 0;
+}
+static int l_gl_scissor(lua_State* L) {
+    glScissor(
+        (GLint)luaL_checkinteger(L, 1),
+        (GLint)luaL_checkinteger(L, 2),
+        (GLsizei)luaL_checkinteger(L, 3),
+        (GLsizei)luaL_checkinteger(L, 4)
+    );
+    return 0;
+}
+static int l_gl_update_mesh_sub(lua_State* L) {
+    int id = (int)luaL_checkinteger(L, 1);
+    luaL_checktype(L, 2, LUA_TTABLE);
+    int offsetFloats = (int)luaL_optinteger(L, 3, 0);
+    auto it = ModernGL::g_meshes.find(id);
+    if (it != ModernGL::g_meshes.end()) {
+        int vCount = (int)luaL_len(L, 2);
+        LumeVector<float> verts(vCount);
+        for (int i = 1; i <= vCount; i++) {
+            lua_rawgeti(L, 2, i);
+            verts[i - 1] = (float)lua_tonumber(L, -1);
+            lua_pop(L, 1);
+        }
+        glBindBuffer(GL_ARRAY_BUFFER, it->second.vbo);
+        glBufferSubData(GL_ARRAY_BUFFER, offsetFloats * sizeof(float), verts.size() * sizeof(float), verts.data());
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
+    }
+    return 0;
+}
+static int l_gl_uniform_1f(lua_State* L) {
+    int progId = (int)luaL_checkinteger(L, 1);
+    const char* name = luaL_checkstring(L, 2);
+    float v0 = (float)luaL_checknumber(L, 3);
+    auto it = ModernGL::g_programs.find(progId);
+    if (it != ModernGL::g_programs.end() && glUniform1f) {
+        GLint loc = glGetUniformLocation(it->second, name);
+        if (loc != -1) glUniform1f(loc, v0);
+    }
+    return 0;
+}
+static int l_gl_uniform_2f(lua_State* L) {
+    int progId = (int)luaL_checkinteger(L, 1);
+    const char* name = luaL_checkstring(L, 2);
+    float v0 = (float)luaL_checknumber(L, 3);
+    float v1 = (float)luaL_checknumber(L, 4);
+    auto it = ModernGL::g_programs.find(progId);
+    if (it != ModernGL::g_programs.end() && glUniform2f) {
+        GLint loc = glGetUniformLocation(it->second, name);
+        if (loc != -1) glUniform2f(loc, v0, v1);
+    }
+    return 0;
+}
+static int l_gl_uniform_3f(lua_State* L) {
+    int progId = (int)luaL_checkinteger(L, 1);
+    const char* name = luaL_checkstring(L, 2);
+    float v0 = (float)luaL_checknumber(L, 3);
+    float v1 = (float)luaL_checknumber(L, 4);
+    float v2 = (float)luaL_checknumber(L, 5);
+    auto it = ModernGL::g_programs.find(progId);
+    if (it != ModernGL::g_programs.end() && glUniform3f) {
+        GLint loc = glGetUniformLocation(it->second, name);
+        if (loc != -1) glUniform3f(loc, v0, v1, v2);
+    }
+    return 0;
+}
+static int l_gl_uniform_mat4_array(lua_State* L) {
+    int progId = (int)luaL_checkinteger(L, 1);
+    const char* name = luaL_checkstring(L, 2);
+    luaL_checktype(L, 3, LUA_TTABLE);
+    int totalFloats = (int)luaL_len(L, 3);
+    int matCount = totalFloats / 16;
+    if (matCount <= 0) return 0;
+    LumeVector<float> m(totalFloats);
+    for (int i = 1; i <= totalFloats; i++) {
+        lua_rawgeti(L, 3, i);
+        m[i - 1] = (float)lua_tonumber(L, -1);
+        lua_pop(L, 1);
+    }
+    auto it = ModernGL::g_programs.find(progId);
+    if (it != ModernGL::g_programs.end()) {
+        GLint loc = glGetUniformLocation(it->second, name);
+        if (loc != -1) glUniformMatrix4fv(loc, matCount, GL_FALSE, m.data());
+    }
+    return 0;
+}
+static int l_gl_load_cubemap(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    if (luaL_len(L, 1) < 6) {
+        lua_pushnil(L);
+        return 1;
+    }
+    GLuint texID = 0;
+    glGenTextures(1, &texID);
+    glBindTexture(GL_TEXTURE_CUBE_MAP, texID);
+    for (int i = 1; i <= 6; i++) {
+        lua_rawgeti(L, 1, i);
+        const char* path = lua_tostring(L, -1);
+        wchar_t wpath[MAX_PATH];
+        MultiByteToWideChar(CP_UTF8, 0, path ? path : "", -1, wpath, MAX_PATH);
+        Gdiplus::Bitmap bmp(wpath);
+        if (bmp.GetLastStatus() == Gdiplus::Ok) {
+            int w = bmp.GetWidth(), h = bmp.GetHeight();
+            LumeVector<unsigned char> px(w * h * 4);
+            Gdiplus::Rect r(0, 0, w, h);
+            Gdiplus::BitmapData bd;
+            bmp.LockBits(&r, Gdiplus::ImageLockModeRead, PixelFormat32bppARGB, &bd);
+            const unsigned char* src = (const unsigned char*)bd.Scan0;
+            for (int y = 0; y < h; y++) {
+                for (int x = 0; x < w; x++) {
+                    int p = (y * w + x) * 4, sp = y * bd.Stride + x * 4;
+                    px[p + 0] = src[sp + 2];
+                    px[p + 1] = src[sp + 1];
+                    px[p + 2] = src[sp + 0];
+                    px[p + 3] = src[sp + 3];
+                }
+            }
+            bmp.UnlockBits(&bd);
+            glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + (i - 1), 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
+        }
+        lua_pop(L, 1);
+    }
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, 0x812F, 0x812F);
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, 0x8130, 0x812F);
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_R, 0x812F);
+    lua_pushinteger(L, texID);
+    return 1;
+}
+static int l_gl_update_texture_rect(lua_State* L) {
+    GLuint texID = (GLuint)luaL_checkinteger(L, 1);
+    int x = (int)luaL_checkinteger(L, 2);
+    int y = (int)luaL_checkinteger(L, 3);
+    int w = (int)luaL_checkinteger(L, 4);
+    int h = (int)luaL_checkinteger(L, 5);
+    luaL_checktype(L, 6, LUA_TTABLE);
+    int total = w * h * 4;
+    LumeVector<unsigned char> px(total);
+    int len = (int)luaL_len(L, 6);
+    if (len > total) len = total;
+    for (int i = 1; i <= len; i++) {
+        lua_rawgeti(L, 6, i);
+        px[i - 1] = (unsigned char)lua_tointeger(L, -1);
+        lua_pop(L, 1);
+    }
+    glBindTexture(GL_TEXTURE_2D, texID);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, x, y, w, h, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
+    return 0;
+}
+static int l_gl_create_texture_3d(lua_State* L) {
+    int w = (int)luaL_checkinteger(L, 1);
+    int h = (int)luaL_checkinteger(L, 2);
+    int d = (int)luaL_checkinteger(L, 3);
+    luaL_checktype(L, 4, LUA_TTABLE);
+    int total = w * h * d * 4;
+    LumeVector<unsigned char> px(total, 0);
+    int len = (int)luaL_len(L, 4);
+    if (len > total) len = total;
+    for (int i = 1; i <= len; i++) {
+        lua_rawgeti(L, 4, i);
+        px[i - 1] = (unsigned char)lua_tointeger(L, -1);
+        lua_pop(L, 1);
+    }
+    GLuint texID = 0;
+    glGenTextures(1, &texID);
+    glBindTexture(GL_TEXTURE_3D, texID);
+    glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    if (glTexImage3D) {
+        glTexImage3D(GL_TEXTURE_3D, 0, GL_RGBA8, w, h, d, 0, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
+    }
+    lua_pushinteger(L, texID);
+    return 1;
+}
+static int l_gl_create_compute_program(lua_State* L) {
+    const char* cs_src = luaL_checkstring(L, 1);
+    if (!glCreateShader || !glDispatchCompute) {
+        lua_pushnil(L);
+        return 1;
+    }
+    GLuint cs = glCreateShader(GL_COMPUTE_SHADER);
+    glShaderSource(cs, 1, &cs_src, nullptr);
+    glCompileShader(cs);
+    GLint ok = 0;
+    glGetShaderiv(cs, GL_COMPILE_STATUS, &ok);
+    if (!ok) {
+        char log[1024] = {};
+        glGetShaderInfoLog(cs, 1024, nullptr, log);
+        consoleLog(LumeString("[Compute Shader Error] ") + log);
+        glDeleteShader(cs);
+        lua_pushnil(L);
+        return 1;
+    }
+    GLuint prog = glCreateProgram();
+    glAttachShader(prog, cs);
+    glLinkProgram(prog);
+    glDeleteShader(cs);
+    GLint linked = 0;
+    glGetProgramiv(prog, GL_LINK_STATUS, &linked);
+    if (!linked) {
+        char log[1024] = {};
+        glGetProgramInfoLog(prog, 1024, nullptr, log);
+        consoleLog(LumeString("[Compute Link Error] ") + log);
+        glDeleteProgram(prog);
+        lua_pushnil(L);
+        return 1;
+    }
+    int id = ModernGL::g_nextProgramId++;
+    ModernGL::g_programs[id] = prog;
+    lua_pushinteger(L, id);
+    return 1;
+}
+static int l_gl_dispatch_compute(lua_State* L) {
+    GLuint gx = (GLuint)luaL_checkinteger(L, 1);
+    GLuint gy = (GLuint)luaL_optinteger(L, 2, 1);
+    GLuint gz = (GLuint)luaL_optinteger(L, 3, 1);
+    if (glDispatchCompute) {
+        glDispatchCompute(gx, gy, gz);
+    }
+    return 0;
+}
+static int l_gl_memory_barrier(lua_State* L) {
+    GLbitfield bits = (GLbitfield)luaL_optinteger(L, 1, GL_ALL_BARRIER_BITS);
+    if (glMemoryBarrier) glMemoryBarrier(bits);
+    return 0;
+}
+static int l_gl_create_ssbo(lua_State* L) {
+    int bindingIndex = (int)luaL_checkinteger(L, 1);
+    int floatCount = 0;
+    LumeVector<float> data;
+    if (lua_istable(L, 2)) {
+        floatCount = (int)luaL_len(L, 2);
+        data.resize(floatCount);
+        for (int i = 1; i <= floatCount; i++) {
+            lua_rawgeti(L, 2, i);
+            data[i - 1] = (float)lua_tonumber(L, -1);
+            lua_pop(L, 1);
+        }
+    }
+    else {
+        floatCount = (int)luaL_checkinteger(L, 2);
+        data.resize(floatCount);
+    }
+    GLuint ssbo = 0;
+    glGenBuffers(1, &ssbo);
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, ssbo);
+    glBufferData(GL_SHADER_STORAGE_BUFFER, floatCount * sizeof(float), data.data(), GL_DYNAMIC_DRAW);
+    if (glBindBufferBase) {
+        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, bindingIndex, ssbo);
+    }
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+    lua_pushinteger(L, ssbo);
+    return 1;
+}
+static int l_gl_read_ssbo(lua_State* L) {
+    GLuint ssbo = (GLuint)luaL_checkinteger(L, 1);
+    int floatCount = (int)luaL_checkinteger(L, 2);
+    if (!glGetBufferSubData || floatCount <= 0) return 0;
+    LumeVector<float> data(floatCount);
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, ssbo);
+    glGetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, floatCount * sizeof(float), data.data());
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+    lua_createtable(L, floatCount, 0);
+    for (int i = 0; i < floatCount; i++) {
+        lua_pushnumber(L, data[i]);
+        lua_rawseti(L, -2, i + 1);
+    }
+    return 1;
 }
 static int l_mat4_transform(lua_State* L) {
     luaL_checktype(L, 1, LUA_TTABLE);
@@ -5659,6 +6170,35 @@ static int l_gl_load_texture_mipmapped(lua_State* L) {
     lua_pushinteger(L, texID);
     return 1;
 }
+static int l_gl_update_texture_sub(lua_State* L) {
+    GLuint texID = (GLuint)luaL_optinteger(L, 1, 0);
+    int w = (int)luaL_checkinteger(L, 2);
+    int h = (int)luaL_checkinteger(L, 3);
+    luaL_checktype(L, 4, LUA_TTABLE);
+    LumeVector<unsigned char> pixels(w * h * 4, 0);
+    int total = w * h * 4;
+    int len = (int)luaL_len(L, 4);
+    if (len > total) len = total;
+    for (int i = 1; i <= len; i++) {
+        lua_rawgeti(L, 4, i);
+        pixels[i - 1] = (unsigned char)lua_tointeger(L, -1);
+        lua_pop(L, 1);
+    }
+    if (texID == 0) {
+        glGenTextures(1, &texID);
+        glBindTexture(GL_TEXTURE_2D, texID);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, 0x812F);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, 0x812F);
+    }
+    else {
+        glBindTexture(GL_TEXTURE_2D, texID);
+    }
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+    lua_pushinteger(L, texID);
+    return 1;
+}
 static int l_gl_print(lua_State* L) {
     const char* text = luaL_checkstring(L, 1);
     float x = (float)luaL_checknumber(L, 2);
@@ -5848,6 +6388,21 @@ void registerGLConstants(lua_State* L) {
         {"GL_ONE_MINUS_SRC_ALPHA", 0x0303},
         {"GL_ONE", 1},
         {"GL_ZERO", 0},
+        {"GL_BACK", 0x0405},
+        {"GL_FRONT", 0x0404},
+        {"GL_FRONT_AND_BACK", 0x0408},
+        {"GL_CCW", 0x0901},
+        {"GL_CW", 0x0900},
+        {"GL_LESS", 0x0201},
+        {"GL_LEQUAL", 0x0203},
+        {"GL_ALWAYS", 0x0207},
+        {"GL_LINE", 0x1B01},
+        {"GL_FILL", 0x1B02},
+        {"GL_SCISSOR_TEST", 0x0C11},
+        {"GL_TEXTURE_CUBE_MAP", 0x8513},
+        {"GL_TEXTURE_3D", 0x806F},
+        {"GL_SHADER_STORAGE_BARRIER_BIT", 0x2000},
+        {"GL_ALL_BARRIER_BITS", (int)0xFFFFFFFF},
         {"GL_TEXTURE_2D", 0x0DE1},
         {"GL_TEXTURE_MIN_FILTER", 0x2801},
         {"GL_TEXTURE_MAG_FILTER", 0x2800},
@@ -5893,7 +6448,8 @@ void init() {
     g_L = luaL_newstate();
     lua_atpanic(g_L, [](lua_State* L) -> int {
         const char* msg = lua_tostring(L, -1);
-        MessageBoxA(g_mainWnd, msg ? msg : "Fatal Lua Panic", "Lua Panic Protected", MB_OK | MB_ICONERROR);
+        consoleLog(LumeString("[FATAL LUA PANIC] ") + (msg ? msg : "Unknown fatal error"));
+        ExitProcess(1);
         return 0;
     });
     luaL_requiref(g_L, "_G", luaopen_base, 1); lua_pop(g_L, 1);
@@ -5906,6 +6462,7 @@ void init() {
     lua_pushnil(g_L); lua_setfield(g_L, -2, "rename");
     lua_pushnil(g_L); lua_setfield(g_L, -2, "exit");
     lua_pushnil(g_L); lua_setfield(g_L, -2, "getenv");
+    lua_pop(g_L, 1);
     lua_register(g_L, "set_prop", l_set_prop);
     lua_register(g_L, "get_node_prop", l_get_node_prop);
     lua_register(g_L, "set_inner_htp", l_set_inner_htp);
@@ -5965,7 +6522,31 @@ void init() {
     lua_register(g_L, "gl_create_program", l_gl_create_program);
     lua_register(g_L, "gl_use_program", l_gl_use_program);
     lua_register(g_L, "gl_create_mesh", l_gl_create_mesh);
+    lua_register(g_L, "gl_delete_mesh", l_gl_delete_mesh);
     lua_register(g_L, "gl_draw_mesh", l_gl_draw_mesh);
+    lua_register(g_L, "gl_create_fbo", l_gl_create_fbo);
+    lua_register(g_L, "gl_bind_fbo", l_gl_bind_fbo);
+    lua_register(g_L, "gl_delete_fbo", l_gl_delete_fbo);
+    lua_register(g_L, "gl_draw_mesh_instanced", l_gl_draw_mesh_instanced);
+    lua_register(g_L, "gl_cull_face", l_gl_cull_face);
+    lua_register(g_L, "gl_front_face", l_gl_front_face);
+    lua_register(g_L, "gl_depth_mask", l_gl_depth_mask);
+    lua_register(g_L, "gl_depth_func", l_gl_depth_func);
+    lua_register(g_L, "gl_polygon_mode", l_gl_polygon_mode);
+    lua_register(g_L, "gl_scissor", l_gl_scissor);
+    lua_register(g_L, "gl_update_mesh_sub", l_gl_update_mesh_sub);
+    lua_register(g_L, "gl_uniform_1f", l_gl_uniform_1f);
+    lua_register(g_L, "gl_uniform_2f", l_gl_uniform_2f);
+    lua_register(g_L, "gl_uniform_3f", l_gl_uniform_3f);
+    lua_register(g_L, "gl_uniform_mat4_array", l_gl_uniform_mat4_array);
+    lua_register(g_L, "gl_load_cubemap", l_gl_load_cubemap);
+    lua_register(g_L, "gl_update_texture_rect", l_gl_update_texture_rect);
+    lua_register(g_L, "gl_create_texture_3d", l_gl_create_texture_3d);
+    lua_register(g_L, "gl_create_compute_program", l_gl_create_compute_program);
+    lua_register(g_L, "gl_dispatch_compute", l_gl_dispatch_compute);
+    lua_register(g_L, "gl_memory_barrier", l_gl_memory_barrier);
+    lua_register(g_L, "gl_create_ssbo", l_gl_create_ssbo);
+    lua_register(g_L, "gl_read_ssbo", l_gl_read_ssbo);
     lua_register(g_L, "gl_uniform_mat4", l_gl_uniform_mat4);
     lua_register(g_L, "gl_uniform_4f", l_gl_uniform_4f);
     lua_register(g_L, "mat4_transform", l_mat4_transform);
@@ -5987,6 +6568,7 @@ void init() {
     lua_register(g_L, "gl_create_buffer", l_gl_create_buffer);
     lua_register(g_L, "gl_draw_buffer", l_gl_draw_buffer);
     lua_register(g_L, "gl_load_texture_mipmapped", l_gl_load_texture_mipmapped);
+    lua_register(g_L, "gl_update_texture_sub", l_gl_update_texture_sub);
     lua_register(g_L, "gl_print", l_gl_print);
     registerGLConstants(g_L);
     Plugins::initAllPlugins(g_L);
@@ -5995,8 +6577,10 @@ void exec(const LumeString& code) {
     if (!g_L) init();
     if (luaL_dostring(g_L, code.c_str()) != 0) {
         const char* e = lua_tostring(g_L, -1);
-        OutputDebugStringA(e ? e : "lua err\n");
-        MessageBoxU(g_mainWnd, e ? e : "Unknown error", "Lua Error", MB_OK | MB_ICONERROR);
+        const char* msg = e ? e : "Unknown error";
+        OutputDebugStringA(msg);
+        OutputDebugStringA("\n");
+        consoleLog(LumeString("[LUA ERROR] ") + msg);
         lua_pop(g_L, 1);
     }
 }
@@ -8256,6 +8840,11 @@ void closeTab(int idx) {
         Script::reset();
         GLCanvas::destroyAll();
     }
+    {
+        LumeLockGuard<LumeMutex> lock(g_pageMutex);
+        g_pendingPages_arr[idx].clear();
+        g_currentNavId_arr[idx] = -1;
+    }
     for (int i = idx; i < g_tabCount - 1; i++) {
         g_docs[i] = static_cast<HTP::Doc&&>(g_docs[i + 1]);
         g_rens[i] = static_cast<Render::Engine&&>(g_rens[i + 1]);
@@ -8282,6 +8871,7 @@ void closeTab(int idx) {
         HTP::g_domIdMap_arr[i] = static_cast<LumeMap<LumeString, LumeSharedPtr<HTP::Elem>>&&>(HTP::g_domIdMap_arr[i + 1]);
     }
     int lastSlot = g_tabCount - 1;
+    g_currentNavId_arr[lastSlot] = 0;
     Script::g_L_arr[lastSlot] = nullptr;
     Script::g_timerRefs_arr[lastSlot].clear();
     Script::g_canvasClickRefs_arr[lastSlot].clear();
@@ -8306,6 +8896,102 @@ LRESULT CALLBACK AddrProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     }
     if (m == WM_CHAR && w == VK_RETURN) return 0;
     return CallWindowProcW(g_origAddr, h, m, w, l);
+}
+#define IDM_CONSOLE 1099
+static LumeVector<LumeString> g_consoleLogs;
+static HWND g_consoleWnd = nullptr;
+static HWND g_consoleEdit = nullptr;
+static WNDPROC g_origConsoleEditProc = nullptr;
+static HBRUSH g_hBrConsoleBg = nullptr;
+LRESULT CALLBACK ConsoleEditProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    if (msg == WM_KEYDOWN) {
+        bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+        if (ctrl && (wp == 'A' || wp == 'a')) {
+            SendMessage(hwnd, EM_SETSEL, 0, -1);
+            return 0;
+        }
+        if (ctrl && (wp == 'C' || wp == 'c')) {
+            SendMessage(hwnd, WM_COPY, 0, 0);
+            return 0;
+        }
+    }
+    return CallWindowProcW(g_origConsoleEditProc, hwnd, msg, wp, lp);
+}
+void updateConsoleUI() {
+    if (!g_consoleEdit) return;
+    LumeString fullText;
+    for (const auto& line : g_consoleLogs) {
+        fullText += line;
+        fullText += "\r\n";
+    }
+    SetWindowTextU(g_consoleEdit, fullText.c_str());
+    SendMessage(g_consoleEdit, EM_SETSEL, (WPARAM)fullText.length(), (LPARAM)fullText.length());
+    SendMessage(g_consoleEdit, EM_SCROLLCARET, 0, 0);
+}
+void consoleLog(const char* text) {
+    if (!text) return;
+    if (g_consoleLogs.size() > 500) {
+        g_consoleLogs.erase(g_consoleLogs.begin());
+    }
+    g_consoleLogs.push_back(text);
+    OutputDebugStringA(text);
+    OutputDebugStringA("\n");
+    updateConsoleUI();
+}
+void consoleLog(const LumeString& text) {
+    consoleLog(text.c_str());
+}
+LRESULT CALLBACK ConsoleWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    switch (msg) {
+    case WM_SIZE:
+        if (g_consoleEdit) {
+            MoveWindow(g_consoleEdit, 0, 0, LOWORD(lp), HIWORD(lp), TRUE);
+        }
+        return 0;
+    case WM_CTLCOLORSTATIC:
+    case WM_CTLCOLOREDIT: {
+        HDC hdc = (HDC)wp;
+        SetTextColor(hdc, RGB(220, 225, 235));
+        SetBkColor(hdc, RGB(14, 14, 22));
+        if (!g_hBrConsoleBg) g_hBrConsoleBg = CreateSolidBrush(RGB(14, 14, 22));
+        return (LRESULT)g_hBrConsoleBg;
+    }
+    case WM_CLOSE:
+        ShowWindow(hwnd, SW_HIDE);
+        return 0;
+    }
+    return DefWindowProcW(hwnd, msg, wp, lp);
+}
+void openConsoleWindow() {
+    if (!g_consoleWnd) {
+        WNDCLASSEXW wc = {};
+        wc.cbSize = sizeof(wc);
+        wc.lpfnWndProc = ConsoleWndProc;
+        wc.hInstance = GetModuleHandle(nullptr);
+        wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
+        wc.hbrBackground = CreateSolidBrush(RGB(14, 14, 22));
+        wc.lpszClassName = L"LumeConsoleClass";
+        RegisterClassExW(&wc);
+        g_consoleWnd = CreateWindowExW(
+            WS_EX_TOOLWINDOW,
+            L"LumeConsoleClass", L"Lume Console",
+            WS_OVERLAPPEDWINDOW,
+            CW_USEDEFAULT, CW_USEDEFAULT, 680, 420,
+            g_mainWnd, nullptr, GetModuleHandle(nullptr), nullptr
+        );
+        HFONT f = CreateFontW(-13, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, FIXED_PITCH, L"Consolas");
+        g_consoleEdit = CreateWindowExW(
+            0, L"EDIT", L"",
+            WS_CHILD | WS_VISIBLE | WS_VSCROLL | WS_HSCROLL | ES_MULTILINE | ES_AUTOVSCROLL | ES_AUTOHSCROLL | ES_READONLY,
+            0, 0, 680, 420,
+            g_consoleWnd, nullptr, GetModuleHandle(nullptr), nullptr
+        );
+        SendMessage(g_consoleEdit, WM_SETFONT, (WPARAM)f, 1);
+        g_origConsoleEditProc = (WNDPROC)SetWindowLongPtrW(g_consoleEdit, GWLP_WNDPROC, (LONG_PTR)ConsoleEditProc);
+    }
+    updateConsoleUI();
+    ShowWindow(g_consoleWnd, SW_SHOW);
+    SetForegroundWindow(g_consoleWnd);
 }
 LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
     static bool g_draggingInput = false;
@@ -9116,6 +9802,7 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
             if (Themes::g_themeFiles.empty()) AppendMenuW(hThemeMenu, MF_STRING | MF_DISABLED, 0, L"No .xtheme found");
             AppendMenuW(hMenu, MF_POPUP, (UINT_PTR)hThemeMenu, L"Themes");
             AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
+            AppendMenuW(hMenu, MF_STRING, IDM_CONSOLE, L"Console");
             AppendMenuW(hMenu, MF_STRING | (g_opt_gpu ? MF_CHECKED : MF_UNCHECKED), IDM_GPU_TOGGLE, L"Enable GPU (OpenGL)");
             RECT r; GetWindowRect(g_menuBtn, &r);
             int cmd = TrackPopupMenu(hMenu, TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTALIGN | TPM_TOPALIGN, r.right, r.bottom, 0, hw, NULL);
@@ -9139,6 +9826,9 @@ LRESULT CALLBACK WndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
             }
             else if (cmd == IDM_LUA_HTTP) g_opt_lua_http = !g_opt_lua_http;
             else if (cmd == IDM_LUA_MOUSE) g_opt_lua_mouse = !g_opt_lua_mouse;
+            else if (cmd == IDM_CONSOLE) {
+                openConsoleWindow();
+            }
             else if (cmd == IDM_GPU_TOGGLE) {
                 g_opt_gpu = !g_opt_gpu;
                 if (g_opt_gpu) GLLoader::load();
