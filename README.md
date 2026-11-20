@@ -60,8 +60,9 @@ this is how htp/aaOfficial/showcase.htp file looks like:
 
 ---
 
-also you can make TETRIS ON LUME? htp/aaOfficial/tetris.htp
-<img width="1920" height="1038" alt="изображение" src="https://github.com/user-attachments/assets/16c44415-7f8e-4581-af81-1effb36b853c" />
+tetris
+
+<img width="729" height="843" alt="изображение" src="https://github.com/user-attachments/assets/62c7548f-d5cd-41b4-8c28-385b038b0a0c" />
 
 ---
 
