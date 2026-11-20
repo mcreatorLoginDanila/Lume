@@ -60,8 +60,7 @@ this is how htp/aaOfficial/showcase.htp file looks like:
 
 ---
 
-tetris
-
+https://raw.githubusercontent.com/Lume-corp/LumeSources/refs/heads/main/site/tetris%2B.htp
 <img width="729" height="843" alt="изображение" src="https://github.com/user-attachments/assets/62c7548f-d5cd-41b4-8c28-385b038b0a0c" />
 
 ---
