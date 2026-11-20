@@ -1,16 +1,15 @@
 A light ~~web~~- alternative browser on C++
 
 ### Why Lume?
-* **Insanely Small:** exe size is less than 1 MB.
-* **Zero Bloat:** Uses only **3 MB**(Idle) of RAM (compare that to 500MB+ for a single Chrome tab or even 20mb for explorer ╥_╥).
-* **Blazing Fast:** CPU usage is near **0%**(On Phenom II X6 1055T) in idle and ~10% under load(like in "doom" on 0.3).
+* **Insanely Small:** exe size is less than 10 MB.
+* **Zero Bloat:** Uses only **40 MB**(Idle) of RAM (most of it is GPU drivers).
+* **Blazing Fast:** CPU usage is near **0%**(On Intel Core i5-3470) in idle and ~4.5% under load(tetris+).
 * **Programmable:** Built-in **Lua 5.4.7** engine for logic, animations, and interactivity.
-* **Custom Graphics:** Built-in `@canvas` API for high-performance 2D drawing. (also starting from beta 0.3 added OpenGL(opengl32.dll))
+* **Custom Graphics:** Built-in `@glcanvas` API for high-performance drawing.
 
 ---
 
 All pages\plugins has been moved to https://github.com/Lume-corp/LumeSources
-
 content of /lib/ folder: https://github.com/Lume-corp/LumeLibs
 
 ---
